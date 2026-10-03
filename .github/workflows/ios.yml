@@ -1,0 +1,74 @@
+# 每次推上來在 GitHub 的 Mac 上編一次 iPad App（模擬器、不簽章），編不過的檔案與行號列在 Actions 的摘要。
+# （和 StudioX Console App 的 ios.yml 同一套做法；這個 repo 是公開的，Mac 的分鐘數不另外計費）
+name: iOS build
+
+on:
+  push:
+    paths:
+      - "StudioXPOS/**"
+      - "StudioXPOS.xcodeproj/**"
+      - "StudioXPOS-Info.plist"
+      - "StudioXPOS.entitlements"
+      - "Packages/POSKit/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "StudioXPOS/**"
+      - "StudioXPOS.xcodeproj/**"
+      - "Packages/POSKit/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一個分支連推好幾次：只編最新的那次
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 選 Xcode（最新的）
+        run: |
+          best=""; bestv="0"
+          for app in /Applications/Xcode*.app; do
+            v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null) || continue
+            if [ "$v" != "$bestv" ] && [ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" = "$v" ]; then best="$app"; bestv="$v"; fi
+          done
+          if [ -z "$best" ]; then echo "::error::找不到 Xcode"; exit 1; fi
+          sudo xcode-select -s "$best/Contents/Developer"
+          xcodebuild -version
+
+      - name: 編譯（模擬器、不簽章）
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project StudioXPOS.xcodeproj \
+            -scheme StudioXPOS \
+            -destination "generic/platform=iOS Simulator" \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build.log | grep -E "error:|warning:|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: 錯誤與警告
+        if: always()
+        run: |
+          if [ -f build.log ]; then
+            echo "## 錯誤" >> "$GITHUB_STEP_SUMMARY"
+            grep -E "^/.*error:" build.log | sed "s|$GITHUB_WORKSPACE/||" | sort -u | head -150 | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
+            echo "## 警告" >> "$GITHUB_STEP_SUMMARY"
+            grep -E "^/.*warning:" build.log | sed "s|$GITHUB_WORKSPACE/||" | sort -u | head -100 | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7

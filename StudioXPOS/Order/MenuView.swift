@@ -1,0 +1,337 @@
+import POSCore
+import POSSync
+import SwiftUI
+
+/// 點餐：上面是分類的粉彩大方塊，下面是這一類的品項。點一下＝加一份（先在右側鍵盤打數量＝加那麼多份）
+struct MenuView: View {
+    @Environment(POSModel.self) private var model
+    @Environment(KeypadController.self) private var keypad
+    @State private var categoryId: String?
+    @State private var query = ""
+    @State private var customName = ""
+    @State private var askingCustom = false
+    @State private var scanning = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 24)
+                .padding(.top, 18)
+                .padding(.bottom, 14)
+            if let item = model.modifierItem {
+                ModifierPanel(item: item)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) {
+                        if query.isEmpty {
+                            categories
+                        }
+                        items
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 28)
+                }
+                .scrollIndicators(.hidden)
+            }
+            if let sale = model.lastSale, model.selectedTicket == nil, Date().timeIntervalSince(sale.closedAt) < 120 {
+                LastSaleStrip(sale: sale)
+            }
+        }
+        .animation(Motion.ease, value: model.modifierItem)
+        .onAppear {
+            if categoryId == nil { categoryId = model.catalog.categories.first?.id }
+        }
+        .alert("自訂品項", isPresented: $askingCustom) {
+            TextField("品名（例如：開瓶費）", text: $customName)
+            Button("下一步：輸入金額") {
+                let name = customName.trimmingCharacters(in: .whitespaces)
+                customName = ""
+                guard !name.isEmpty else { return }
+                Task { await model.addCustom(name: name) }
+            }
+            Button("取消", role: .cancel) { customName = "" }
+        }
+        .sheet(isPresented: $scanning) {
+            CodeScannerSheet(title: "掃商品條碼", types: ScanKind.product) { code in
+                model.lookup(code: code)
+            }
+        }
+    }
+
+    // MARK: 上面
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 16) {
+            if let t = model.selectedTicket {
+                VStack(alignment: .leading, spacing: 3) {
+                    Eyebrow(t.number)
+                    Headline(t.title(floor: model.floor), role: .h3)
+                        .lineLimit(1)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 3) {
+                    Eyebrow("點餐")
+                    Headline("The *menu*", role: .h3)
+                }
+            }
+            Spacer(minLength: 12)
+            HStack(spacing: 8) {
+                HeroIcon("magnifying-glass", size: 16)
+                    .foregroundStyle(Theme.muted)
+                TextField("搜尋品項、品號", text: $query)
+                    .font(.brand(15, .regular))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !query.isEmpty {
+                    Button {
+                        query = ""
+                    } label: {
+                        HeroIcon("x-circle", size: 16)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.muted)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(width: 240, height: 42)
+            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
+            .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
+
+            Menu {
+                Button("自訂品項…") { askingCustom = true }
+                Button("掃商品條碼…") { scanning = true }
+                if let t = model.selectedTicket {
+                    Divider()
+                    ForEach(OrderType.allCases, id: \.self) { type in
+                        Button {
+                            model.setOrderType(type, for: t)
+                        } label: {
+                            if t.orderType == type { Label(type.label, systemImage: "checkmark") } else { Text(type.label) }
+                        }
+                    }
+                } else {
+                    Divider()
+                    ForEach(OrderType.allCases, id: \.self) { type in
+                        Button("新的\(type.label)單") { model.openTicket(type: type) }
+                    }
+                }
+            } label: {
+                HeroIcon("ellipsis-horizontal", size: 18)
+            }
+            .buttonStyle(SquareIconButtonStyle(size: 42))
+        }
+    }
+
+    // MARK: 分類
+
+    private var categories: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 132, maximum: 220), spacing: 12)], spacing: 12) {
+            ForEach(model.catalog.categories) { c in
+                CategoryTile(category: c, count: model.catalog.items(in: c.id).count, selected: categoryId == c.id) {
+                    withAnimation(Motion.fast) { categoryId = c.id }
+                    model.touch()
+                }
+            }
+        }
+    }
+
+    // MARK: 品項
+
+    private var shownItems: [MenuItem] {
+        if !query.isEmpty { return model.catalog.search(query) }
+        guard let id = categoryId else { return model.catalog.items }
+        return model.catalog.items(in: id)
+    }
+
+    @ViewBuilder
+    private var items: some View {
+        let list = shownItems
+        if list.isEmpty {
+            EmptyState(icon: "magnifying-glass", title: query.isEmpty ? "這一類還沒有品項" : "找不到「\(query)」", message: query.isEmpty ? "到後台「門市 POS → 菜單」新增" : nil)
+                .frame(height: 260)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                if let c = categoryId.flatMap({ model.catalog.category($0) }), query.isEmpty {
+                    Eyebrow("\(c.name)・\(list.count) 項")
+                }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 12)], spacing: 12) {
+                    ForEach(list) { item in
+                        ItemCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
+                                 inTicket: quantity(of: item), available: model.isAvailable(item),
+                                 hasOptions: !item.modifierGroupIds.isEmpty, multiplier: keypad.multiplier) {
+                            Task { await model.tap(item) }
+                        } minus: {
+                            decrement(item)
+                        } toggleAvailability: {
+                            model.toggleAvailability(item)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func quantity(of item: MenuItem) -> Int {
+        model.selectedTicket?.activeLines.filter { $0.itemId == item.id }.reduce(0) { $0 + $1.quantity } ?? 0
+    }
+
+    private func decrement(_ item: MenuItem) {
+        guard let t = model.selectedTicket, let line = t.activeLines.last(where: { $0.itemId == item.id && !$0.isSent }) else { return }
+        model.stepQuantity(line, in: t, by: -1)
+    }
+}
+
+/// 分類的大方塊：粉彩底、墨色字（和參考的 CosyPOS 同一個手感，色票換成 StudioX 的暖色系）
+struct CategoryTile: View {
+    let category: MenuCategory
+    let count: Int
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 0) {
+                Circle()
+                    .fill(Theme.tileInk.opacity(0.85))
+                    .frame(width: 8, height: 8)
+                Spacer(minLength: 10)
+                Text(category.name)
+                    .font(.brand(18, .semibold))
+                    .foregroundStyle(Theme.tileInk)
+                    .lineLimit(1)
+                Text("\(count) 項")
+                    .font(.brand(12.5, .medium))
+                    .foregroundStyle(Theme.tileInkMuted)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+            .background(Theme.swatch(category.swatch), in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                    .strokeBorder(Theme.ink, lineWidth: selected ? 2.5 : 0)
+                    .padding(-4)
+            }
+            .scaleEffect(selected ? 1 : 0.985)
+        }
+        .buttonStyle(PressScale(scale: 0.97))
+        .accessibilityLabel("\(category.name)，\(count) 項")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 一個品項
+struct ItemCard: View {
+    let item: MenuItem
+    let swatch: Swatch
+    let inTicket: Int
+    let available: Bool
+    let hasOptions: Bool
+    let multiplier: Int?
+    let tap: () -> Void
+    let minus: () -> Void
+    let toggleAvailability: () -> Void
+
+    var body: some View {
+        Button(action: tap) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Theme.swatch(swatch))
+                        .frame(width: 22, height: 4)
+                    Spacer()
+                    if inTicket > 0 {
+                        Text("\(inTicket)")
+                            .font(.brand(13, .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.onAccent)
+                            .frame(minWidth: 24, minHeight: 24)
+                            .background(Theme.accent, in: .circle)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                Text(item.name)
+                    .font(.brand(16, .medium))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(item.openPrice ? "時價" : item.price.short)
+                        .font(.brand(15, .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink2)
+                    Spacer()
+                    if !available {
+                        StatusBadge("賣完", tone: .danger)
+                    } else if hasOptions {
+                        Text("可選")
+                            .font(.brand(11.5, .medium))
+                            .foregroundStyle(Theme.muted)
+                    } else if let m = multiplier, m > 1 {
+                        Text("+\(m)")
+                            .font(.brand(12, .semibold))
+                            .foregroundStyle(Theme.accentText)
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                    .strokeBorder(inTicket > 0 ? Theme.accent.opacity(0.55) : Theme.line, lineWidth: inTicket > 0 ? 1.5 : 1)
+            }
+            .opacity(available ? 1 : 0.5)
+        }
+        .buttonStyle(PressScale(scale: 0.97))
+        .animation(Motion.spring, value: inTicket)
+        .contextMenu {
+            if inTicket > 0 {
+                Button("少一份", systemImage: "minus") { minus() }
+            }
+            Button(available ? "標示賣完" : "恢復供應", systemImage: available ? "nosign" : "checkmark") { toggleAvailability() }
+        }
+        .accessibilityLabel("\(item.name)，\(item.price.formatted)\(available ? "" : "，賣完")\(inTicket > 0 ? "，已點 \(inTicket)" : "")")
+    }
+}
+
+/// 剛結帳的那一筆（2 分鐘內）：金額、找零、補印
+struct LastSaleStrip: View {
+    @Environment(POSModel.self) private var model
+    let sale: SaleRecord
+
+    var body: some View {
+        HStack(spacing: 16) {
+            Circle().fill(Theme.live).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("上一筆 \(sale.number)・\(sale.total.formatted)")
+                    .font(.brand(15, .medium))
+                    .foregroundStyle(Theme.onInverse)
+                Text(sale.invoice.map { "發票 \($0.display)・\($0.buyer.summary)" } ?? "沒有開發票")
+                    .font(.brand(12.5, .regular))
+                    .foregroundStyle(Theme.inverseMuted)
+            }
+            Spacer()
+            if model.lastChange.cents > 0 {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("找零")
+                        .font(.brand(12, .medium))
+                        .foregroundStyle(Theme.inverseMuted)
+                    Text(model.lastChange.formatted)
+                        .font(.brand(26, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.accent)
+                }
+            }
+            Button("明細") { model.printReceipt(sale) }
+                .buttonStyle(.brand(.ghost, size: .sm))
+                .environment(\.colorScheme, .dark)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(Theme.inverse)
+        .transition(.move(edge: .bottom))
+    }
+}

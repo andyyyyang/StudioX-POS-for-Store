@@ -1,0 +1,328 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5B0D00000000000000000015 /* POSCore in Frameworks */ = {isa = PBXBuildFile; productRef = 5B0D00000000000000000011 /* POSCore */; };
+		5B0D00000000000000000016 /* POSInvoice in Frameworks */ = {isa = PBXBuildFile; productRef = 5B0D00000000000000000012 /* POSInvoice */; };
+		5B0D00000000000000000017 /* POSPrinting in Frameworks */ = {isa = PBXBuildFile; productRef = 5B0D00000000000000000013 /* POSPrinting */; };
+		5B0D00000000000000000018 /* POSSync in Frameworks */ = {isa = PBXBuildFile; productRef = 5B0D00000000000000000014 /* POSSync */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		5B0D00000000000000000001 /* StudioXPOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StudioXPOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		5B0D00000000000000000002 /* StudioXPOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StudioXPOS;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5B0D00000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5B0D00000000000000000015 /* POSCore in Frameworks */,
+				5B0D00000000000000000016 /* POSInvoice in Frameworks */,
+				5B0D00000000000000000017 /* POSPrinting in Frameworks */,
+				5B0D00000000000000000018 /* POSSync in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5B0D00000000000000000004 = {
+			isa = PBXGroup;
+			children = (
+				5B0D00000000000000000002 /* StudioXPOS */,
+				5B0D00000000000000000005 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5B0D00000000000000000005 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5B0D00000000000000000001 /* StudioXPOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5B0D00000000000000000006 /* StudioXPOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B0D00000000000000000007 /* Build configuration list for PBXNativeTarget "StudioXPOS" */;
+			buildPhases = (
+				5B0D00000000000000000008 /* Sources */,
+				5B0D00000000000000000003 /* Frameworks */,
+				5B0D00000000000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5B0D00000000000000000002 /* StudioXPOS */,
+			);
+			name = StudioXPOS;
+			packageProductDependencies = (
+				5B0D00000000000000000011 /* POSCore */,
+				5B0D00000000000000000012 /* POSInvoice */,
+				5B0D00000000000000000013 /* POSPrinting */,
+				5B0D00000000000000000014 /* POSSync */,
+			);
+			productName = StudioXPOS;
+			productReference = 5B0D00000000000000000001 /* StudioXPOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5B0D0000000000000000000A /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					5B0D00000000000000000006 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = 5B0D0000000000000000000B /* Build configuration list for PBXProject "StudioXPOS" */;
+			developmentRegion = "zh-Hant";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hant",
+				en,
+				Base,
+			);
+			mainGroup = 5B0D00000000000000000004;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5B0D00000000000000000010 /* XCLocalSwiftPackageReference "Packages/POSKit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 5B0D00000000000000000005 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5B0D00000000000000000006 /* StudioXPOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		5B0D00000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5B0D00000000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		5B0D0000000000000000000C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				SDKROOT = iphoneos;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		5B0D0000000000000000000D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				SDKROOT = iphoneos;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		5B0D0000000000000000000E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = StudioXPOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "StudioXPOS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "StudioX POS";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
+				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、客人的手機條碼載具與付款碼、商品條碼。";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad 即時同步點單（斷網也能用）。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "店長用 Face ID 授權退款、作廢這類動作。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = tw.studiox.pos;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		5B0D0000000000000000000F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = StudioXPOS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "StudioXPOS-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "StudioX POS";
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
+				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、客人的手機條碼載具與付款碼、商品條碼。";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad 即時同步點單（斷網也能用）。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "店長用 Face ID 授權退款、作廢這類動作。";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = tw.studiox.pos;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5B0D00000000000000000007 /* Build configuration list for PBXNativeTarget "StudioXPOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5B0D0000000000000000000E /* Debug */,
+				5B0D0000000000000000000F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5B0D0000000000000000000B /* Build configuration list for PBXProject "StudioXPOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5B0D0000000000000000000C /* Debug */,
+				5B0D0000000000000000000D /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5B0D00000000000000000010 /* XCLocalSwiftPackageReference "Packages/POSKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/POSKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5B0D00000000000000000011 /* POSCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = POSCore;
+		};
+		5B0D00000000000000000012 /* POSInvoice */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = POSInvoice;
+		};
+		5B0D00000000000000000013 /* POSPrinting */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = POSPrinting;
+		};
+		5B0D00000000000000000014 /* POSSync */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = POSSync;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 5B0D0000000000000000000A /* Project object */;
+}

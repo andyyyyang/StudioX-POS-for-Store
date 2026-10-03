@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 其他的 Info.plist 欄位由 Xcode 產生（project.pbxproj 的 INFOPLIST_KEY_*）；這裡只放它產生不了的 -->
+	<key>NSBonjourServices</key>
+	<array>
+		<!-- 同一家店的 iPad 互相找（區網同步） -->
+		<string>_studiox-pos._tcp</string>
+		<!-- 找網路出單機（Epson、Star） -->
+		<string>_pdl-datastream._tcp</string>
+	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>tw.studiox.pos.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<!-- 後台「裝置」頁的 QR Code：studiox-pos://pair?cms=…&code=… -->
+				<string>studiox-pos</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIApplicationExitsOnSuspend</key>
+	<false/>
+</dict>
+</plist>

@@ -38,6 +38,8 @@ public struct DeviceInfo: Codable, Sendable, Hashable {
 /// POST {console}/api/pos/resolve：8 位數配對碼 → 這家店的後台網址（接 StudioX 的店家不用打網址）
 public struct ResolveRequest: Codable, Sendable { public var code: String; public init(code: String) { self.code = code } }
 public struct ResolveResponse: Codable, Sendable, Hashable {
+    public init(cmsUrl: String, siteName: String) { self.cmsUrl = cmsUrl; self.siteName = siteName }
+
     public var cmsUrl: String
     public var siteName: String
 }
@@ -50,6 +52,8 @@ public struct PairRequest: Codable, Sendable {
 }
 
 public struct PairResponse: Codable, Sendable, Hashable {
+    public init(deviceId: String, token: String, deviceCode: String, role: DeviceRole, storeName: String) { self.deviceId = deviceId; self.token = token; self.deviceCode = deviceCode; self.role = role; self.storeName = storeName }
+
     public var deviceId: String
     /// 之後每個請求的 Authorization: Bearer <token>（只會給這一次，存在 Keychain）
     public var token: String
@@ -62,6 +66,10 @@ public struct PairResponse: Codable, Sendable, Hashable {
 // MARK: - 開機資料
 
 public struct DeviceProfile: Codable, Sendable, Hashable {
+    public init(id: String, name: String, code: String, role: DeviceRole, stations: [String]) {
+        self.id = id; self.name = name; self.code = code; self.role = role; self.stations = stations
+    }
+
     public var id: String
     public var name: String
     public var code: String
@@ -72,6 +80,8 @@ public struct DeviceProfile: Codable, Sendable, Hashable {
 
 /// 同一家店的 iPad 在同一個 Wi-Fi 上互相同步（斷網也能看到別台點的單）：訊息用這把金鑰簽章
 public struct MeshConfig: Codable, Sendable, Hashable {
+    public init(key: String, enabled: Bool) { self.key = key; self.enabled = enabled }
+
     /// 32 bytes 的十六進位
     public var key: String
     public var enabled: Bool
@@ -79,6 +89,12 @@ public struct MeshConfig: Codable, Sendable, Hashable {
 
 /// GET {cms}/api/pos/v1/bootstrap：開機、每 5 分鐘、收到「設定改了」時重抓。帶 If-None-Match: <version> 沒變回 304
 public struct Bootstrap: Codable, Sendable, Hashable {
+    public init(version: String, serverTime: Date, device: DeviceProfile, store: StoreProfile, features: FeatureFlags, catalog: Catalog,
+                floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig) {
+        self.version = version; self.serverTime = serverTime; self.device = device; self.store = store; self.features = features
+        self.catalog = catalog; self.floor = floor; self.staff = staff; self.invoice = invoice; self.mesh = mesh
+    }
+
     public var version: String
     public var serverTime: Date
     public var device: DeviceProfile
@@ -100,6 +116,8 @@ public struct EventsPush: Codable, Sendable {
 }
 
 public struct EventRejection: Codable, Sendable, Hashable {
+    public init(id: String, reason: String, expectSeq: Int?) { self.id = id; self.reason = reason; self.expectSeq = expectSeq }
+
     public var id: String
     /// bad_hash｜chain_gap｜invalid｜sale_mismatch
     public var reason: String
@@ -108,6 +126,8 @@ public struct EventRejection: Codable, Sendable, Hashable {
 }
 
 public struct EventsPushResult: Codable, Sendable, Hashable {
+    public init(accepted: [String], duplicates: [String], rejected: [EventRejection], serverSeq: Int) { self.accepted = accepted; self.duplicates = duplicates; self.rejected = rejected; self.serverSeq = serverSeq }
+
     public var accepted: [String]
     public var duplicates: [String]
     public var rejected: [EventRejection]
@@ -117,6 +137,8 @@ public struct EventsPushResult: Codable, Sendable, Hashable {
 
 /// GET {cms}/api/pos/v1/events?after=<serverSeq>&limit=500
 public struct EventsPage: Codable, Sendable, Hashable {
+    public init(events: [POSEvent], next: Int, hasMore: Bool) { self.events = events; self.next = next; self.hasMore = hasMore }
+
     public var events: [POSEvent]
     /// 下一次從這裡接著拿
     public var next: Int
@@ -133,6 +155,8 @@ public struct RollRequest: Codable, Sendable {
 }
 
 public struct RollResponse: Codable, Sendable, Hashable {
+    public init(roll: InvoiceRoll) { self.roll = roll }
+
     public var roll: InvoiceRoll
 }
 
@@ -150,11 +174,18 @@ public struct Member: Codable, Sendable, Hashable {
     /// 店家看得到的備註（過敏、偏好）
     public var note: String?
 
+    public init(id: String, phone: String, name: String?, tierName: String?, lifetimeSpend: Money, visits: Int, lastVisitAt: Date?, note: String?) {
+        self.id = id; self.phone = phone; self.name = name; self.tierName = tierName
+        self.lifetimeSpend = lifetimeSpend; self.visits = visits; self.lastVisitAt = lastVisitAt; self.note = note
+    }
+
     public var ref: MemberRef { MemberRef(id: id, phone: phone, name: name, tierName: tierName) }
 }
 
 /// GET {cms}/api/pos/v1/members?phone=0912345678
 public struct MemberLookup: Codable, Sendable, Hashable {
+    public init(member: Member?) { self.member = member }
+
     public var member: Member?
 }
 
@@ -227,6 +258,8 @@ public struct Reservation: Codable, Sendable, Hashable, Identifiable {
 
 /// GET {cms}/api/pos/v1/reservations?date=2026-10-03
 public struct ReservationList: Codable, Sendable, Hashable {
+    public init(reservations: [Reservation]) { self.reservations = reservations }
+
     public var reservations: [Reservation]
 }
 
@@ -250,6 +283,8 @@ public struct ReservationInput: Codable, Sendable, Hashable {
 }
 
 public struct ReservationResponse: Codable, Sendable, Hashable {
+    public init(reservation: Reservation) { self.reservation = reservation }
+
     public var reservation: Reservation
 }
 
@@ -264,6 +299,8 @@ public struct FloorUpdate: Codable, Sendable {
 }
 
 public struct FloorResponse: Codable, Sendable, Hashable {
+    public init(floor: FloorPlan, version: String) { self.floor = floor; self.version = version }
+
     public var floor: FloorPlan
     public var version: String
 }
@@ -292,6 +329,8 @@ public struct Heartbeat: Codable, Sendable {
 }
 
 public struct HeartbeatResponse: Codable, Sendable, Hashable {
+    public init(serverTime: Date, configVersion: String, serverSeq: Int) { self.serverTime = serverTime; self.configVersion = configVersion; self.serverSeq = serverSeq }
+
     public var serverTime: Date
     /// 設定版本：和手上的不同就重抓 bootstrap
     public var configVersion: String

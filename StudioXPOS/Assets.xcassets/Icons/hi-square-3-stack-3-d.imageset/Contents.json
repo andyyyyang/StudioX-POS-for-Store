@@ -1,0 +1,16 @@
+{
+  "images": [
+    {
+      "filename": "hi-square-3-stack-3-d.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": true,
+    "template-rendering-intent": "template"
+  }
+}

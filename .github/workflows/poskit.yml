@@ -1,0 +1,38 @@
+# POSKit（金額、事件、電子發票、出單、同步）在 Linux 上跑測試：便宜、快，畫面以外的邏輯都在這裡驗
+name: POSKit tests
+
+on:
+  push:
+    paths:
+      - "Packages/POSKit/**"
+      - ".github/workflows/poskit.yml"
+  pull_request:
+    paths:
+      - "Packages/POSKit/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: poskit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    container: swift:6.2-noble
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: swift test
+        working-directory: Packages/POSKit
+        run: swift test 2>&1 | tee test.log
+      - name: 結果
+        if: always()
+        working-directory: Packages/POSKit
+        run: |
+          {
+            echo "## POSKit"
+            grep -E "Test run with|✘" test.log | sed 's/\x1b\[[0-9;]*m//g' | sed 's/^/- /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
