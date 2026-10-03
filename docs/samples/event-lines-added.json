@@ -1,0 +1,12 @@
+{
+  "at" : "2026-09-21T14:13:20.000Z",
+  "data" : "{\"lines\":[{\"addedAt\":\"2026-09-21T14:13:20.000Z\",\"addedBy\":\"staff-leslie\",\"categoryId\":\"cat-drinks\",\"categoryName\":\"飲料\",\"course\":0,\"id\":\"ln-1\",\"itemId\":\"itm-milktea\",\"kitchen\":\"sent\",\"modifiers\":[{\"groupId\":\"grp-sugar\",\"groupName\":\"甜度\",\"name\":\"半糖\",\"optionId\":\"opt-half\",\"priceDelta\":0},{\"groupId\":\"grp-ice\",\"groupName\":\"冰塊\",\"name\":\"少冰\",\"optionId\":\"opt-less\",\"priceDelta\":0}],\"name\":\"珍珠奶茶\",\"note\":\"\",\"quantity\":2,\"sentAt\":\"2026-09-21T14:13:20.000Z\",\"station\":\"吧台\",\"taxKind\":1,\"unitPrice\":6000},{\"addedAt\":\"2026-09-21T14:13:20.000Z\",\"addedBy\":\"staff-leslie\",\"categoryId\":\"cat-fried\",\"categoryName\":\"炸物\",\"course\":0,\"id\":\"ln-2\",\"itemId\":\"itm-chicken\",\"kitchen\":\"served\",\"modifiers\":[],\"name\":\"鹽酥雞\",\"note\":\"\",\"quantity\":1,\"sentAt\":\"2026-09-21T14:13:20.000Z\",\"station\":\"廚房\",\"taxKind\":1,\"unitPrice\":8000}],\"ticketId\":\"6f1c2a9e-0b7d-4c1e-9a55-2f3b8d1e7c40\"}",
+  "deviceId" : "dev-a",
+  "hash" : "e7215a719abf69018fd8641da304a92b34462c0725c2abf6e61864030b71960d",
+  "id" : "evt-0001",
+  "lamport" : 1207,
+  "prevHash" : "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "seq" : 41,
+  "staffId" : "staff-leslie",
+  "type" : "lines.added"
+}

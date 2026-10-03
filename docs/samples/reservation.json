@@ -1,0 +1,16 @@
+{
+  "createdAt" : "2026-09-21T14:13:20.000Z",
+  "durationMinutes" : 90,
+  "id" : "rsv-1",
+  "kind" : "reservation",
+  "name" : "王小明",
+  "note" : "靠窗",
+  "partySize" : 4,
+  "phone" : "0912345678",
+  "source" : "pos",
+  "startsAt" : "2026-09-21T14:13:20.000Z",
+  "status" : "booked",
+  "tableIds" : [
+    "tbl-a1"
+  ]
+}

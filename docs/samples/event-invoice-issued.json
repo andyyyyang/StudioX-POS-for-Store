@@ -1,0 +1,12 @@
+{
+  "at" : "2026-09-21T14:13:20.000Z",
+  "data" : "{\"invoice\":{\"buyer\":{\"kind\":\"business\",\"taxId\":\"22099131\",\"title\":\"台灣積體電路製造股份有限公司\"},\"buyerName\":\"台灣積體電路製造股份有限公司\",\"deviceId\":\"dev-a\",\"freeTaxSalesAmount\":0,\"issuedAt\":\"2026-09-21T14:13:20.000Z\",\"items\":[{\"amount\":12000,\"description\":\"珍珠奶茶（半糖・少冰）\",\"quantity\":2,\"sequence\":1,\"taxKind\":1,\"unitPrice\":6000},{\"amount\":8000,\"description\":\"鹽酥雞\",\"quantity\":1,\"sequence\":2,\"taxKind\":1,\"unitPrice\":8000},{\"amount\":2000,\"description\":\"服務費\",\"quantity\":1,\"sequence\":3,\"taxKind\":1,\"unitPrice\":2000}],\"number\":\"AB12345650\",\"period\":\"11510\",\"printed\":true,\"randomCode\":\"4821\",\"rollId\":\"roll-1\",\"salesAmount\":21000,\"sellerAddress\":\"台南市中西區民族路二段1號\",\"sellerName\":\"晨麥手作有限公司\",\"sellerTaxId\":\"04595257\",\"taxAmount\":1000,\"taxRateBps\":500,\"taxType\":1,\"ticketId\":\"6f1c2a9e-0b7d-4c1e-9a55-2f3b8d1e7c40\",\"totalAmount\":22000,\"zeroTaxSalesAmount\":0},\"ticketId\":\"6f1c2a9e-0b7d-4c1e-9a55-2f3b8d1e7c40\"}",
+  "deviceId" : "dev-a",
+  "hash" : "45bd9af0b1f2ab06de7f347ba21b8812d27dc009ab002c63ec943f282af71a9f",
+  "id" : "evt-0002",
+  "lamport" : 1208,
+  "prevHash" : "e7215a719abf69018fd8641da304a92b34462c0725c2abf6e61864030b71960d",
+  "seq" : 42,
+  "staffId" : "staff-leslie",
+  "type" : "invoice.issued"
+}

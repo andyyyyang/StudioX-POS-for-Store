@@ -1,0 +1,158 @@
+{
+  "catalog" : {
+    "categories" : [
+      {
+        "id" : "cat-drinks",
+        "name" : "飲料",
+        "sortOrder" : 1,
+        "station" : "吧台",
+        "swatch" : "lavender"
+      }
+    ],
+    "items" : [
+      {
+        "categoryId" : "cat-drinks",
+        "id" : "itm-milktea",
+        "isAvailable" : true,
+        "modifierGroupIds" : [
+          "grp-sugar"
+        ],
+        "name" : "珍珠奶茶",
+        "openPrice" : false,
+        "plu" : "101",
+        "price" : 6000,
+        "shortName" : "珍奶",
+        "sortOrder" : 0,
+        "taxKind" : 1,
+        "unit" : "杯"
+      }
+    ],
+    "modifierGroups" : [
+      {
+        "id" : "grp-sugar",
+        "maxSelect" : 1,
+        "minSelect" : 1,
+        "name" : "甜度",
+        "options" : [
+          {
+            "id" : "opt-full",
+            "isAvailable" : true,
+            "isDefault" : true,
+            "name" : "正常",
+            "priceDelta" : 0
+          },
+          {
+            "id" : "opt-half",
+            "isAvailable" : true,
+            "isDefault" : false,
+            "name" : "半糖",
+            "priceDelta" : 0
+          }
+        ],
+        "sortOrder" : 0
+      }
+    ]
+  },
+  "device" : {
+    "code" : "A",
+    "id" : "dev-a",
+    "name" : "櫃台 1",
+    "role" : "register",
+    "stations" : [
+
+    ]
+  },
+  "features" : {
+    "invoice" : true,
+    "kitchen" : true,
+    "members" : true,
+    "reservations" : true,
+    "seating" : true,
+    "waitlistSMS" : false
+  },
+  "floor" : {
+    "areas" : [
+      {
+        "id" : "area-1f",
+        "name" : "1F",
+        "sortOrder" : 0,
+        "tables" : [
+          {
+            "areaId" : "area-1f",
+            "height" : 12,
+            "id" : "tbl-a1",
+            "name" : "A1",
+            "rotation" : 0,
+            "seats" : 4,
+            "shape" : "square",
+            "width" : 12,
+            "x" : 10,
+            "y" : 10
+          }
+        ]
+      }
+    ]
+  },
+  "invoice" : {
+    "enabled" : true,
+    "qrKey" : "0123456789ABCDEF0123456789ABCDEF",
+    "rolls" : [
+      {
+        "end" : 12345699,
+        "id" : "roll-1",
+        "period" : "11510",
+        "start" : 12345650,
+        "track" : "AB"
+      }
+    ],
+    "sellerAddress" : "台南市中西區民族路二段1號",
+    "sellerName" : "晨麥手作有限公司",
+    "sellerTaxId" : "04595257"
+  },
+  "mesh" : {
+    "enabled" : true,
+    "key" : "abababababababababababababababababababababababababababababababab"
+  },
+  "serverTime" : "2026-09-21T14:13:20.000Z",
+  "staff" : [
+    {
+      "id" : "staff-leslie",
+      "isActive" : true,
+      "name" : "Leslie",
+      "pinHash" : "2a07d08f1d64913567e7e61851f137e700a4a7fed97ff2ce606aa38645c36c0b",
+      "pinIterations" : 4096,
+      "pinSalt" : "8c1f0e5a",
+      "role" : "cashier",
+      "swatch" : "lavender"
+    }
+  ],
+  "store" : {
+    "address" : "台南市中西區民族路二段1號",
+    "businessDayCutoffHour" : 4,
+    "cashQuickAmounts" : [
+      10000,
+      50000,
+      100000
+    ],
+    "defaultOrderType" : "dineIn",
+    "discountLimitBps" : 1000,
+    "discountPresetsBps" : [
+      500,
+      1000,
+      1500,
+      2000
+    ],
+    "legalName" : "晨麥手作有限公司",
+    "name" : "晨麥手作",
+    "phone" : "06-2220000",
+    "receiptFooter" : "謝謝光臨",
+    "serviceChargeBps" : 1000,
+    "serviceChargeOn" : [
+      "dineIn"
+    ],
+    "tableTimeLimitMinutes" : 90,
+    "taxId" : "04595257",
+    "tipsEnabled" : false
+  },
+  "version" : "v-3f9a1c"
+}

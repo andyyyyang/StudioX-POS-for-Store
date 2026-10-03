@@ -1,0 +1,17 @@
+{
+  "accepted" : [
+    "evt-0001",
+    "evt-0002"
+  ],
+  "duplicates" : [
+
+  ],
+  "rejected" : [
+    {
+      "expectSeq" : 42,
+      "id" : "evt-0003",
+      "reason" : "chain_gap"
+    }
+  ],
+  "serverSeq" : 98113
+}
