@@ -24,6 +24,8 @@ struct PhoneOrderView: View {
     @Environment(PhoneUI.self) private var ui
 
     @State private var categoryId: String?
+    /// 換分類時新的品項從哪一邊推進來（左右滑、點分類）
+    @State private var pushFrom: Edge = .trailing
     @State private var query = ""
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -144,8 +146,7 @@ struct PhoneOrderView: View {
                     ForEach(model.catalog.categories) { c in
                         let on = categoryId == c.id
                         Button {
-                            withAnimation(Motion.fast) { categoryId = c.id }
-                            model.touch()
+                            select(c.id)
                         } label: {
                             HStack(spacing: 7) {
                                 Circle()
@@ -203,9 +204,15 @@ struct PhoneOrderView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 2)
                 .padding(.bottom, 16)
+                // 換分類：整區從左右推進來
+                .id(query.isEmpty ? (categoryId ?? "all") : "search")
+                .transition(.push(from: pushFrom))
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.immediately)
+            // 左右滑換分類（搜尋中不換）
+            .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { v in swipe(v) })
+            .sensoryFeedback(.selection, trigger: categoryId)
         }
     }
 
@@ -237,6 +244,20 @@ struct PhoneOrderView: View {
                 model.toggleAvailability(item)
             }
         }
+    }
+
+    private func swipe(_ v: DragGesture.Value) {
+        guard query.isEmpty, let step = CategorySwipe.step(for: v),
+              let next = CategorySwipe.neighbor(of: categoryId, by: step, in: model.catalog.categories) else { return }
+        select(next)
+    }
+
+    /// 換分類：新的品項從對的那一邊推進來（上面的膠囊跟著捲到中間）
+    private func select(_ id: String) {
+        guard id != categoryId else { return }
+        pushFrom = CategorySwipe.edge(from: categoryId, to: id, in: model.catalog.categories)
+        withAnimation(Motion.spring) { categoryId = id }
+        model.touch()
     }
 
     private func quantity(of item: MenuItem) -> Int {

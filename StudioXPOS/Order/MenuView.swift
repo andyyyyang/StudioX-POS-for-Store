@@ -13,6 +13,8 @@ struct MenuView: View {
     @State private var query = ""
     /// 菜單這一區的高度（客製的卡最多到它的三分之二）
     @State private var areaHeight: CGFloat = 700
+    /// 換分類時新的品項從哪一邊推進來（左右滑、點分類）
+    @State private var pushFrom: Edge = .trailing
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,6 +38,9 @@ struct MenuView: View {
                     .padding(.bottom, 28)
                 }
                 .scrollIndicators(.hidden)
+                // 左右滑換分類（搜尋中、客製的卡開著時不換）
+                .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { v in swipe(v) })
+                .sensoryFeedback(.selection, trigger: categoryId)
                 if let item = model.variantItem ?? model.modifierItem {
                     Theme.page.opacity(0.55)
                         .contentShape(.rect)
@@ -66,6 +71,21 @@ struct MenuView: View {
         .onAppear {
             if categoryId == nil { categoryId = model.catalog.categories.first?.id }
         }
+    }
+
+    private func swipe(_ v: DragGesture.Value) {
+        guard query.isEmpty, model.variantItem == nil, model.modifierItem == nil,
+              let step = CategorySwipe.step(for: v),
+              let next = CategorySwipe.neighbor(of: categoryId, by: step, in: model.catalog.categories) else { return }
+        select(next)
+    }
+
+    /// 換分類：新的品項從對的那一邊推進來
+    private func select(_ id: String) {
+        guard id != categoryId else { return }
+        pushFrom = CategorySwipe.edge(from: categoryId, to: id, in: model.catalog.categories)
+        withAnimation(Motion.spring) { categoryId = id }
+        model.touch()
     }
 
     private func closeCustomize() {
@@ -128,8 +148,7 @@ struct MenuView: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 132, maximum: 220), spacing: 12)], spacing: 12) {
             ForEach(model.catalog.categories) { c in
                 CategoryTile(category: c, count: model.catalog.items(in: c.id).count, selected: categoryId == c.id) {
-                    withAnimation(Motion.fast) { categoryId = c.id }
-                    model.touch()
+                    select(c.id)
                 }
             }
         }
@@ -188,6 +207,9 @@ struct MenuView: View {
                     }
                 }
             }
+            // 換分類：整區從左右推進來（左右滑、點分類）
+            .id(query.isEmpty ? (categoryId ?? "all") : "search")
+            .transition(.push(from: pushFrom))
         }
     }
 
