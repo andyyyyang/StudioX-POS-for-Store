@@ -169,7 +169,7 @@ struct PairingView: View {
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
 
-            KeypadDock(showsCancel: false, content: DockContent(selection: account.dockSelection(model: model)))
+            KeypadDock(content: DockContent(selection: account.dockSelection(model: model)), showsCancel: false)
                 .frame(width: Metric.dock)
         }
     }
