@@ -38,24 +38,28 @@ struct VariantPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    heading
+                VStack(alignment: .leading, spacing: simple ? 22 : 28) {
+                    if simple {
+                        simpleBody
+                    } else {
+                        heading
 
-                    VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 8) {
-                            Eyebrow(Self.dimensionTitle(of: item))
-                            Text(selected == nil ? "點一格選規格" : "小字是這家店的庫存")
-                                .font(.brand(12, .medium))
-                                .foregroundStyle(selected == nil ? Theme.accentText : Theme.muted)
+                        VStack(alignment: .leading, spacing: 14) {
+                            HStack(spacing: 8) {
+                                Eyebrow(Self.dimensionTitle(of: item))
+                                Text(selected == nil ? "點一格選規格" : "小字是這家店的庫存")
+                                    .font(.brand(12, .medium))
+                                    .foregroundStyle(selected == nil ? Theme.accentText : Theme.muted)
+                            }
+                            VariantMatrix(item: item, selectedId: selectedId) { v in
+                                withAnimation(Motion.spring) { selectedId = v.id }
+                                model.touch()
+                            }
+                            legend
                         }
-                        VariantMatrix(item: item, selectedId: selectedId) { v in
-                            withAnimation(Motion.spring) { selectedId = v.id }
-                            model.touch()
-                        }
-                        legend
+
+                        selection
                     }
-
-                    selection
                 }
                 .padding(24)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
@@ -90,8 +94,8 @@ struct VariantPanel: View {
     }
 
     private func dockDetail(_ q: Int) -> String {
-        guard let v = selected else { return "\(Self.summary(of: item))・在左邊的表選顏色尺寸" }
-        return "\(v.label)・×\(q)・\(stockLine(v))"
+        guard let v = selected else { return simple ? "在左邊選一個" : "\(Self.summary(of: item))・在左邊的表選顏色尺寸" }
+        return simple ? "\(v.label)・×\(q)" : "\(v.label)・×\(q)・\(stockLine(v))"
     }
 
     private func dockBadge(_ q: Int) -> DockBadge? {
@@ -108,6 +112,46 @@ struct VariantPanel: View {
         keypad.clearIdle()
         Task {
             if let n = await keypad.askNumber(.quantity(name: item.name, current: q)) { quantity = max(n, 1) }
+        }
+    }
+
+    // MARK: 小吃：只有一個維度、沒有顏色、不管庫存（黃毛丫頭的「140／150」）——不用服飾的照片與尺寸表
+
+    /// 簡單的規格：一排大顆的選項，像加料那樣
+    private var simple: Bool { Self.isSimple(item) }
+
+    static func isSimple(_ item: MenuItem) -> Bool {
+        dimensions(of: item) <= 1 && colorDimension(of: item) == nil && item.activeVariants.allSatisfy { $0.stock == nil }
+    }
+
+    private var simpleBody: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 4) {
+                Eyebrow(model.catalog.category(item.categoryId)?.name ?? "")
+                Headline(item.name, role: .h2)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Eyebrow(Self.dimensionTitle(of: item))
+                    Text("選一個")
+                        .font(.brand(12, .medium))
+                        .foregroundStyle(selected == nil ? Theme.accentText : Theme.muted)
+                }
+                FlowLayout(spacing: 10, rowSpacing: 10) {
+                    ForEach(item.activeVariants) { v in
+                        let price = item.price(of: v)
+                        // 選項本身就是價錢（「140」）時不再重複寫價錢
+                        let label = v.options.joined(separator: " ")
+                        OptionChip(title: label, detail: label == price.plain || label == "\(price.cents / 100)" ? nil : price.formatted,
+                                   selected: v.id == selectedId, disabled: !v.isAvailable) {
+                            withAnimation(Motion.spring) { selectedId = v.id }
+                            model.touch()
+                        }
+                    }
+                }
+            }
         }
     }
 
