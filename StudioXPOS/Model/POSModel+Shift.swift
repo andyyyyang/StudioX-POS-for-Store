@@ -95,15 +95,15 @@ extension POSModel {
 
 /// 訂位與候位（存在後台：網站、電話訂的也在這裡）
 extension POSModel {
+    /// 今天的訂位、候位、預約、課程報名（只換掉今天的；預約表看別天時抓的那幾天留著）
     func loadReservations() async {
-        guard let api else { return }
-        do {
-            reservations = try await api.reservations(date: businessDate).sorted { $0.startsAt < $1.startsAt }
-        } catch {}
+        await loadReservations(for: businessDate)
     }
 
-    func saveReservation(id: String?, _ input: ReservationInput) async -> Bool {
-        guard let api else { return false }
+    /// 存好回傳後台的那一筆（新的會帶候位號碼、id）；存不了跳錯誤、回 nil
+    @discardableResult
+    func saveReservation(id: String?, _ input: ReservationInput) async -> Reservation? {
+        guard let api else { return nil }
         do {
             let r: Reservation
             if let id {
@@ -113,13 +113,13 @@ extension POSModel {
             }
             if let i = reservations.firstIndex(where: { $0.id == r.id }) { reservations[i] = r } else { reservations.append(r) }
             reservations.sort { $0.startsAt < $1.startsAt }
-            return true
+            return r
         } catch let e as APIError {
             alert = AlertInfo(title: "存不了", message: e.userMessage)
         } catch {
             alert = AlertInfo(title: "存不了", message: error.localizedDescription)
         }
-        return false
+        return nil
     }
 
     func setStatus(_ status: ReservationStatus, for r: Reservation) async {
@@ -150,6 +150,11 @@ extension POSModel {
         guard let t = openTicket(type: .dineIn, tableIds: tableIds, guests: r.partySize, customerName: r.name) else { return }
         _ = await saveReservation(id: r.id, ReservationInput(tableIds: tableIds, status: .seated))
         selectedTicketId = t.id
-        section = .order
+        // 報到接待沒有點餐頁：單子開好了、交給前場與結帳櫃台
+        if visibleSections.contains(.order) {
+            section = .order
+        } else {
+            show("\(r.name) 入座 \(floor.tableNames(tableIds))・\(t.number) 已同步到結帳櫃台")
+        }
     }
 }

@@ -556,9 +556,12 @@ struct FloorView: View {
         model.show("已送出 \(ticket.title(floor: model.floor)) 的結帳單")
     }
 
+    /// 這台有點餐頁（報到接待沒有：只把單子打開在旁邊）
+    private var canOrderHere: Bool { model.visibleSections.contains(.order) }
+
     private func order(_ ticket: Ticket) {
         model.selectedTicketId = ticket.id
-        model.go(.order)
+        if canOrderHere { model.go(.order) }
     }
 
     // MARK: 換桌、併桌
@@ -718,12 +721,21 @@ struct FloorView: View {
             Button {
                 order(ticket)
             } label: {
-                Text("去點餐")
+                Text(canOrderHere ? "去點餐" : "看單")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
+            if !model.role.takesPayment {
+                // 報到接待不收錢：結帳在結帳櫃台
+                Text("\(ticket.number)・\(ticket.totals.amountDue.formatted) 已同步到結帳櫃台")
+                    .font(.brand(13, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.infoFG)
+            }
             HStack(spacing: 6) {
-                FloorMiniTool(title: "結帳", icon: "credit-card", accent: true) { model.beginCheckout(ticket) }
+                if model.role.takesPayment {
+                    FloorMiniTool(title: "結帳", icon: "credit-card", accent: true) { model.beginCheckout(ticket) }
+                }
                 FloorMiniTool(title: "結帳單", icon: "printer") { printBill(ticket) }
                 FloorMiniTool(title: "換桌", icon: "arrows-right-left") { startPick(.move(ticketId: ticket.id)) }
                 FloorMiniTool(title: "併桌", icon: "link") { startPick(.merge(ticketId: ticket.id)) }

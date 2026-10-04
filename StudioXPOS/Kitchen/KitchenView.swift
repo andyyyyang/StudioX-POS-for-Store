@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import POSCore
 import POSInvoice
@@ -19,6 +20,8 @@ import SwiftUI
 ///
 /// 點一行＝下一個狀態（待做 → 製作中 → 可出餐 → 待做）；「已上菜」整張收掉。
 /// 收掉的 10 分鐘內留在上面那條「剛出餐」，按錯可以復原（改回可出餐）。
+///
+/// 出餐口（崗位）：看所有出單站；整張都好了的單浮到最上面，大大的取餐號碼＋「叫號」（唸出來）＋「已出餐」。
 struct KitchenView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -26,9 +29,10 @@ struct KitchenView: View {
     /// 篩選的出單站（空的＝全部）
     @State private var stations: Set<String> = []
     @State private var appliedDefault = false
-    /// 最近「已上菜」的品項：單 id → 品項 id → 什麼時候。從事件日誌算（別台按的也算）
-    @State private var servedLog: [String: [String: Date]] = [:]
     @State private var showBumped = false
+    /// 出餐口叫過號的單（什麼時候叫的）
+    @State private var called: [String: Date] = [:]
+    @State private var speaker = AVSpeechSynthesizer()
 
     var body: some View {
         // 每 15 秒重畫：等了幾分鐘、顏色變不變
@@ -39,7 +43,6 @@ struct KitchenView: View {
         .padding(.top, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear { applyDefaultStations() }
-        .onChange(of: model.state.applied, initial: true) { rebuildServedLog() }
     }
 
     private var anim: Animation? { reduceMotion ? nil : Motion.ease }
@@ -49,6 +52,10 @@ struct KitchenView: View {
         let tickets = relevantTickets(now: now)
         let cards = makeCards(tickets, hasStations: hasStations)
         let bumps = makeBumps(now: now, hasStations: hasStations)
+        // 出餐口：整張都好了的單另外放在最上面
+        let isExpo = model.role == .expo
+        let ready = isExpo ? cards.filter { $0.allReady } : []
+        let working = isExpo ? cards.filter { !$0.allReady } : cards
         return VStack(alignment: .leading, spacing: 18) {
             header(cards: cards, now: now)
             if hasStations {
@@ -61,20 +68,86 @@ struct KitchenView: View {
                 EmptyState(icon: "fire", title: "沒有要做的", message: "新的單送出後會出現在這裡。")
             } else {
                 ScrollView {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 280, maximum: 360), spacing: 16, alignment: .top)],
-                        alignment: .leading,
-                        spacing: 16
-                    ) {
-                        ForEach(cards) { c in
-                            KitchenTicketCard(card: c, now: now, showsStation: hasStations && stations.count != 1)
-                                .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                    VStack(alignment: .leading, spacing: 22) {
+                        if !ready.isEmpty {
+                            expoReady(ready, now: now)
+                        }
+                        if !working.isEmpty {
+                            if !ready.isEmpty {
+                                Eyebrow("製作中")
+                            }
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 280, maximum: 360), spacing: 16, alignment: .top)],
+                                alignment: .leading,
+                                spacing: 16
+                            ) {
+                                ForEach(working) { c in
+                                    KitchenTicketCard(card: c, now: now, showsStation: hasStations && stations.count != 1)
+                                        .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                                }
+                            }
                         }
                     }
                     .padding(.bottom, 28)
                 }
                 .scrollIndicators(.hidden)
             }
+        }
+    }
+
+    // MARK: - 出餐口
+
+    private func expoReady(_ ready: [KitchenCardModel], now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Eyebrow("可以出餐", color: Theme.successFG)
+                Text("\(ready.count) 張・叫號後客人來拿，按「已出餐」收掉")
+                    .font(.brand(13, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+            }
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 16, alignment: .top)],
+                alignment: .leading,
+                spacing: 16
+            ) {
+                ForEach(ready) { c in
+                    KitchenExpoCard(
+                        card: c,
+                        pickup: pickupLabel(c.ticket),
+                        title: c.ticket.title(floor: model.floor),
+                        now: now,
+                        calledAt: called[c.ticket.id],
+                        onCall: { call(c) },
+                        onServed: { served(c) }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.97)))
+                }
+            }
+        }
+    }
+
+    /// 櫃台、咖啡模式的外帶單用取餐號碼（A023 → 23）；內用、其他模式用桌號或單名
+    private func pickupLabel(_ t: Ticket) -> String? {
+        guard model.mode.printsPickupNumber, t.tableIds.isEmpty else { return nil }
+        return Templates.pickupNumber(t.number)
+    }
+
+    /// 叫號：唸出來（「二十三號，請取餐」），記下叫過了
+    private func call(_ c: KitchenCardModel) {
+        let t = c.ticket
+        let label = pickupLabel(t).map { "\($0) 號" } ?? t.title(floor: model.floor)
+        withAnimation(anim) { called[t.id] = Date() }
+        model.show("叫號 \(label)")
+        let utterance = AVSpeechUtterance(string: "\(label)，請取餐")
+        utterance.voice = AVSpeechSynthesisVoice(language: "zh-TW")
+        speaker.speak(utterance)
+    }
+
+    private func served(_ c: KitchenCardModel) {
+        withAnimation(anim) {
+            model.kitchen(.served, lines: c.lines, in: c.ticket)
+            called[c.ticket.id] = nil
         }
     }
 
@@ -95,12 +168,15 @@ struct KitchenView: View {
         return set.sorted()
     }
 
-    /// 廚房螢幕預設只看後台指定給這台的出單站
+    /// 後廚預設只看後台指定給這台的出單站；出餐口看全部
     private func applyDefaultStations() {
         guard !appliedDefault else { return }
         appliedDefault = true
-        if model.device.role == .kitchen && !model.device.stations.isEmpty {
-            stations = Set(model.device.stations)
+        switch model.role {
+        case .kitchen:
+            if !model.device.stations.isEmpty { stations = Set(model.device.stations) }
+        case .expo, .register, .handheld, .reception:
+            stations = []
         }
     }
 
@@ -162,36 +238,22 @@ struct KitchenView: View {
         return out
     }
 
-    /// 從事件日誌找最近 15 分鐘「已上菜」的品項（只在有新事件時重算）
-    private func rebuildServedLog() {
-        guard let journal = model.ledger?.journal else {
-            servedLog = [:]
-            return
-        }
-        // 事件時間是 ISO 8601（UTC），字串比大小就是時間先後，不用每筆都解析
-        let cutoff = EventCoding.timestamp(Date().addingTimeInterval(-15 * 60))
-        var log: [String: [String: Date]] = [:]
-        for e in journal.allEvents where e.at >= cutoff {
-            guard case .kitchenUpdated(let k) = e.body, k.status == .served else { continue }
-            let at = e.date
-            for id in k.lineIds {
-                if let previous = log[k.ticketId]?[id], previous >= at { continue }
-                log[k.ticketId, default: [:]][id] = at
-            }
-        }
-        servedLog = log
-    }
-
-    /// 10 分鐘內收掉、現在還是「已上菜」的（被復原的就不列）
+    /// 10 分鐘內收掉、現在還是「已上菜」的（被復原的就不列）：照每一行最後一次改出餐進度的時間（kitchenAt）
     private func makeBumps(now: Date, hasStations: Bool) -> [KitchenBump] {
         let cutoff = now.addingTimeInterval(-10 * 60)
+        // 兩小時前就結帳的單不會剛出餐（外帶先結帳也不會等那麼久才出），不用每次掃全部的單
+        let closedCutoff = now.addingTimeInterval(-2 * 3600)
         var out: [KitchenBump] = []
-        for (ticketId, lineDates) in servedLog {
-            guard let t = model.state.tickets[ticketId] else { continue }
+        for t in model.state.tickets.values {
+            switch t.status {
+            case .open: break
+            case .closed: if (t.closedAt ?? .distantPast) < closedCutoff { continue }
+            case .voided: continue
+            }
             var lines: [TicketLine] = []
             var latest = Date.distantPast
             for line in t.lines where line.isActive && line.kitchen == .served && shows(line, hasStations: hasStations) {
-                guard let at = lineDates[line.id], at > cutoff else { continue }
+                guard let at = line.kitchenAt, at > cutoff else { continue }
                 lines.append(line)
                 latest = max(latest, at)
             }
@@ -331,6 +393,9 @@ private struct KitchenCardModel: Identifiable {
     var id: String { ticket.id }
 
     func minutes(at now: Date) -> Int { max(0, Int(now.timeIntervalSince(firstSent) / 60)) }
+
+    /// 這張（篩過出單站的）全部做好了
+    var allReady: Bool { lines.allSatisfy { $0.kitchen == .ready } }
 }
 
 private struct KitchenBump: Identifiable {
@@ -706,5 +771,77 @@ private struct KitchenStat: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(value) \(label)")
+    }
+}
+
+/// 出餐口：整張好了的單。大大的取餐號碼（或桌號）、品項一行、「叫號」與「已出餐」
+private struct KitchenExpoCard: View {
+    let card: KitchenCardModel
+    /// 取餐號碼（櫃台、咖啡的外帶單）；沒有就用單名
+    let pickup: String?
+    let title: String
+    let now: Date
+    let calledAt: Date?
+    let onCall: () -> Void
+    let onServed: () -> Void
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(pickup ?? title)
+                    .font(.brand(pickup == nil ? 34 : 56, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.5)
+                Spacer(minLength: 6)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("\(card.minutes(at: now)) 分")
+                        .font(.brand(18, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink2)
+                    if let calledAt {
+                        Text("\(calledAt.clockText) 叫過")
+                            .font(.brand(12, .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.accentText)
+                    }
+                }
+            }
+            if pickup != nil {
+                Text(title)
+                    .font(.brand(14, .medium))
+                    .foregroundStyle(Theme.ink2)
+                    .lineLimit(1)
+            }
+            Text(card.lines.map { "\($0.name) ×\($0.quantity)" }.joined(separator: "、"))
+                .font(.brand(16, .regular))
+                .foregroundStyle(Theme.ink2)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Button(action: onCall) {
+                    Label {
+                        Text(calledAt == nil ? "叫號" : "再叫一次")
+                    } icon: {
+                        HeroIcon("speaker-wave", size: 17)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(calledAt == nil ? .accent : .ghost, size: .lg, fullWidth: true))
+                Button(action: onServed) {
+                    Text("已出餐")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
+            }
+        }
+        .padding(16)
+        .background(Theme.successFG.opacity(0.07), in: shape)
+        .background(Theme.surface, in: shape)
+        .overlay { shape.strokeBorder(Theme.successFG, lineWidth: 2) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(pickup.map { "\($0) 號" } ?? title)，可以出餐")
     }
 }

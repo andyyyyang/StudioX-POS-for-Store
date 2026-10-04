@@ -1123,28 +1123,24 @@ private struct ResvFormPanel: View {
             status: nil,
             note: isWait ? nil : note.trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        let party = partySize
-        let when = startsAt
         Task {
-            let ok = await model.saveReservation(id: existing?.id, input)
+            let saved = await model.saveReservation(id: existing?.id, input)
             saving = false
-            guard ok else { return }
-            model.show(doneMessage(name: trimmed, party: party, when: when, isWait: isWait))
+            guard let saved else { return }
+            model.show(doneMessage(saved))
             onClose()
         }
     }
 
-    private func doneMessage(name: String, party: Int, when: Date, isWait: Bool) -> String {
-        if !isNew { return "已更新 \(name) 的\(isWait ? "候位" : "訂位")" }
+    private func doneMessage(_ r: Reservation) -> String {
+        let isWait = r.kind == .waitlist
+        if !isNew { return "已更新 \(r.name) 的\(isWait ? "候位" : "訂位")" }
         if isWait {
-            // 號碼是後台給的：從剛存好的那筆找
-            let latest = model.reservations
-                .filter { $0.kind == .waitlist && $0.name == name }
-                .max { $0.createdAt < $1.createdAt }
-            if let n = latest?.queueNumber { return "候位 \(n) 號・\(name) \(party) 位" }
-            return "已抽號碼・\(name) \(party) 位"
+            // 號碼是後台給的
+            if let n = r.queueNumber { return "候位 \(n) 號・\(r.name) \(r.partySize) 位" }
+            return "已抽號碼・\(r.name) \(r.partySize) 位"
         }
-        return "已訂 \(when.shortText)・\(name) \(party) 位"
+        return "已訂 \(r.startsAt.shortText)・\(r.name) \(r.partySize) 位"
     }
 }
 
