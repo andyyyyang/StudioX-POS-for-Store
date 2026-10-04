@@ -237,7 +237,7 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
   - 沒有這張券：`404 not_found`
   - 斷線：App 不能確認，**不套用**（避免同一張券兩邊用）
 - 套用：整張單的折扣（`ticket.updated` 的 `discount`）帶上 `couponCode`：`{ kind: "amount"|"percent", value, reason: "折價券 新會員 100 元", couponCode: "YG-A3B2C1" }`。一張單一個整單折扣：套折價券會換掉原本的整單折扣
-- 結帳時：`ticket.closed` 的 `sale.discount.couponCode` → 後台記一筆使用（`coupon_usages`：`order_id` 空、`pos_sale_id`、有會員就 `user_id`），`usesLeft` 跟著少。
+- 結帳時：`ticket.closed` 的 `sale.couponCode`（整單折扣的折價券；`sale.orderDiscount` 是整單折扣的金額，分）→ 後台記一筆使用（`coupon_usages`：`order_id` 空、`pos_sale_id`、有會員就 `user_id`；一筆單只記一次），`usesLeft` 跟著少。
   已經用完了（另一台同時用掉）也照樣收這筆帳（事件不能退），在後台把這筆單標成 `flagged`「折價券超用」
 - 退款（`sale.refunded` 全額退）：還回那一次使用
 
