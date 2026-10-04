@@ -1409,6 +1409,11 @@ private enum OrdersDetailForm: Equatable {
     case buyer, refund, exchange
 }
 
+/// 退款怎麼算：照品項（金額照原單實收，庫存、課程卡、儲值跟著退）或照金額（右側鍵盤打）
+private enum OrdersRefundMode: Equatable {
+    case items, amount
+}
+
 private enum OrdersRefundReason: String, CaseIterable, Identifiable {
     case cancelled = "客人取消"
     case quality = "商品／服務問題"
@@ -1465,6 +1470,10 @@ private struct OrdersSaleDetail: View {
     @State private var showAllTenders = false
     @State private var refundReason: OrdersRefundReason = .cancelled
     @State private var otherReason = ""
+    /// 照品項退／照金額退（nil＝照這張單決定：服飾、課程卡、儲值照品項；餐廳照金額）
+    @State private var refundMode: OrdersRefundMode?
+    /// 照品項退：每一行退幾件（lineId → 件數）
+    @State private var refundPicked: [String: Int] = [:]
 
     // 讀最新的：結帳後改統編、補開、退款、換規格都記在 tickets 上（sales 只存結帳那一刻）
     private var ticket: Ticket? { model.state.tickets[sale.ticketId] }
@@ -2045,6 +2054,13 @@ private struct OrdersSaleDetail: View {
                     .monospacedDigit()
                     .foregroundStyle(Theme.ink)
             }
+            HStack(spacing: 8) {
+                OptionChip(title: "照品項退", selected: currentRefundMode == .items) { refundMode = .items }
+                OptionChip(title: "照金額退", selected: currentRefundMode == .amount) { refundMode = .amount }
+            }
+            if currentRefundMode == .items {
+                refundItems
+            }
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 Text("退回")
                     .font(.brand(13, .medium))
@@ -2093,19 +2109,189 @@ private struct OrdersSaleDetail: View {
                     .textRole(.xs)
                     .foregroundStyle(Theme.accentText)
             }
-            Button {
-                Task { await runRefund() }
-            } label: {
-                Text("下一步・在右側鍵盤打金額")
-                    .frame(maxWidth: .infinity)
+            switch currentRefundMode {
+            case .items:
+                Button {
+                    Task { await runRefund(lines: effectiveRefundPicks.filter { $0.value > 0 }) }
+                } label: {
+                    Text(itemRefundTotal.cents > 0 ? "退 \(itemRefundTotal.formatted)・\(selectedTender.label)" : "選要退的品項")
+                        .monospacedDigit()
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.danger, size: .md, fullWidth: true, arrow: true))
+                .disabled(itemRefundTotal.cents <= 0)
+            case .amount:
+                Button {
+                    Task { await runRefund(lines: [:]) }
+                } label: {
+                    Text("下一步・在右側鍵盤打金額")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.danger, size: .md, fullWidth: true, arrow: true))
             }
-            .buttonStyle(.brand(.danger, size: .md, fullWidth: true, arrow: true))
         }
         .padding(18)
         .background(Theme.press, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
     }
 
-    private func runRefund() async {
+    // MARK: 照品項退
+
+    /// 服飾的商品、規格，課程卡、儲值：照品項退（庫存、次數、儲值金跟著退）；只有餐點的（餐廳）照金額
+    private var defaultRefundMode: OrdersRefundMode {
+        let itemised = sale.lines.contains { l in
+            if l.variantName != nil || l.skuId != nil { return true }
+            switch l.kind {
+            case .some(.goods), .some(.pass), .some(.storedValue): return true
+            case .some(.service), .none: return false
+            }
+        }
+        return itemised ? .items : .amount
+    }
+
+    private var currentRefundMode: OrdersRefundMode { refundMode ?? defaultRefundMode }
+
+    /// 每一行還能退幾件：商品照換貨的規則（扣掉退過、換過的）；其他是買的減掉退過的
+    private var refundLimits: [String: Int] {
+        let goods = model.returnableQuantities(sale)
+        let already = sale.refundedQuantities(refunds)
+        var out: [String: Int] = [:]
+        for l in sale.lines {
+            out[l.lineId] = goods[l.lineId] ?? max(l.quantity - (already[l.lineId] ?? 0), 0)
+        }
+        return out
+    }
+
+    /// 每一行收錢的都選滿了、之前也沒退過＝整張退（卡抵的這時才能一起取消、還回次數）
+    private var picksWholeSale: Bool {
+        guard refunds.isEmpty else { return false }
+        let limits = refundLimits
+        let paid = sale.lines.filter { $0.redeem == nil && (limits[$0.lineId] ?? 0) > 0 }
+        guard !paid.isEmpty else { return false }
+        return paid.allSatisfy { (refundPicked[$0.lineId] ?? 0) >= (limits[$0.lineId] ?? 0) }
+    }
+
+    /// 真的要送出的：卡抵的只有整張退時才算
+    private var effectiveRefundPicks: [String: Int] {
+        let whole = picksWholeSale
+        var out: [String: Int] = [:]
+        for l in sale.lines {
+            guard let q = refundPicked[l.lineId], q > 0 else { continue }
+            if l.redeem != nil && !whole { continue }
+            out[l.lineId] = q
+        }
+        return out
+    }
+
+    /// 照原單實收算（和送出去的一樣），不超過還能退的
+    private var itemRefundTotal: Money {
+        let already = sale.refundedQuantities(refunds)
+        var sum = Money.zero
+        for (lineId, q) in effectiveRefundPicks {
+            sum += sale.refundAmount(lineId: lineId, quantity: q, alreadyRefunded: already[lineId] ?? 0)
+        }
+        return min(sum, refundable)
+    }
+
+    @ViewBuilder
+    private var refundItems: some View {
+        let limits = refundLimits
+        let lines = sale.lines.filter { (limits[$0.lineId] ?? 0) > 0 }
+        let whole = picksWholeSale
+        if lines.isEmpty {
+            Text("每一件都退過了；還有金額可以退的話用「照金額退」")
+                .textRole(.small)
+                .foregroundStyle(Theme.muted)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(lines, id: \.lineId) { l in
+                    refundRow(l, limit: limits[l.lineId] ?? 0, whole: whole)
+                    if l.lineId != lines.last?.lineId {
+                        Rule(color: Theme.hair)
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(itemRefundTotal.cents > 0 ? "退 \(itemRefundTotal.formatted)" : "還沒選")
+                    .font(.brand(16, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(itemRefundTotal.cents > 0 ? Theme.ink : Theme.muted)
+                if whole {
+                    StatusBadge("整張退", tone: .warning)
+                }
+                Spacer(minLength: 8)
+                Button("全部選") { pickAll(limits) }
+                    .buttonStyle(.brand(.quiet, size: .sm))
+                if !refundPicked.isEmpty {
+                    Button("清除") { refundPicked = [:] }
+                        .buttonStyle(.brand(.quiet, size: .sm))
+                }
+            }
+            if whole && (sale.serviceCharge.cents > 0 || sale.tip.cents > 0) {
+                Text("服務費、小費不在品項裡；要一起退請用「照金額退」。")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.warningFG)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// 一行：收錢的照原單實收；卡抵的不退錢，只有整張退時能一起取消（還回次數）
+    private func refundRow(_ l: SaleLine, limit: Int, whole: Bool) -> some View {
+        let redeemed = l.redeem != nil
+        let locked = redeemed && !whole
+        let count = locked ? 0 : (refundPicked[l.lineId] ?? 0)
+        let name = swapState.names[l.lineId].map { "\(l.name) \($0)" } ?? l.displayName
+        return OrdersExchangeLineRow(
+            title: name,
+            detail: refundRowDetail(l, limit: limit, count: count, locked: locked),
+            count: count,
+            limit: limit,
+            canSwap: false,
+            swapping: false,
+            set: { refundPicked[l.lineId] = $0 },
+            ask: { Task { await askRefundCount(l, limit: limit) } },
+            toggleSwap: {}
+        )
+        .padding(.vertical, 10)
+        .disabled(locked)
+        .opacity(locked ? 0.5 : 1)
+    }
+
+    private func refundRowDetail(_ l: SaleLine, limit: Int, count: Int, locked: Bool) -> String {
+        if l.redeem != nil {
+            return locked ? "卡抵的不退錢，取消會還回次數・整張退時才能選" : "卡抵的不退錢，取消會還回次數"
+        }
+        let already = sale.refundedQuantities(refunds)[l.lineId] ?? 0
+        let amount = sale.refundAmount(lineId: l.lineId, quantity: max(count, 1), alreadyRefunded: already)
+        let each = count > 0 ? "退 \(amount.formatted)" : "一件約 \(amount.formatted)"
+        var parts = ["可退 \(limit) 件", each]
+        if let badge = OrdersItemRow.badge(for: l.kind) { parts.insert(badge, at: 0) }
+        return parts.joined(separator: "・")
+    }
+
+    /// 「全部選」：收錢的選滿；這樣就是整張退，卡抵的也一起取消
+    private func pickAll(_ limits: [String: Int]) {
+        var picks: [String: Int] = [:]
+        for l in sale.lines {
+            let limit = limits[l.lineId] ?? 0
+            if limit > 0 { picks[l.lineId] = limit }
+        }
+        refundPicked = picks
+    }
+
+    /// 件數多的時候在右側鍵盤打
+    private func askRefundCount(_ l: SaleLine, limit: Int) async {
+        let current = refundPicked[l.lineId] ?? 0
+        let spec = KeypadSpec(kind: .count, title: "退幾件", subtitle: "\(l.displayName)・最多 \(limit) 件",
+                              initial: current > 0 ? String(current) : "", confirmLabel: "好", maxValue: limit, minValue: 0)
+        guard let n = await model.keypad.askNumber(spec) else { return }
+        refundPicked[l.lineId] = min(n, limit)
+    }
+
+    /// lines 空的＝照金額退（右側鍵盤打金額）；有的話照品項算、不問金額
+    private func runRefund(lines: [String: Int]) async {
         let reason: String
         switch refundReason {
         case .other:
@@ -2115,10 +2301,11 @@ private struct OrdersSaleDetail: View {
             reason = refundReason.rawValue
         }
         let before = refunds.count
-        await model.refund(sale, tender: selectedTender, reason: reason)
+        await model.refund(sale, tender: selectedTender, reason: reason, lines: lines)
         if refunds.count > before {
             form = nil
             otherReason = ""
+            refundPicked = [:]
         }
     }
 }

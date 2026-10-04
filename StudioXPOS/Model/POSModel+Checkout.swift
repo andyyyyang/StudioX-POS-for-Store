@@ -316,22 +316,27 @@ extension POSModel {
             return
         }
         let already = sale.refundedQuantities(t.refunds)
+        // 卡抵的行金額是 0 也要列（退了才會還回次數）
         let itemised: [RefundLine] = lines.compactMap { lineId, q in
-            guard q > 0 else { return nil }
+            guard q > 0, sale.lines.contains(where: { $0.lineId == lineId }) else { return nil }
             let amount = sale.refundAmount(lineId: lineId, quantity: q, alreadyRefunded: already[lineId] ?? 0)
-            return amount.cents > 0 ? RefundLine(lineId: lineId, quantity: q, amount: amount) : nil
+            return RefundLine(lineId: lineId, quantity: q, amount: amount)
         }.sorted { $0.lineId < $1.lineId }
+        // 這次退完之後每一件都退了：服務費、小費這些剩下的也一起退
+        let everyLine = !itemised.isEmpty && sale.lines.allSatisfy { l in
+            (already[l.lineId] ?? 0) + (itemised.first { $0.lineId == l.lineId }?.quantity ?? 0) >= l.quantity
+        }
         let amount: Money
         if itemised.isEmpty {
             guard let typed = await keypad.askMoney(.refund(max: refundable)) else { return }
             amount = typed
+        } else if everyLine {
+            amount = refundable
         } else {
             amount = min(Money.sum(itemised.map(\.amount)), refundable)
         }
+        guard amount.cents > 0 || itemised.contains(where: { $0.amount.isZero }) else { return }
         // 整張退：沒有退過、而且金額是全部（或每一件都退了）
-        let everyLine = !itemised.isEmpty && sale.lines.allSatisfy { l in
-            (already[l.lineId] ?? 0) + (itemised.first { $0.lineId == l.lineId }?.quantity ?? 0) >= l.quantity
-        }
         let full = t.refunds.isEmpty && (amount == refundable || everyLine)
         let invoice = t.invoice.flatMap { state.invoices[$0.number] }
         let action = (invoice != nil && t.invoice?.isVoided == false) ? InvoiceBuilder.refundAction(invoice: invoice, isFullRefund: full, at: Date()) : .none

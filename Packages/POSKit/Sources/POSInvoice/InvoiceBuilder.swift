@@ -160,10 +160,12 @@ public enum InvoiceBuilder {
         // 折讓不能超過發票金額（用儲值金、課程卡付的部分本來就不在這張發票上）
         let refundTotal = min(refund.amount.roundedToDollar(), invoice.totalAmount)
         var items: [EInvoiceItem] = []
-        if refund.lines.isEmpty {
+        // 金額是 0 的行（課程卡抵用）不列在折讓單上
+        let priced = refund.lines.filter { $0.amount.cents > 0 }
+        if priced.isEmpty || Money.sum(priced.map(\.amount)) != refundTotal {
             items = [EInvoiceItem(sequence: 1, description: "退貨折讓", quantity: 1, unitPrice: refundTotal, amount: refundTotal)]
         } else {
-            for (i, rl) in refund.lines.enumerated() {
+            for (i, rl) in priced.enumerated() {
                 let name = ticket.lines.first { $0.id == rl.lineId }?.displayName ?? "品項"
                 let unit = rl.quantity > 0 ? Money(dollars: Int((Double(rl.amount.dollars) / Double(rl.quantity)).rounded())) : rl.amount
                 items.append(EInvoiceItem(sequence: i + 1, description: name, quantity: rl.quantity, unitPrice: unit, amount: rl.amount))
