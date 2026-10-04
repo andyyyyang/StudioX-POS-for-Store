@@ -1,10 +1,12 @@
+import Foundation
 import POSCore
 import POSInvoice
 import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 選甜度、冰塊、加料（在工作區裡打開、不是跳出來的視窗：右側鍵盤一樣可以用來改數量）
+/// 選甜度、冰塊、加料（在工作區裡打開、不是跳出來的視窗：右側鍵盤一樣可以用來改數量）。
+/// 左邊選、右邊做：選項在左邊；「加入 NT$…」是右欄最下面的大鍵，數量、時價在右欄，右欄的 × 關掉這張卡
 struct ModifierPanel: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -42,31 +44,23 @@ struct ModifierPanel: View {
                             Headline(item.name, role: .h2)
                         }
                         Spacer()
-                        Button {
-                            model.modifierItem = nil
-                        } label: {
-                            HeroIcon("x-mark", size: 18)
-                        }
-                        .buttonStyle(SquareIconButtonStyle(size: 44))
-                        .accessibilityLabel("關閉")
-                        .keyboardShortcut(.cancelAction)
                     }
 
                     if item.openPrice {
                         VStack(alignment: .leading, spacing: 10) {
                             Eyebrow("時價")
-                            Button {
-                                Task {
-                                    if let p = await keypad.askMoney(.openPrice(name: item.name)) { price = p }
+                            // 價格在右欄打（「時價…」）；這裡只顯示
+                            Text(price?.formatted ?? "在右邊輸入價格")
+                                .font(.brand(20, .medium))
+                                .monospacedDigit()
+                                .foregroundStyle(price == nil ? Theme.accentText : Theme.ink)
+                                .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+                                .padding(.horizontal, 16)
+                                .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: Metric.radius)
+                                        .strokeBorder(price == nil ? Theme.accent.opacity(0.5) : Theme.line)
                                 }
-                            } label: {
-                                Text(price?.formatted ?? "在右邊輸入價格")
-                                    .font(.brand(20, .medium))
-                                    .monospacedDigit()
-                                    .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-                                    .padding(.horizontal, 16)
-                            }
-                            .buttonStyle(.choice(price != nil, height: 56))
                         }
                     }
 
@@ -101,64 +95,47 @@ struct ModifierPanel: View {
                 .padding(24)
             }
             .scrollIndicators(.hidden)
-
-            footer
         }
         .background(Theme.page)
-        .onAppear(perform: reset)
+        .dockSelection(dock)
+        .onAppear { reset() }
         .onChange(of: item.id) { _, _ in reset() }
     }
 
-    private var footer: some View {
-        HStack(spacing: 14) {
-            // 數量：− ＋，點數字用右側鍵盤打
-            HStack(spacing: 0) {
-                Button {
-                    quantity = max(quantity - 1, 1)
-                } label: {
-                    HeroIcon("minus", size: 18).frame(width: 52, height: 52)
-                }
-                .buttonStyle(.plain)
-                Button {
-                    Task { if let q = await keypad.askNumber(.quantity(name: item.name, current: quantity)) { quantity = max(q, 1) } }
-                } label: {
-                    Text("\(quantity)")
-                        .font(.brand(22, .semibold))
-                        .monospacedDigit()
-                        .frame(minWidth: 44, minHeight: 52)
-                }
-                .buttonStyle(.plain)
-                Button {
-                    quantity = min(quantity + 1, 999)
-                } label: {
-                    HeroIcon("plus", size: 18).frame(width: 52, height: 52)
-                }
-                .buttonStyle(.plain)
-            }
-            .foregroundStyle(Theme.ink)
-            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-            .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
+    // MARK: 右欄
 
-            if let problem {
-                Text(problem)
-                    .font(.brand(14, .medium))
-                    .foregroundStyle(Theme.warningFG)
-            }
-            Spacer()
-            Button {
-                add()
-            } label: {
-                Text("加入 \((unit * quantity).formatted)")
-                    .monospacedDigit()
-            }
-            .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-            .disabled(problem != nil)
-            .keyboardShortcut(.defaultAction)
+    /// 待機時在鍵盤打的數字就是數量；沒打就用這張卡的數量
+    private var currentQuantity: Int { keypad.multiplier ?? quantity }
+
+    /// 右欄：這個品項（選了什麼）；大鍵＝加入；動作鍵＝數量、時價
+    private var dock: DockSelection {
+        let q = currentQuantity
+        let addAction = POSAction("加入 \((unit * q).formatted)", icon: "plus-circle", enabled: problem == nil) { add() }
+        var actions = [POSAction("數量 \(q)", icon: "calculator") { askQuantity() }]
+        if item.openPrice {
+            actions.append(POSAction(price.map { "時價 \($0.formatted)" } ?? "時價…", icon: "currency-dollar") { askPrice() })
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .background(Theme.dock)
-        .overlay(alignment: .top) { Rule() }
+        // 鍵盤上打了數字時，右欄最下面那顆會變成「清除／品號」：加入也放在動作鍵
+        if !keypad.idle.digits.isEmpty && problem == nil { actions.insert(addAction, at: 0) }
+        let chosen = applied.map(\.name).joined(separator: "・")
+        let detail = ["×\(q)", chosen.isEmpty ? nil : chosen, problem].compactMap { $0 }.joined(separator: "・")
+        return DockSelection(id: "modifier-\(item.id)", kind: "加料", title: item.name, detail: detail,
+                             badge: problem.map { DockBadge($0, tone: .warning) }, primary: addAction, accent: true,
+                             actions: actions, clear: { model.modifierItem = nil })
+    }
+
+    private func askQuantity() {
+        let q = currentQuantity
+        keypad.clearIdle()
+        Task {
+            if let n = await keypad.askNumber(.quantity(name: item.name, current: q)) { quantity = max(n, 1) }
+        }
+    }
+
+    private func askPrice() {
+        Task {
+            if let p = await keypad.askMoney(.openPrice(name: item.name)) { price = p }
+        }
     }
 
     private func rule(_ g: ModifierGroup) -> String {
@@ -197,7 +174,9 @@ struct ModifierPanel: View {
 
     private func add() {
         guard problem == nil else { return }
-        model.add(item, quantity: quantity, modifiers: applied, note: note.trimmingCharacters(in: .whitespaces), price: price)
+        let q = currentQuantity
+        keypad.clearIdle()
+        model.add(item, quantity: q, modifiers: applied, note: note.trimmingCharacters(in: .whitespaces), price: price)
         model.modifierItem = nil
     }
 }

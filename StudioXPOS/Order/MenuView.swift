@@ -11,9 +11,6 @@ struct MenuView: View {
     @Environment(KeypadController.self) private var keypad
     @State private var categoryId: String?
     @State private var query = ""
-    @State private var customName = ""
-    @State private var askingCustom = false
-    @State private var scanning = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -51,26 +48,11 @@ struct MenuView: View {
         .onAppear {
             if categoryId == nil { categoryId = model.catalog.categories.first?.id }
         }
-        .alert("自訂品項", isPresented: $askingCustom) {
-            TextField("品名（例如：開瓶費）", text: $customName)
-            Button("下一步：輸入金額") {
-                let name = customName.trimmingCharacters(in: .whitespaces)
-                customName = ""
-                guard !name.isEmpty else { return }
-                Task { await model.addCustom(name: name) }
-            }
-            Button("取消", role: .cancel) { customName = "" }
-        }
-        .sheet(isPresented: $scanning) {
-            CodeScannerSheet(title: "掃商品條碼", types: ScanKind.product) { code in
-                model.lookup(code: code)
-            }
-        }
     }
 
     // MARK: 上面
 
-    /// 頁首：標題｜搜尋｜一個「⋯」（自訂品項、掃條碼）。用餐方式、開新單在右邊的單子上
+    /// 頁首：標題｜搜尋。自訂品項、掃條碼、開新單、用餐方式都在右欄（單子的動作）
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
             Group {
@@ -114,11 +96,6 @@ struct MenuView: View {
             .frame(minWidth: 150, idealWidth: 240, maxWidth: 240, minHeight: 44, maxHeight: 44)
             .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
             .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-
-            MoreMenu(actions: [
-                POSAction("自訂品項…", icon: "plus-circle") { askingCustom = true },
-                POSAction("掃商品條碼…", icon: "qr-code") { scanning = true },
-            ])
         }
     }
 
@@ -406,10 +383,11 @@ struct BoutiqueItemCard: View {
                         if let sizes = VariantPanel.sizeRange(of: item) {
                             Text(sizes)
                                 .font(.brand(11, .semibold))
-                                .foregroundStyle(Theme.tileInk)
+                                .foregroundStyle(Theme.ink)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
-                                .background(Color.white.opacity(0.72), in: .capsule)
+                                .background(Theme.surface.opacity(0.9), in: .capsule)
+                                .overlay { Capsule().strokeBorder(Theme.hair) }
                                 .padding(10)
                         }
                     }
@@ -495,7 +473,7 @@ struct BoutiqueItemCard: View {
     }
 }
 
-/// 剛結帳的那一筆（2 分鐘內）：金額、找零、補印
+/// 剛結帳的那一筆（2 分鐘內）：金額、找零（補印明細在右欄）
 struct LastSaleStrip: View {
     @Environment(POSModel.self) private var model
     let sale: SaleRecord
@@ -523,9 +501,6 @@ struct LastSaleStrip: View {
                         .foregroundStyle(Theme.accent)
                 }
             }
-            Button("明細") { model.printReceipt(sale) }
-                .buttonStyle(.brand(.ghost, size: .sm))
-                .environment(\.colorScheme, .dark)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)

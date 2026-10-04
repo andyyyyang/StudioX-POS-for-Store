@@ -37,6 +37,16 @@ struct MainShell: View {
                     workspace
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                // 直的 iPad 單子收起來時，單子欄照樣在（看不到）：整張單的動作（送單、結帳…）才會出現在右欄
+                .background {
+                    if !roomy && showsTicket && !showTicketSheet {
+                        TicketColumn()
+                            .frame(width: Metric.ticketColumnNarrow)
+                            .hidden()
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
                 // 工作區可以縮、超出的地方切掉：裡面的頁面再寬，也不會把單子與右側鍵盤擠出畫面
                 .frame(minWidth: 0, maxWidth: .infinity)
                 .clipped()

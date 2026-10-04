@@ -5,13 +5,13 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 單子（工作區與右側鍵盤之間那一欄）：桌號、人數、點了什麼、金額；送單、結帳。
+/// 單子（工作區與右側鍵盤之間那一欄）：桌號、人數、點了什麼、金額。
 ///
+/// 左邊選、右邊做（docs/DESIGN.md）：這一欄只有看與選——
+///   - 沒點某一行：整張單的動作在右欄（大鍵：送單／結帳；動作鍵：找會員、折扣、備註、更多…、作廢）
+///   - 點了某一行：右欄換成那一行（大鍵：數量；動作鍵：用卡抵、設計師、換規格、備註、折扣、刪除）；再點一下取消
+///   - 不用打數字的選擇（設計師、課程卡、規格、折扣的種類、用餐方式…）蓋住右欄（.dockPanel）
 /// 服飾多了整張單的銷售人員與換貨；美業、課程多了會員條（儲值金、課程卡）、每一行的設計師／教練與助理、用課程卡抵。
-/// 要選的東西（人、卡、規格）都在單子裡展開，不跳視窗：右側鍵盤一直看得到、用得到。
-///
-/// 按鈕照 docs/DESIGN.md：頁首只有標題、一排小標籤、會員條；每一行不放按鈕，點一下選起來、動作出現在那一行下面；
-/// 最下面一個主要動作（結帳；餐廳有還沒送的是送單），其他整張單的動作收進「⋯」
 struct TicketColumn: View {
     @Environment(POSModel.self) private var model
     @State private var splitting: Ticket?
@@ -22,10 +22,21 @@ struct TicketColumn: View {
     @State private var voidingTicket = false
     /// 會員條打開了（看課程卡、備註、上次做了什麼）
     @State private var memberOpen = false
-    /// 正在選銷售人員（服飾）
-    @State private var pickingSalesperson = false
-    /// 點了哪一行（那一行下面出現它的動作；一次只有一行）
+    /// 點了哪一行（右欄換成那一行的動作；再點一下取消）
     @State private var selectedLineId: String? = nil
+    /// 蓋住右欄的選擇
+    @State private var panel: TicketPanel? = nil
+    /// 自訂品項、掃商品條碼（以前在點餐頁的「⋯」）
+    @State private var askingCustom = false
+    @State private var customName = ""
+    @State private var scanning = false
+
+    /// 蓋住右欄的選擇：這一行的（設計師、助理、課程卡、規格、折扣、座位）、整張單的（折扣、更多、銷售人員）
+    private enum TicketPanel: String, Identifiable {
+        case performer, assistant, passes, variant, lineDiscount, lineCourse, ticketDiscount, ticketMore, salesperson
+        var id: String { rawValue }
+        var isLine: Bool { [.performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse].contains(self) }
+    }
 
     var body: some View {
         Group {
@@ -38,17 +49,50 @@ struct TicketColumn: View {
         .frame(maxHeight: .infinity)
         .background(Theme.dock.opacity(0.55))
         .overlay(alignment: .leading) { Rule(vertical: true) }
+        .dockSelection(dock)
+        .dockPanel(item: $panel, title: { panelTitle($0) }, subtitle: { panelSubtitle($0) }) { p in
+            panelContent(p)
+        }
         .onChange(of: model.selectedTicketId) { _, _ in
             memberOpen = false
-            pickingSalesperson = false
             selectedLineId = nil
+            panel = nil
         }
         .onChange(of: model.checkoutTicketId) { _, _ in
-            pickingSalesperson = false
             selectedLineId = nil
+            panel = nil
+        }
+        .onChange(of: selectedLineId) { _, _ in
+            if panel?.isLine == true { panel = nil }
+        }
+        // 規格、加料的卡打開了：右欄換成那張卡，這一行就不選了
+        .onChange(of: model.variantItem?.id) { _, id in
+            if id != nil { selectedLineId = nil }
+        }
+        .onChange(of: model.modifierItem?.id) { _, id in
+            if id != nil { selectedLineId = nil }
+        }
+        // 截圖：先選起第一行（只在 Debug、帶 -preselect）
+        .task(id: model.selectedTicketId) {
+            if LaunchArguments.preselect { preselectForScreenshot() }
         }
         .sheet(item: $splitting) { t in
             SplitSheet(ticket: t)
+        }
+        .sheet(isPresented: $scanning) {
+            CodeScannerSheet(title: "掃商品條碼", types: ScanKind.product) { code in
+                model.lookup(code: code)
+            }
+        }
+        .alert("自訂品項", isPresented: $askingCustom) {
+            TextField("品名（例如：開瓶費）", text: $customName)
+            Button("下一步：輸入金額") {
+                let name = customName.trimmingCharacters(in: .whitespaces)
+                customName = ""
+                guard !name.isEmpty else { return }
+                Task { await model.addCustom(name: name) }
+            }
+            Button("取消", role: .cancel) { customName = "" }
         }
         .alert("備註", isPresented: Binding(get: { noteFor != nil }, set: { if !$0 { noteFor = nil } })) {
             TextField("例如：不要香菜", text: $noteText)
@@ -85,6 +129,13 @@ struct TicketColumn: View {
         }
     }
 
+    /// 截圖用：單子有東西就先選起第一行（右欄是那一行的動作）
+    private func preselectForScreenshot() {
+        guard selectedLineId == nil, model.checkoutTicketId == nil, let t = model.selectedTicket,
+              let first = t.activeLines.first else { return }
+        selectedLineId = first.id
+    }
+
     // MARK: 沒有單
 
     private var empty: some View {
@@ -96,34 +147,13 @@ struct TicketColumn: View {
                 Text(emptyHint)
                     .textRole(.small)
                     .foregroundStyle(Theme.muted)
+                Text("開單、自訂品項、掃條碼在右邊")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.faint)
             }
-            // 一個主要動作（照模式：開預設的單、或先找會員）；其他用餐方式收進「⋯」
-            ActionBar(primary: emptyPrimary, secondary: emptySecondary, more: emptyMore, size: .md)
             Spacer()
         }
         .padding(20)
-    }
-
-    private var emptyPrimary: POSAction {
-        if model.mode.wantsCustomer {
-            return POSAction("找會員開單", icon: "user-circle") { Task { await startWithMember() } }
-        }
-        let type = model.mode.defaultOrderType
-        return POSAction(model.mode.showsOrderType ? "開\(type.label)單" : "開一張新單", icon: "plus-circle") {
-            model.openTicket(type: type)
-        }
-    }
-
-    private var emptySecondary: [POSAction] {
-        guard model.mode.wantsCustomer else { return [] }
-        return [POSAction("不找會員") { model.openTicket(type: model.mode.defaultOrderType) }]
-    }
-
-    private var emptyMore: [POSAction] {
-        guard model.mode.showsOrderType else { return [] }
-        return OrderType.allCases.filter { $0 != model.mode.defaultOrderType }.map { type in
-            POSAction("開\(type.label)單") { model.openTicket(type: type) }
-        }
     }
 
     private var emptyHint: String {
@@ -136,11 +166,13 @@ struct TicketColumn: View {
         return "點左邊的品項就會開一張新單（\(model.mode.label)：\(model.mode.summary)）"
     }
 
+
     /// 美業、課程：先找會員再點服務
     private func startWithMember() async {
         guard let t = model.ensureTicket() else { return }
         await model.attachMember(to: t)
     }
+
 
     // MARK: 單子
 
@@ -173,9 +205,7 @@ struct TicketColumn: View {
                             ForEach(t.lines) { line in
                                 LineRow(line: line, ticket: t, editable: editable,
                                         selected: editable && line.isActive && selectedLineId == line.id,
-                                        onSelect: { select(line) },
-                                        onNote: { noteText = line.note; noteFor = line },
-                                        onVoid: { voidReasonFor = [line] })
+                                        onSelect: { select(line) })
                                     .id(line.id)
                                 Rule(color: Theme.hair)
                             }
@@ -185,31 +215,36 @@ struct TicketColumn: View {
                     .onChange(of: t.lines.count) { _, _ in
                         if let last = t.lines.last { withAnimation(Motion.ease) { proxy.scrollTo(last.id, anchor: .bottom) } }
                     }
-                    // 選起來的那一行連同它的動作要看得到
                     .onChange(of: selectedLineId) { _, id in
                         guard let id else { return }
-                        Task {
-                            try? await Task.sleep(for: .milliseconds(120))
-                            withAnimation(Motion.ease) { proxy.scrollTo(id) }
-                        }
+                        withAnimation(Motion.ease) { proxy.scrollTo(id) }
                     }
                 }
             }
             Rule()
             totals(t, x)
                 .padding(18)
-            actions(t, x)
-                .padding(.horizontal, 18)
-                .padding(.bottom, 18)
         }
         .animation(Motion.spring, value: selectedLineId)
     }
 
-    /// 點一行：選起來（動作出現在那一行下面）；再點一次收起來
+    /// 點一行：選起來（右欄換成那一行的動作）；再點一次取消
     private func select(_ line: TicketLine) {
         guard model.checkoutTicketId == nil, line.isActive else { return }
-        selectedLineId = selectedLineId == line.id ? nil : line.id
+        if selectedLineId == line.id {
+            selectedLineId = nil
+        } else {
+            selectedLineId = line.id
+            // 左邊開著規格、加料的卡就收起來：右欄只對應一樣東西
+            model.variantItem = nil
+            model.modifierItem = nil
+        }
         model.touch()
+    }
+
+    private func selectedLine(in t: Ticket) -> TicketLine? {
+        guard let id = selectedLineId else { return nil }
+        return t.lines.first { $0.id == id && $0.isActive }
     }
 
     private func header(_ t: Ticket) -> some View {
@@ -233,19 +268,12 @@ struct TicketColumn: View {
                 .foregroundStyle(Theme.muted)
                 .lineLimit(1)
             }
-            // 一排小標籤：用餐方式與人數（點了改）、銷售人員（服飾）、已印結帳單
+            // 一排狀態（不是按鈕）：用餐方式與人數、銷售人員、已印結帳單；要改在右欄
             if showsChipRow(t) {
                 HStack(spacing: 8) {
-                    if showsOrderChip(t) { orderChip(t, editable: editable) }
-                    if model.mode.staffPerTicket { salespersonChip(t, editable: editable) }
+                    if showsOrderChip(t) { StatusBadge(orderChipText(t), tone: .neutral) }
+                    if model.mode.staffPerTicket { salespersonTag(t) }
                     if t.billPrintedAt != nil { StatusBadge("已印結帳單", tone: .warning) }
-                }
-                if pickingSalesperson && editable && model.mode.staffPerTicket {
-                    TicketStaffPicker(staff: salespeople, selected: t.salespersonId, noneLabel: "不指定") { id in
-                        model.setSalesperson(id, for: t)
-                        withAnimation(Motion.fast) { pickingSalesperson = false }
-                    }
-                    .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             if let x = t.exchange {
@@ -254,7 +282,18 @@ struct TicketColumn: View {
             if t.member != nil {
                 TicketMemberStrip(ticket: t, open: $memberOpen)
             } else if model.mode.wantsCustomer && editable {
-                findMember(t)
+                // 美業、課程一定要有客人：提醒一下，「找會員」在右欄
+                HStack(spacing: 10) {
+                    HeroIcon("user-circle", size: 18)
+                    Text("還沒有會員・\(memberHint)")
+                        .font(.brand(13, .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(Theme.accentText)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Theme.accentSoft, in: .rect(cornerRadius: Metric.radius))
             }
             if !t.note.isEmpty {
                 Text("※ \(t.note)")
@@ -262,7 +301,6 @@ struct TicketColumn: View {
                     .foregroundStyle(Theme.accentText)
             }
         }
-        .animation(Motion.fast, value: pickingSalesperson)
         .animation(Motion.fast, value: memberOpen)
     }
 
@@ -275,43 +313,29 @@ struct TicketColumn: View {
         showsOrderChip(t) || model.mode.staffPerTicket || t.billPrintedAt != nil
     }
 
-    /// 「內用・4 位 ⌄」：點了選用餐方式、改人數（一個標籤，不是一排按鈕）
-    private func orderChip(_ t: Ticket, editable: Bool) -> some View {
-        let text = orderChipText(t)
-        return Menu {
-            if model.mode.showsOrderType {
-                ForEach(OrderType.allCases, id: \.self) { type in
-                    Button {
-                        model.setOrderType(type, for: t)
-                    } label: {
-                        if t.orderType == type { Label(type.label, systemImage: "checkmark") } else { Text(type.label) }
-                    }
-                }
-                Divider()
-            }
-            Button("人數…", systemImage: "person.2") { Task { await model.setGuests(t) } }
-        } label: {
-            HStack(spacing: 5) {
-                Text(text)
-                    .lineLimit(1)
-                HeroIcon("chevron-down", size: 10)
-            }
-            .font(.brand(13, .medium))
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .overlay { RoundedRectangle(cornerRadius: Metric.radiusSm).strokeBorder(Theme.line) }
-            .contentShape(.rect)
-        }
-        .foregroundStyle(Theme.ink)
-        .disabled(!editable)
-        .accessibilityLabel("\(text)，點一下改用餐方式或人數")
-    }
-
     private func orderChipText(_ t: Ticket) -> String {
         var parts: [String] = []
         if model.mode.showsOrderType { parts.append(t.orderType.label) }
         if t.guests > 0 { parts.append("\(t.guests) 位") }
         return parts.isEmpty ? "人數" : parts.joined(separator: "・")
+    }
+
+
+    /// 「銷售 Cameron」（只顯示；改在右欄「銷售…」）
+    private func salespersonTag(_ t: Ticket) -> some View {
+        let s = model.staffMember(t.salespersonId)
+        return HStack(spacing: 6) {
+            if let s {
+                StaffAvatar(name: s.name, swatch: s.swatch, size: 20)
+                Text("銷售 \(s.name)")
+            } else {
+                HeroIcon("user", size: 13)
+                Text("還沒指定\(model.mode.staffTitle)")
+            }
+        }
+        .font(.brand(12.5, .medium))
+        .foregroundStyle(s == nil ? Theme.accentText : Theme.ink2)
+        .lineLimit(1)
     }
 
     // MARK: 換貨
@@ -342,41 +366,6 @@ struct TicketColumn: View {
         .accessibilityElement(children: .combine)
     }
 
-    // MARK: 銷售人員（服飾）
-
-    /// 「銷售：Cameron ⌄」：點了在下面展開選人
-    private func salespersonChip(_ t: Ticket, editable: Bool) -> some View {
-        let s = model.staffMember(t.salespersonId)
-        let title: String = s.map { "銷售：\($0.name)" } ?? "指定\(model.mode.staffTitle)"
-        let tint: Color = s == nil ? Theme.accentText : Theme.ink
-        return Button {
-            withAnimation(Motion.fast) { pickingSalesperson.toggle() }
-            model.touch()
-        } label: {
-            HStack(spacing: 7) {
-                if let s {
-                    StaffAvatar(name: s.name, swatch: s.swatch, size: 22)
-                } else {
-                    HeroIcon("user", size: 15)
-                }
-                Text(title)
-                    .lineLimit(1)
-                HeroIcon("chevron-down", size: 10)
-                    .rotationEffect(.degrees(pickingSalesperson ? 180 : 0))
-            }
-            .font(.brand(13, .medium))
-            .padding(.leading, s == nil ? 10 : 5)
-            .padding(.trailing, 10)
-            .frame(height: 32)
-            .foregroundStyle(tint)
-            .background(pickingSalesperson ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radiusSm))
-            .overlay { RoundedRectangle(cornerRadius: Metric.radiusSm).strokeBorder(Theme.line) }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .disabled(!editable)
-        .accessibilityLabel(s == nil ? "指定銷售人員" : "\(title)，點一下換人")
-    }
 
     /// 銷售人員的候選：上班中的排前面
     private var salespeople: [StaffMember] {
@@ -384,80 +373,16 @@ struct TicketColumn: View {
         return active.filter { model.isClockedIn($0) } + active.filter { !model.isClockedIn($0) }
     }
 
-    // MARK: 找會員（美業、課程一定要有客人）
-
-    private func findMember(_ t: Ticket) -> some View {
-        Button {
-            Task { await model.attachMember(to: t) }
-        } label: {
-            HStack(spacing: 12) {
-                HeroIcon("user-circle", size: 22)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("找會員")
-                        .font(.brand(15.5, .semibold))
-                    Text(memberHint)
-                        .font(.brand(12, .regular))
-                        .opacity(0.72)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                Text("→")
-                    .font(.brand(18, .regular))
-            }
-            .padding(.horizontal, 14)
-            .frame(maxWidth: .infinity, minHeight: 58)
-        }
-        .buttonStyle(.choice(true, height: 58))
-        .accessibilityLabel("找會員，在右邊的鍵盤打電話")
-    }
 
     private var memberHint: String {
-        model.mode == .fitness ? "右邊打電話・堂數要記在會員身上" : "右邊打電話・做完記在客人的紀錄上"
-    }
-
-    // MARK: 整張單的其他動作（「⋯」）
-
-    /// 不常用的整張單動作：會員、備註、整單折扣、服務費、小費、催菜、拆單、換桌、印結帳單、作廢
-    private func moreActions(_ t: Ticket) -> [POSAction] {
-        var out: [POSAction] = []
-        if t.member != nil {
-            out.append(POSAction("換會員…", icon: "user-circle") { Task { await model.attachMember(to: t) } })
-            out.append(POSAction("移除會員", icon: "x-circle") { model.detachMember(from: t) })
-        } else if !model.mode.wantsCustomer {
-            // 美業、課程的「找會員」在頁首
-            out.append(POSAction("會員…", icon: "user-circle") { Task { await model.attachMember(to: t) } })
-        }
-        out.append(POSAction("整張單的備註…", icon: "pencil-square") {
-            noteText = t.note
-            ticketNote = true
-        })
-        out.append(POSAction("整單打折（%）…", icon: "tag") { Task { await model.discountTicket(t, kind: .percent) } })
-        out.append(POSAction("整單折價（元）…", icon: "minus-circle") { Task { await model.discountTicket(t, kind: .amount) } })
-        if t.discount != nil {
-            out.append(POSAction("取消整單折扣", icon: "arrow-uturn-left") { model.clearTicketDiscount(t) })
-        }
-        if t.serviceChargeBps > 0 {
-            out.append(POSAction("免收服務費…", icon: "hand-raised") { Task { await model.waiveServiceCharge(t) } })
-        }
-        if model.store.tipsEnabled {
-            out.append(POSAction("小費…", icon: "banknotes") { Task { await model.setTip(t) } })
-        }
-        for c in laterCourses(t) {
-            out.append(POSAction("催菜：第 \(c) 道", icon: "fire") { model.fire(course: c, of: t) })
-        }
-        out.append(POSAction("拆單…", icon: "scissors", enabled: t.itemCount > 1) { splitting = t })
-        if model.visibleSections.contains(.floor) {
-            out.append(POSAction("換桌／併桌…", icon: "arrows-right-left") { model.go(.floor) })
-        }
-        out.append(POSAction("印結帳單", icon: "printer") { model.printBill(t) })
-        out.append(POSAction("作廢整張單…", icon: "trash", destructive: true) { voidingTicket = true })
-        return out
+        model.mode == .fitness ? "在右邊「找會員」：堂數要記在會員身上" : "在右邊「找會員」：做完記在客人的紀錄上"
     }
 
     /// 還沒做的第 2、3 道
     private func laterCourses(_ t: Ticket) -> [Int] {
         Set(t.unsentLines.map(\.course)).filter { $0 >= 2 }.sorted()
     }
+
 
     // MARK: 金額
 
@@ -538,47 +463,389 @@ struct TicketColumn: View {
         return m == 0 ? "\(h) 小時" : "\(h) 小時 \(m) 分"
     }
 
-    // MARK: 送單、結帳
 
-    /// 最下面：一個主要動作（結帳；餐廳有還沒送的就是送單、結帳退成次要），其他收進「⋯」
-    @ViewBuilder
-    private func actions(_ t: Ticket, _ x: TicketTotals) -> some View {
-        if model.checkoutTicketId == t.id {
-            // 結帳中：付款、回到點餐都在左邊的結帳畫面
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Theme.accent)
-                    .frame(width: 7, height: 7)
-                Text("結帳中・在左邊選付款方式")
-                    .textRole(.small)
-                    .foregroundStyle(Theme.muted)
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 44)
+    // MARK: - 右欄：整張單
+
+    /// 右欄要放什麼：結帳中不放（付款畫面自己放）；選了某一行放那一行；不然放整張單（沒有單就是開單）
+    private var dock: DockSelection? {
+        guard model.checkoutTicketId == nil else { return nil }
+        guard let t = model.selectedTicket else { return emptyPage }
+        if let line = selectedLine(in: t) { return lineSelection(line, in: t) }
+        return ticketPage(t)
+    }
+
+    /// 還沒有單：開單（照模式）、其他用餐方式、自訂品項、掃條碼
+    private var emptyPage: DockSelection {
+        let type = model.mode.defaultOrderType
+        var actions: [POSAction] = []
+        let primary: POSAction
+        if model.mode.wantsCustomer {
+            primary = POSAction("找會員開單", icon: "user-circle") { Task { await startWithMember() } }
+            actions.append(POSAction("開新單（不找會員）", icon: "plus-circle") { model.openTicket(type: type) })
         } else {
-            let unsent = t.unsentLines.filter { $0.course <= 1 }
-            // 餐廳：先送廚房、吃完再結帳；櫃台、咖啡：結帳時一起送（沒有「送單」）；美業沒有廚房，只有結帳
-            let canSend = model.features.kitchen && model.mode.usesKitchen && !model.mode.payFirst && !unsent.isEmpty
-            let checkout = checkoutAction(t)
-            if canSend {
-                ActionBar(primary: POSAction("送單 \(unsent.reduce(0) { $0 + $1.quantity })", icon: "fire") { model.send(t) },
-                          secondary: [checkout], more: moreActions(t), size: .lg)
-            } else {
-                // 品牌橘一個畫面只有一個：左邊開著規格、加料的卡（「加入」是橘的）時，結帳用墨色
-                let panelOpen = model.modifierItem != nil || model.variantItem != nil
-                ActionBar(primary: checkout, more: moreActions(t), size: .lg, accent: model.role.takesPayment && !panelOpen)
+            primary = POSAction(model.mode.showsOrderType ? "開\(type.label)單" : "開一張新單", icon: "plus-circle") {
+                model.openTicket(type: type)
             }
         }
+        if model.mode.showsOrderType {
+            for other in OrderType.allCases where other != type {
+                actions.append(POSAction("開\(other.label)單", icon: "plus-circle") { model.openTicket(type: other) })
+            }
+        }
+        actions.append(POSAction("自訂品項…", icon: "pencil-square") { askingCustom = true })
+        actions.append(POSAction("掃商品條碼…", icon: "qr-code") { scanning = true })
+        // 剛結帳的那一筆（點餐頁下面那條）：補印交易明細
+        if let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
+            actions.append(POSAction("印上一筆明細", icon: "printer") { model.printReceipt(sale) })
+        }
+        return .page("ticket-empty", primary: primary, accent: false, actions: actions)
+    }
+
+    /// 整張單：大鍵＝送單（餐廳有還沒送的）或結帳；動作鍵只放常用的，其他在「更多…」「折扣…」的面板
+    private func ticketPage(_ t: Ticket) -> DockSelection {
+        let unsent = t.unsentLines.filter { $0.course <= 1 }
+        // 餐廳：先送廚房、吃完再結帳；櫃台、咖啡：結帳時一起送（沒有「送單」）；美業沒有廚房，只有結帳
+        let canSend = model.features.kitchen && model.mode.usesKitchen && !model.mode.payFirst && !unsent.isEmpty
+        let checkout = checkoutAction(t)
+        var actions: [POSAction] = []
+        if canSend { actions.append(checkout) }
+        actions += ticketActions(t)
+        if canSend {
+            let count = unsent.reduce(0) { $0 + $1.quantity }
+            return .page("ticket-\(t.id)", primary: POSAction("送單 \(count)", icon: "fire") { model.send(t) }, accent: true, actions: actions)
+        }
+        return .page("ticket-\(t.id)", primary: checkout, accent: model.role.takesPayment, actions: actions)
     }
 
     /// 結帳；不收錢的崗位（報到接待）：單子已經同步到結帳櫃台，請客人過去結
     private func checkoutAction(_ t: Ticket) -> POSAction {
         let hasLines = !t.activeLines.isEmpty
         if model.role.takesPayment {
-            return POSAction("結帳", enabled: hasLines) { model.beginCheckout(t) }
+            return POSAction("結帳", icon: "banknotes", enabled: hasLines) { model.beginCheckout(t) }
         }
         return POSAction("送到結帳櫃台", icon: "paper-airplane", enabled: hasLines) {
             model.show("\(t.number) 已經同步到結帳櫃台，請客人到櫃台結帳", tone: .info)
+        }
+    }
+
+    /// 整張單的動作鍵（右欄上面的空間有限：最多六個；不常用的在「更多…」）
+    private func ticketActions(_ t: Ticket) -> [POSAction] {
+        var out: [POSAction] = []
+        if t.member == nil {
+            out.append(POSAction("找會員", icon: "user-circle") { Task { await model.attachMember(to: t) } })
+        }
+        if model.mode.staffPerTicket {
+            let s = model.staffMember(t.salespersonId)
+            out.append(POSAction(s.map { "銷售：\($0.name)" } ?? "指定\(model.mode.staffTitle)", icon: "user") { panel = .salesperson })
+        }
+        out.append(POSAction(t.discount == nil ? "折扣…" : "折扣（\(t.discount?.label ?? "")）…", icon: "tag") { panel = .ticketDiscount })
+        out.append(POSAction("整張單的備註…", icon: "pencil-square") {
+            noteText = t.note
+            ticketNote = true
+        })
+        out.append(POSAction("更多…", icon: "ellipsis-horizontal") { panel = .ticketMore })
+        out.append(POSAction("作廢整張單…", icon: "trash", destructive: true) { voidingTicket = true })
+        return out
+    }
+
+    // MARK: - 右欄：選起來的一行
+
+    /// 這一行：大鍵＝數量（右側鍵盤）；動作鍵照這一行挑（課程卡、設計師、助理、換規格、備註、折扣、座位、刪除）
+    private func lineSelection(_ line: TicketLine, in t: Ticket) -> DockSelection {
+        let passes = line.redeem == nil ? model.redeemablePasses(for: line, in: t) : []
+        let title = model.mode.staffTitle
+        var actions: [POSAction] = []
+        if line.redeem != nil {
+            actions.append(POSAction("取消抵用", icon: "arrow-uturn-left") { model.unredeem(line, in: t) })
+        } else if let only = passes.first, passes.count == 1 {
+            actions.append(POSAction("用\(only.name)抵", icon: "ticket") { model.redeem(line, with: only, in: t) })
+        } else if !passes.isEmpty {
+            actions.append(POSAction("用卡抵…", icon: "ticket") { panel = .passes })
+        }
+        if canEditStaff(line) {
+            actions.append(POSAction(line.staffId == nil ? "指定\(title)" : "換\(title)", icon: "user") { panel = .performer })
+            actions.append(POSAction(line.assistantId == nil ? "加助理" : "換助理", icon: "users") { panel = .assistant })
+        }
+        if canChangeVariant(line) {
+            actions.append(POSAction("換規格", icon: "swatch") { panel = .variant })
+        }
+        actions.append(POSAction("備註…", icon: "pencil-square") {
+            noteText = line.note
+            noteFor = line
+        })
+        actions.append(POSAction(line.discount == nil ? "折扣・改價…" : "折扣（\(line.discount?.label ?? "")）…", icon: "tag") { panel = .lineDiscount })
+        if isClassic {
+            actions.append(POSAction(line.isSent ? "座位…" : "座位・第幾道…", icon: "clock") { panel = .lineCourse })
+        }
+        if line.isSent {
+            actions.append(POSAction("作廢…", icon: "x-circle", destructive: true) { voidReasonFor = [line] })
+        } else {
+            actions.append(POSAction("刪除", icon: "trash", destructive: true) {
+                selectedLineId = nil
+                Task { await model.void([line], in: t, reason: "點錯") }
+            })
+        }
+        let quantity = POSAction("數量 \(line.quantity)", icon: "calculator") { Task { await model.changeQuantity(line, in: t) } }
+        return DockSelection(id: "line-\(line.id)", kind: "這一行", title: line.displayName, detail: lineDetail(line),
+                             badge: lineBadge(line), primary: quantity, accent: false, actions: actions,
+                             clear: { selectedLineId = nil })
+    }
+
+    /// 「×2・NT$240・半糖・少冰・Cameron」
+    private func lineDetail(_ line: TicketLine) -> String {
+        var parts = ["×\(line.quantity)"]
+        parts.append(line.redeem != nil ? "卡抵" : (line.gross - line.lineDiscount).formatted)
+        if !line.modifiers.isEmpty { parts.append(line.modifierText) }
+        if line.itemKind == .service, let m = line.durationMinutes { parts.append(TicketColumn.duration(m * line.quantity)) }
+        if let s = model.staffMember(line.staffId) { parts.append(s.name) }
+        return parts.joined(separator: "・")
+    }
+
+    private func lineBadge(_ line: TicketLine) -> DockBadge? {
+        if line.redeem != nil { return DockBadge("卡抵", tone: .gold) }
+        if line.isSent { return DockBadge(line.kitchen.label, tone: .info) }
+        if isClassic { return DockBadge("未送出", tone: .gold) }
+        return nil
+    }
+
+    private func canEditStaff(_ line: TicketLine) -> Bool {
+        model.mode.staffPerLine && line.itemKind == .service && line.isActive
+    }
+
+    private func canChangeVariant(_ line: TicketLine) -> Bool {
+        guard line.isActive, !line.isSent, line.skuId != nil, let id = line.itemId else { return false }
+        return model.catalog.item(id)?.hasVariants ?? false
+    }
+
+    /// 餐飲、零售（座位、第幾道只有這幾個模式用）
+    private var isClassic: Bool { !model.mode.staffPerLine && !model.mode.staffPerTicket }
+
+    // MARK: - 蓋住右欄的選擇
+
+    private func panelTitle(_ p: TicketPanel) -> String {
+        switch p {
+        case .performer: "指定\(model.mode.staffTitle)"
+        case .assistant: "助理"
+        case .passes: "用課程卡抵"
+        case .variant: "換規格"
+        case .lineDiscount: "折扣・改價"
+        case .lineCourse: "座位・第幾道"
+        case .ticketDiscount: "整張單的折扣"
+        case .ticketMore: "這張單"
+        case .salesperson: "銷售人員"
+        }
+    }
+
+    private func panelSubtitle(_ p: TicketPanel) -> String? {
+        if p.isLine { return model.selectedTicket.flatMap { selectedLine(in: $0) }?.displayName }
+        guard let t = model.selectedTicket else { return nil }
+        switch p {
+        case .salesperson: return "整張單的業績算給誰"
+        default: return "\(t.number)・\(t.title(floor: model.floor))"
+        }
+    }
+
+    @ViewBuilder
+    private func panelContent(_ p: TicketPanel) -> some View {
+        if let t = model.selectedTicket {
+            VStack(alignment: .leading, spacing: 8) {
+                if p.isLine {
+                    if let line = selectedLine(in: t) {
+                        linePanel(p, line: line, in: t)
+                    }
+                } else {
+                    ticketPanel(p, in: t)
+                }
+            }
+        }
+    }
+
+    /// 這一行的選擇
+    @ViewBuilder
+    private func linePanel(_ p: TicketPanel, line: TicketLine, in t: Ticket) -> some View {
+        switch p {
+        case .performer:
+            staffChoices(model.bookableStaff, selected: line.staffId, none: "不指定") { id in
+                model.setPerformer(line, staffId: id, in: t)
+            }
+        case .assistant:
+            staffChoices(model.staff.filter { $0.isActive && $0.id != line.staffId }, selected: line.assistantId, none: "不用助理") { id in
+                model.setAssistant(line, staffId: id, in: t)
+            }
+        case .passes:
+            ForEach(model.redeemablePasses(for: line, in: t)) { pass in
+                let left = model.visitsLeft(on: pass, excluding: line.id)
+                DockChoice(title: pass.name, detail: pass.statusText(at: Date()),
+                           trailing: left.map { $0 >= line.quantity ? "可抵 \($0) 次" : "剩 \(max($0, 0)) 次" } ?? "不限次數",
+                           enabled: left.map { $0 >= line.quantity } ?? true) {
+                    panel = nil
+                    model.redeem(line, with: pass, in: t)
+                }
+            }
+        case .variant:
+            if let id = line.itemId, let item = model.catalog.item(id) {
+                VariantMatrix(item: item, selectedId: line.skuId, compact: true) { v in
+                    panel = nil
+                    model.changeVariant(line, to: v, in: t)
+                }
+                Text("小字是這家店的庫存；價格不一樣的會照新規格的價格")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .padding(.top, 6)
+            }
+        case .lineDiscount:
+            DockChoice(title: "打折（%）", detail: "在右邊打要折掉的 %") {
+                panel = nil
+                Task { await model.discount(line, in: t, kind: .percent) }
+            }
+            DockChoice(title: "折價（元）", detail: "在右邊打折掉多少錢") {
+                panel = nil
+                Task { await model.discount(line, in: t, kind: .amount) }
+            }
+            if line.discount != nil {
+                DockChoice(title: "取消折扣", trailing: line.discount?.label) {
+                    panel = nil
+                    model.clearDiscount(line, in: t)
+                }
+            }
+            DockChoice(title: "改價", detail: "改單價（要領班以上）", trailing: line.unitPrice.formatted) {
+                panel = nil
+                Task { await model.changePrice(line, in: t) }
+            }
+        case .lineCourse:
+            DockChoice(title: "座位", detail: "第幾位客人（分開結帳用）", trailing: line.seat.map { "座 \($0)" }) {
+                panel = nil
+                Task { await model.setSeat(line, in: t) }
+            }
+            if !line.isSent {
+                DockChoice(title: "馬上做", selected: line.course <= 1) {
+                    panel = nil
+                    model.setCourse(0, for: line, in: t)
+                }
+                DockChoice(title: "第 2 道", detail: "等「催菜」再做", selected: line.course == 2) {
+                    panel = nil
+                    model.setCourse(2, for: line, in: t)
+                }
+                DockChoice(title: "第 3 道", detail: "等「催菜」再做", selected: line.course == 3) {
+                    panel = nil
+                    model.setCourse(3, for: line, in: t)
+                }
+            }
+        case .ticketDiscount, .ticketMore, .salesperson:
+            EmptyView()
+        }
+    }
+
+    /// 整張單的選擇
+    @ViewBuilder
+    private func ticketPanel(_ p: TicketPanel, in t: Ticket) -> some View {
+        switch p {
+        case .ticketDiscount:
+            DockChoice(title: "整單打折（%）", detail: "在右邊打要折掉的 %") {
+                panel = nil
+                Task { await model.discountTicket(t, kind: .percent) }
+            }
+            DockChoice(title: "整單折價（元）", detail: "在右邊打折掉多少錢") {
+                panel = nil
+                Task { await model.discountTicket(t, kind: .amount) }
+            }
+            if t.discount != nil {
+                DockChoice(title: "取消整單折扣", trailing: t.discount?.label) {
+                    panel = nil
+                    model.clearTicketDiscount(t)
+                }
+            }
+            if t.serviceChargeBps > 0 {
+                DockChoice(title: "免收服務費", detail: "要領班以上", trailing: percentText(bps: t.serviceChargeBps)) {
+                    panel = nil
+                    Task { await model.waiveServiceCharge(t) }
+                }
+            }
+            if model.store.tipsEnabled {
+                DockChoice(title: "小費", detail: "不開發票", trailing: t.tip.cents > 0 ? t.tip.formatted : nil) {
+                    panel = nil
+                    Task { await model.setTip(t) }
+                }
+            }
+        case .ticketMore:
+            if model.mode.showsOrderType {
+                Eyebrow("用餐方式")
+                ForEach(OrderType.allCases, id: \.self) { type in
+                    DockChoice(title: type.label, selected: t.orderType == type) {
+                        panel = nil
+                        model.setOrderType(type, for: t)
+                    }
+                }
+            }
+            if showsOrderChip(t) {
+                DockChoice(title: "人數", detail: "在右邊打幾位", trailing: t.guests > 0 ? "\(t.guests) 位" : nil) {
+                    panel = nil
+                    Task { await model.setGuests(t) }
+                }
+            }
+            Eyebrow("單子").padding(.top, 8)
+            if t.member != nil {
+                DockChoice(title: "換會員", detail: "在右邊打電話") {
+                    panel = nil
+                    Task { await model.attachMember(to: t) }
+                }
+                DockChoice(title: "移除會員", detail: "用他的課程卡抵的會一起取消") {
+                    panel = nil
+                    model.detachMember(from: t)
+                }
+            }
+            DockChoice(title: "自訂品項", detail: "菜單上沒有的（開瓶費、運費）") {
+                panel = nil
+                askingCustom = true
+            }
+            DockChoice(title: "掃商品條碼", detail: "用相機掃") {
+                panel = nil
+                scanning = true
+            }
+            ForEach(laterCourses(t), id: \.self) { c in
+                DockChoice(title: "催菜：第 \(c) 道", detail: "開始做第 \(c) 道") {
+                    panel = nil
+                    model.fire(course: c, of: t)
+                }
+            }
+            DockChoice(title: "拆單", detail: "選品項搬到新的一張", enabled: t.itemCount > 1) {
+                panel = nil
+                splitting = t
+            }
+            if model.visibleSections.contains(.floor) {
+                DockChoice(title: "換桌／併桌", detail: "到桌位圖") {
+                    panel = nil
+                    model.go(.floor)
+                }
+            }
+            DockChoice(title: "印結帳單", detail: t.billPrintedAt.map { "已印過 \(TaipeiTime.clock($0))" }) {
+                panel = nil
+                model.printBill(t)
+            }
+        case .salesperson:
+            staffChoices(salespeople, selected: t.salespersonId, none: "不指定（算給開單的人）") { id in
+                model.setSalesperson(id, for: t)
+            }
+        case .performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse:
+            EmptyView()
+        }
+    }
+
+    /// 選人：「不指定」＋每一位（職稱、上班中）
+    @ViewBuilder
+    private func staffChoices(_ list: [StaffMember], selected: String?, none: String, pick: @escaping (String?) -> Void) -> some View {
+        DockChoice(title: none, selected: selected == nil) {
+            panel = nil
+            pick(nil)
+        }
+        ForEach(list) { s in
+            let working = model.isClockedIn(s)
+            let info = [s.title, working ? "上班中" : nil].compactMap { $0 }.joined(separator: "・")
+            DockChoice(title: s.name, detail: info.isEmpty ? nil : info,
+                       selected: s.id == selected) {
+                panel = nil
+                pick(s.id)
+            }
         }
     }
 }
@@ -586,7 +853,7 @@ struct TicketColumn: View {
 // MARK: - 一行
 
 /// 單子上的一行：只顯示（數量、名字、規格、時間、設計師、卡抵、狀態），不放按鈕。
-/// 點一下選起來：下面出現這一行的動作——主要是數量（右側鍵盤），常用的兩個（照這一行：用卡抵、設計師、換規格、備註、打折），其他在「⋯」
+/// 點一下選起來（品牌橘的框），右欄換成這一行的動作；再點一下取消
 struct LineRow: View {
     @Environment(POSModel.self) private var model
     let line: TicketLine
@@ -594,53 +861,35 @@ struct LineRow: View {
     let editable: Bool
     var selected = false
     var onSelect: () -> Void = {}
-    let onNote: () -> Void
-    let onVoid: () -> Void
-
-    /// 選起來之後展開的選擇：設計師／教練、助理、用哪張卡抵、換規格
-    private enum Drawer: Hashable { case performer, assistant, passes, variant }
-    @State private var drawer: Drawer? = nil
 
     private var item: MenuItem? { line.itemId.flatMap { model.catalog.item($0) } }
 
-    /// 美業、課程的服務：每一行可以指定設計師／教練（已經指定了的，換到其他模式也看得到）
+    /// 美業、課程的服務：每一行有設計師／教練（已經指定了的，換到其他模式也看得到）
     private var showsStaff: Bool {
         line.isActive && ((model.mode.staffPerLine && line.itemKind == .service) || line.staffId != nil)
     }
 
-    private var canEditStaff: Bool { editable && model.mode.staffPerLine && line.itemKind == .service }
-
-    /// 還沒送出、品項有規格：可以換顏色尺寸
-    private var canChangeVariant: Bool {
-        editable && line.isActive && !line.isSent && line.skuId != nil && (item?.hasVariants ?? false)
-    }
-
-    /// 餐飲、零售（座位、第幾道、「還沒送出」的點只有這幾個模式用）
+    /// 餐飲、零售（「還沒送出」的點只有這幾個模式用）
     private var isClassic: Bool { !model.mode.staffPerLine && !model.mode.staffPerTicket }
 
     var body: some View {
         let passes = editable && line.isActive && line.redeem == nil ? model.redeemablePasses(for: line, in: ticket) : []
-        VStack(alignment: .leading, spacing: 0) {
-            Button(action: onSelect) {
-                summary(passes)
-            }
-            .buttonStyle(.row)
-            .accessibilityHint(editable && line.isActive ? (selected ? "收起這一行的動作" : "點一下改這一行") : "")
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            if selected {
-                editor(passes)
-                    .padding(.leading, 18)
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 12)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+        Button(action: onSelect) {
+            summary(passes)
         }
+        .buttonStyle(.row)
         .background { rowBackground }
-        .animation(Motion.fast, value: drawer)
-        .animation(Motion.spring, value: line.redeem)
-        .onChange(of: selected) { _, now in
-            if !now { drawer = nil }
+        .overlay {
+            if selected {
+                Rectangle()
+                    .strokeBorder(Theme.accent, lineWidth: 1.5)
+                    .allowsHitTesting(false)
+            }
         }
+        .accessibilityHint(editable && line.isActive ? (selected ? "再點一下取消選取" : "點一下，右邊出現這一行的動作") : "")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .animation(Motion.spring, value: line.redeem)
+        .animation(Motion.fast, value: selected)
     }
 
     // MARK: 這一行（只顯示）
@@ -699,9 +948,9 @@ struct LineRow: View {
     @ViewBuilder
     private var rowBackground: some View {
         if selected {
-            // 選起來的：亮一階的底、左邊一條墨色線
+            // 選起來的：亮一階的底、左邊一條品牌橘、外框（右欄對應的就是這一行）
             (line.redeem != nil ? Theme.accentSoft : Theme.surface)
-                .overlay(alignment: .leading) { Rectangle().fill(Theme.ink).frame(width: 3) }
+                .overlay(alignment: .leading) { Rectangle().fill(Theme.accent).frame(width: 4) }
         } else if line.redeem != nil && line.isActive {
             // 用課程卡抵的行：淡淡的品牌橘底、左邊一條橘線，一眼看得出不收錢
             Theme.accentSoft.opacity(0.7)
@@ -917,241 +1166,6 @@ struct LineRow: View {
         guard let pass = model.account(for: ticket.member)?.passes.first(where: { $0.id == r.passId }) else { return nil }
         if let left = model.visitsLeft(on: pass) { return "剩 \(max(left, 0)) 次" }
         return pass.statusText(at: Date())
-    }
-
-    // MARK: 選起來之後：這一行的動作
-
-    private struct Plan {
-        var primary: POSAction
-        var secondary: [POSAction]
-        var more: [POSAction]
-    }
-
-    private func editor(_ passes: [MemberPass]) -> some View {
-        let plan = actions(passes)
-        return VStack(alignment: .leading, spacing: 10) {
-            // 一排放得下就一排；窄的單子欄（直的 iPad）主要動作自己一排，字不會被切掉
-            ViewThatFits(in: .horizontal) {
-                ActionBar(primary: plan.primary, secondary: plan.secondary, more: plan.more, size: .sm)
-                VStack(alignment: .leading, spacing: 8) {
-                    ActionBar(primary: plan.primary, size: .sm)
-                    HStack(spacing: 0) {
-                        ActionBar(primary: nil, secondary: plan.secondary, more: plan.more, size: .sm)
-                        Spacer(minLength: 0)
-                    }
-                }
-            }
-            if drawer != nil {
-                drawerView(passes)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-        }
-        .padding(10)
-        .background(Theme.page, in: .rect(cornerRadius: Metric.radius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                .strokeBorder(Theme.line, lineWidth: 1)
-        }
-    }
-
-    /// 主要：數量（右側鍵盤）。常用的兩個照這一行挑：課程卡 → 設計師／教練 → 換規格 → 備註 → 打折；其他收進「⋯」
-    private func actions(_ passes: [MemberPass]) -> Plan {
-        let primary = POSAction("數量 \(line.quantity)", icon: "calculator") {
-            Task { await model.changeQuantity(line, in: ticket) }
-        }
-        var featured: [POSAction] = []
-        if line.redeem != nil {
-            featured.append(POSAction("取消抵用", icon: "arrow-uturn-left") { model.unredeem(line, in: ticket) })
-        } else if !passes.isEmpty {
-            featured.append(POSAction("用卡抵", icon: "ticket") {
-                if passes.count == 1, let p = passes.first {
-                    model.redeem(line, with: p, in: ticket)
-                } else {
-                    toggle(.passes)
-                }
-            })
-        }
-        if canEditStaff {
-            let title = line.staffId == nil ? "指定\(model.mode.staffTitle)" : "換\(model.mode.staffTitle)"
-            featured.append(POSAction(title, icon: "user") { toggle(.performer) })
-        }
-        if canChangeVariant {
-            featured.append(POSAction("換規格", icon: "swatch") { toggle(.variant) })
-        }
-        featured.append(POSAction("備註…", icon: "pencil-square") { onNote() })
-        featured.append(POSAction("打折（%）…", icon: "tag") { Task { await model.discount(line, in: ticket, kind: .percent) } })
-
-        var more = Array(featured.dropFirst(2))
-        more.append(POSAction("折價（元）…", icon: "minus-circle") { Task { await model.discount(line, in: ticket, kind: .amount) } })
-        if line.discount != nil {
-            more.append(POSAction("取消折扣", icon: "arrow-uturn-left") { model.clearDiscount(line, in: ticket) })
-        }
-        more.append(POSAction("改價…", icon: "currency-dollar") { Task { await model.changePrice(line, in: ticket) } })
-        if canEditStaff {
-            more.append(POSAction(line.assistantId == nil ? "加助理…" : "換助理…", icon: "users") { toggle(.assistant) })
-        }
-        if isClassic {
-            more.append(POSAction("座位…", icon: "user") { Task { await model.setSeat(line, in: ticket) } })
-            if !line.isSent {
-                if line.course != 0 { more.append(POSAction("馬上做", icon: "fire") { model.setCourse(0, for: line, in: ticket) }) }
-                if line.course != 2 { more.append(POSAction("第 2 道（等催菜）", icon: "clock") { model.setCourse(2, for: line, in: ticket) }) }
-                if line.course != 3 { more.append(POSAction("第 3 道（等催菜）", icon: "clock") { model.setCourse(3, for: line, in: ticket) }) }
-            }
-        }
-        if line.isSent {
-            more.append(POSAction("作廢…", icon: "x-circle", destructive: true) { onVoid() })
-        } else {
-            more.append(POSAction("刪除", icon: "trash", destructive: true) {
-                Task { await model.void([line], in: ticket, reason: "點錯") }
-            })
-        }
-        return Plan(primary: primary, secondary: Array(featured.prefix(2)), more: more)
-    }
-
-    private func passList(_ passes: [MemberPass]) -> some View {
-        VStack(spacing: 6) {
-            ForEach(passes) { p in
-                let note = passNote(p)
-                Button {
-                    model.redeem(line, with: p, in: ticket)
-                    close()
-                } label: {
-                    HStack(spacing: 10) {
-                        HeroIcon("ticket", size: 15)
-                            .foregroundStyle(Theme.accentText)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(p.name)
-                                .font(.brand(13.5, .medium))
-                                .foregroundStyle(Theme.ink)
-                                .lineLimit(1)
-                            Text(p.statusText(at: Date()))
-                                .font(.brand(11.5, .regular))
-                                .foregroundStyle(Theme.muted)
-                        }
-                        Spacer(minLength: 6)
-                        Text(note)
-                            .font(.brand(12, .medium))
-                            .monospacedDigit()
-                            .foregroundStyle(Theme.ink2)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-                    .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-                    .contentShape(.rect)
-                }
-                .buttonStyle(PressScale(scale: 0.98))
-                .accessibilityLabel("\(p.name)，\(p.statusText(at: Date()))，\(note)")
-            }
-        }
-    }
-
-    /// 「可抵 7 次」「次數不夠（剩 1）」「不限次數」
-    private func passNote(_ p: MemberPass) -> String {
-        guard let left = model.visitsLeft(on: p, excluding: line.id) else { return "不限次數" }
-        return left >= line.quantity ? "可抵 \(left) 次" : "次數不夠（剩 \(max(left, 0))）"
-    }
-
-    @ViewBuilder
-    private func drawerView(_ passes: [MemberPass]) -> some View {
-        switch drawer {
-        case .performer?:
-            TicketStaffPicker(staff: model.bookableStaff, selected: line.staffId, noneLabel: "不指定") { id in
-                model.setPerformer(line, staffId: id, in: ticket)
-                close()
-            }
-        case .assistant?:
-            TicketStaffPicker(staff: model.staff.filter { $0.isActive && $0.id != line.staffId }, selected: line.assistantId, noneLabel: "不用助理") { id in
-                model.setAssistant(line, staffId: id, in: ticket)
-                close()
-            }
-        case .passes?:
-            passList(passes)
-        case .variant?:
-            if let item {
-                VariantMatrix(item: item, selectedId: line.skuId, compact: true) { v in
-                    model.changeVariant(line, to: v, in: ticket)
-                    close()
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-                .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-            }
-        case nil:
-            EmptyView()
-        }
-    }
-
-    private func toggle(_ d: Drawer) {
-        withAnimation(Motion.fast) { drawer = drawer == d ? nil : d }
-        model.touch()
-    }
-
-    private func close() {
-        withAnimation(Motion.fast) { drawer = nil }
-    }
-}
-
-// MARK: - 選人
-
-/// 選人（銷售人員、設計師、教練、助理）：在單子裡展開的一排頭像，不是跳出來的視窗（右側鍵盤不會被蓋住）
-struct TicketStaffPicker: View {
-    @Environment(POSModel.self) private var model
-    let staff: [StaffMember]
-    let selected: String?
-    var noneLabel = "不指定"
-    let pick: (String?) -> Void
-
-    var body: some View {
-        FlowLayout(spacing: 6, rowSpacing: 6) {
-            chip(nil)
-            ForEach(staff) { s in
-                chip(s)
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-        .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-    }
-
-    private func chip(_ s: StaffMember?) -> some View {
-        let on = s?.id == selected
-        let title = s?.name ?? noneLabel
-        let role = s?.title ?? ""
-        let working = s.map { model.isClockedIn($0) } ?? false
-        return Button {
-            pick(s?.id)
-        } label: {
-            HStack(spacing: 6) {
-                if let s {
-                    StaffAvatar(name: s.name, swatch: s.swatch, size: 20)
-                }
-                Text(title)
-                    .lineLimit(1)
-                if !role.isEmpty {
-                    Text(role)
-                        .foregroundStyle(on ? Theme.page.opacity(0.65) : Theme.muted)
-                }
-                if working {
-                    Circle()
-                        .fill(Theme.live)
-                        .frame(width: 5, height: 5)
-                        .accessibilityLabel("上班中")
-                }
-            }
-            .font(.brand(13, .medium))
-            .padding(.leading, s == nil ? 11 : 4)
-            .padding(.trailing, 11)
-            .frame(minHeight: 32)
-            .foregroundStyle(on ? Theme.page : Theme.ink)
-            .background(on ? Theme.ink : Theme.page, in: .capsule)
-            .overlay { Capsule().strokeBorder(on ? Color.clear : Theme.line) }
-            .contentShape(.capsule)
-        }
-        .buttonStyle(PressScale(scale: 0.96))
-        .accessibilityAddTraits(on ? .isSelected : [])
     }
 }
 

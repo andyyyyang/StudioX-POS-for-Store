@@ -10,6 +10,8 @@ import SwiftUI
 ///   商品照（沒有照片就是這款的色票）＋名字、價格；下面是尺寸表：每一列是一個顏色（真的色票），
 ///   每一格是那個尺寸的大顆膠囊，小字是這家店的庫存（剩 1–2 件橘黃、帳上沒有的劃掉——照樣可以點，數字可能還沒更新）。
 ///   掃吊牌條碼直接加那個規格，不會打開這張卡。
+///
+///   左邊選、右邊做：表在左邊；「加入 NT$…」是右欄最下面的大鍵，數量在右欄（打開前在鍵盤打的數字就是數量），右欄的 × 關掉這張卡。
 struct VariantPanel: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -54,12 +56,51 @@ struct VariantPanel: View {
                 .padding(24)
             }
             .scrollIndicators(.hidden)
-
-            footer
         }
         .background(Theme.page)
-        .onAppear(perform: reset)
+        .dockSelection(dock)
+        .onAppear { reset() }
         .onChange(of: item.id) { _, _ in reset() }
+    }
+
+    // MARK: 右欄
+
+    /// 待機時在鍵盤打的數字就是數量；沒打就用這張卡的數量
+    private var currentQuantity: Int { keypad.multiplier ?? quantity }
+
+    /// 右欄：這一款（選了哪個規格、庫存）；大鍵＝加入；動作鍵＝數量
+    private var dock: DockSelection {
+        let q = currentQuantity
+        let addAction = POSAction(selected == nil ? "先選規格" : "加入 \((unit * q).formatted)", icon: "plus-circle",
+                                  enabled: problem == nil && !adding) { add() }
+        var actions = [POSAction("數量 \(q)", icon: "calculator") { askQuantity() }]
+        // 鍵盤上打了數字時，右欄最下面那顆會變成「清除／品號」：加入也放在動作鍵
+        if !keypad.idle.digits.isEmpty && selected != nil { actions.insert(addAction, at: 0) }
+        return DockSelection(id: "variant-\(item.id)", kind: "規格", title: item.name, detail: dockDetail(q),
+                             badge: dockBadge(q), primary: addAction, accent: true, actions: actions,
+                             clear: { model.variantItem = nil })
+    }
+
+    private func dockDetail(_ q: Int) -> String {
+        guard let v = selected else { return "\(Self.summary(of: item))・在左邊的表選顏色尺寸" }
+        return "\(v.label)・×\(q)・\(stockLine(v))"
+    }
+
+    private func dockBadge(_ q: Int) -> DockBadge? {
+        guard let v = selected else { return nil }
+        if !v.isAvailable { return DockBadge("停售", tone: .danger) }
+        guard let s = v.stock else { return nil }
+        if s <= 0 { return DockBadge("帳上沒庫存", tone: .warning) }
+        if s < q { return DockBadge("帳上只有 \(s) 件", tone: .warning) }
+        return s <= 2 ? DockBadge("剩 \(s) 件", tone: .warning) : nil
+    }
+
+    private func askQuantity() {
+        let q = currentQuantity
+        keypad.clearIdle()
+        Task {
+            if let n = await keypad.askNumber(.quantity(name: item.name, current: q)) { quantity = max(n, 1) }
+        }
     }
 
     // MARK: 上面：照片、名字、價格
@@ -92,15 +133,7 @@ struct VariantPanel: View {
                     }
                 }
             }
-            Spacer(minLength: 8)
-            Button {
-                model.variantItem = nil
-            } label: {
-                HeroIcon("x-mark", size: 18)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 44))
-            .accessibilityLabel("關閉")
-            .keyboardShortcut(.cancelAction)
+            Spacer(minLength: 0)
         }
     }
 
@@ -149,7 +182,13 @@ struct VariantPanel: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                MoneyText(money: item.price(of: v), role: .number)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("×\(currentQuantity)")
+                        .font(.brand(13, .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.muted)
+                    MoneyText(money: item.price(of: v) * currentQuantity, role: .number)
+                }
             }
             .panel(padding: 16)
             .id(v.id)
@@ -171,67 +210,6 @@ struct VariantPanel: View {
         return .neutral
     }
 
-    // MARK: 下面：數量、加入
-
-    private var footer: some View {
-        HStack(spacing: 14) {
-            // 數量：− ＋，點數字用右側鍵盤打（打開這張卡之前在鍵盤打的數字就是數量）
-            HStack(spacing: 0) {
-                Button {
-                    quantity = max(quantity - 1, 1)
-                } label: {
-                    HeroIcon("minus", size: 18).frame(width: 52, height: 52)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("少一件")
-                Button {
-                    Task { if let q = await keypad.askNumber(.quantity(name: item.name, current: quantity)) { quantity = max(q, 1) } }
-                } label: {
-                    Text("\(quantity)")
-                        .font(.brand(22, .semibold))
-                        .monospacedDigit()
-                        .contentTransition(.numericText(value: Double(quantity)))
-                        .frame(minWidth: 44, minHeight: 52)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("數量 \(quantity)，點一下用右邊鍵盤改")
-                Button {
-                    quantity = min(quantity + 1, 999)
-                } label: {
-                    HeroIcon("plus", size: 18).frame(width: 52, height: 52)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("多一件")
-            }
-            .foregroundStyle(Theme.ink)
-            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-            .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-            .animation(Motion.fast, value: quantity)
-
-            if let v = selected, v.isAvailable, let s = v.stock, s < quantity {
-                StatusBadge(s <= 0 ? "帳上沒有庫存" : "帳上只有 \(s) 件", tone: .warning)
-            } else if let problem {
-                Text(problem)
-                    .font(.brand(14, .medium))
-                    .foregroundStyle(selected == nil ? Theme.muted : Theme.warningFG)
-            }
-            Spacer()
-            Button {
-                add()
-            } label: {
-                Text(selected == nil ? "加入" : "加入 \((unit * quantity).formatted)")
-                    .monospacedDigit()
-            }
-            .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-            .disabled(problem != nil || adding)
-            .keyboardShortcut(.defaultAction)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .background(Theme.dock)
-        .overlay(alignment: .top) { Rule() }
-    }
-
     // MARK: 動作
 
     private func reset() {
@@ -245,7 +223,8 @@ struct VariantPanel: View {
     private func add() {
         guard problem == nil, !adding, let v = selected else { return }
         adding = true
-        let q = quantity
+        let q = currentQuantity
+        keypad.clearIdle()
         let it = item
         Task {
             // 課程卡、儲值要記在會員身上（服飾通常不會，但規則一樣）

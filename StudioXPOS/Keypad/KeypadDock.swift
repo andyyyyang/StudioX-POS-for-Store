@@ -66,6 +66,7 @@ struct KeypadDock: View {
         VStack(alignment: .leading, spacing: 0) {
             top
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
             if showsQuestion {
                 VStack(alignment: .leading, spacing: 0) {
                     header
@@ -97,9 +98,15 @@ struct KeypadDock: View {
             }
             .scrollIndicators(.hidden)
         } else if !keypad.isAsking, let s = content.selection, !s.actions.isEmpty {
-            // 這一頁沒選東西時的動作（新增訂位…）在上面，下面照樣是這一刻的資訊
+            // 這一頁沒選東西時的動作（新增訂位…）在上面，下面照樣是這一刻的資訊。動作鍵太多就捲，不壓到數字鍵
+            let rows = CGFloat((s.actions.count + 1) / 2)
             VStack(alignment: .leading, spacing: 18) {
-                DockActionKeys(actions: s.actions)
+                ScrollView {
+                    DockActionKeys(actions: s.actions)
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxHeight: rows * 52 + (rows - 1) * 8)
+                .layoutPriority(1)
                 DockContext()
             }
         } else {
@@ -313,7 +320,8 @@ struct KeypadDock: View {
             .buttonStyle(.brand(.accent, size: .lg, fullWidth: true, arrow: true))
             .opacity(r.entry.canCommit ? 1 : 0.55)
             .keyboardShortcut(.defaultAction)
-        } else if let s = content.selection, let p = s.primary, idleActions == nil || keypad.idle.digits.isEmpty {
+        } else if let s = content.selection, let p = s.primary, s.isItem || idleActions == nil || keypad.idle.digits.isEmpty {
+            // 選起來的一筆：打了數字也還是它的主要動作（規格卡打的數字＝數量）；頁面動作在打了品號時讓給「品號」
             Button(action: p.perform) {
                 HStack(spacing: 8) {
                     if let icon = p.icon { HeroIcon(icon, size: 17) }

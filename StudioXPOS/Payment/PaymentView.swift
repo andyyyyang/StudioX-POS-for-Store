@@ -51,6 +51,8 @@ struct PaymentView: View {
         }
         .scrollIndicators(.hidden)
         .safeAreaInset(edge: .bottom) { footer(t, x) }
+        // 左邊選付款方式、右邊打金額；完成結帳、回到點餐、平分、小費、會員、退回付款都在右欄
+        .dockSelection(dock(t, x))
         // 會員還沒查過（從預約、報到帶進來的）：先查一次儲值金，付款方式才知道要不要出現「儲值金」
         .task(id: t.member?.id) { await lookUpWallet(t) }
         .sheet(isPresented: $scanning) {
@@ -561,12 +563,12 @@ struct PaymentView: View {
                     .textRole(.xs)
                     .foregroundStyle(Theme.muted)
             } else {
-                Button {
-                    Task { await model.attachMember(to: t) }
-                } label: {
-                    Label { Text("輸入電話找會員") } icon: { HeroIcon("user-circle", size: 18) }
+                HStack(spacing: 8) {
+                    HeroIcon("user-circle", size: 18)
+                    Text("還沒有會員・在右邊「找會員」打電話")
+                        .textRole(.small)
                 }
-                .buttonStyle(.brand(.ghost, size: .md))
+                .foregroundStyle(Theme.muted)
             }
         }
         .padding(18)
@@ -574,27 +576,24 @@ struct PaymentView: View {
         .overlay { RoundedRectangle(cornerRadius: Metric.radiusLg).strokeBorder(Theme.line) }
     }
 
-    // MARK: 下面
+    // MARK: 下面：還差多少
 
-    /// 最下面：還差多少｜「⋯」（平分、小費、會員、退回付款）｜回到點餐｜完成結帳（收齊了才有）
+    /// 最下面只留金額（還差多少／收齊了）；動作都在右欄
     private func footer(_ t: Ticket, _ x: TicketTotals) -> some View {
-        let done: POSAction? = x.isPaidInFull ? POSAction("完成結帳", icon: "check-circle") { Task { await model.complete(t) } } : nil
-        let back = POSAction("回到點餐", icon: "arrow-left") { model.cancelCheckout() }
-        return HStack(spacing: 16) {
-            if !x.isPaidInFull {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("尚欠")
-                        .font(.brand(12, .medium))
-                        .foregroundStyle(Theme.muted)
-                    Text(x.balance.formatted)
-                        .font(.brand(19, .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.ink)
-                        .contentTransition(.numericText(value: Double(x.balance.cents)))
-                }
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(x.isPaidInFull ? "收齊了" : "尚欠")
+                .font(.brand(13, .medium))
+                .foregroundStyle(x.isPaidInFull ? Theme.successFG : Theme.muted)
+            Text(x.isPaidInFull ? x.paid.formatted : x.balance.formatted)
+                .font(.brand(22, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.ink)
+                .contentTransition(.numericText(value: Double(x.isPaidInFull ? x.paid.cents : x.balance.cents)))
             Spacer(minLength: 8)
-            ActionBar(primary: done, secondary: [back], more: footerMore(t, x), size: .lg, accent: true, fillPrimary: false)
+            Text(x.isPaidInFull ? "右邊「完成結帳」" : "選付款方式，在右邊打金額")
+                .textRole(.small)
+                .foregroundStyle(Theme.muted)
+                .lineLimit(1)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
@@ -603,31 +602,38 @@ struct PaymentView: View {
         .animation(Motion.fast, value: x.isPaidInFull)
     }
 
-    /// 結帳時不常用的：平分、小費、換會員、退回一筆付款（要主管）
-    private func footerMore(_ t: Ticket, _ x: TicketTotals) -> [POSAction] {
-        var out: [POSAction] = []
+    // MARK: 右欄
+
+    /// 結帳的右欄：大鍵＝完成結帳（收齊了才有）；動作鍵＝回到點餐、平分、小費、會員、退回付款
+    private func dock(_ t: Ticket, _ x: TicketTotals) -> DockSelection {
+        let done: POSAction? = x.isPaidInFull ? POSAction("完成結帳", icon: "check-circle") { Task { await model.complete(t) } } : nil
+        var actions: [POSAction] = [POSAction("回到點餐", icon: "arrow-left") { model.cancelCheckout() }]
         if shares.isEmpty {
-            out.append(POSAction("平分…", icon: "users", enabled: !x.isPaidInFull) {
+            actions.append(POSAction("平分…", icon: "users", enabled: !x.isPaidInFull) {
                 Task { shares = await model.splitEvenly(t) ?? [] }
             })
         } else {
-            out.append(POSAction("取消平分", icon: "arrow-uturn-left") { shares = [] })
+            actions.append(POSAction("取消平分", icon: "arrow-uturn-left") { shares = [] })
         }
         if model.store.tipsEnabled {
-            out.append(POSAction("小費…", icon: "banknotes") { Task { await model.setTip(t) } })
+            actions.append(POSAction(x.tip.cents > 0 ? "小費 \(x.tip.formatted)" : "小費…", icon: "banknotes") { Task { await model.setTip(t) } })
         }
-        if t.member != nil {
-            out.append(POSAction("換會員…", icon: "user-circle") { Task { await model.attachMember(to: t) } })
-            out.append(POSAction("移除會員", icon: "x-circle") { model.detachMember(from: t) })
+        if model.features.members {
+            if t.member == nil {
+                actions.append(POSAction("找會員", icon: "user-circle") { Task { await model.attachMember(to: t) } })
+            } else {
+                actions.append(POSAction("換會員…", icon: "user-circle") { Task { await model.attachMember(to: t) } })
+                actions.append(POSAction("移除會員", icon: "x-circle") { model.detachMember(from: t) })
+            }
         }
         // 換貨抵用是自動記的（回到點餐就拿掉），不能手動退
         let refundable = t.approvedPayments.filter { $0.tender != .exchange }
         for (i, p) in refundable.enumerated() {
-            out.append(POSAction("退回第 \(i + 1) 筆：\(paymentTitle(p)) \(p.amount.formatted)", icon: "receipt-refund", destructive: true) {
+            actions.append(POSAction("退回第 \(i + 1) 筆：\(paymentTitle(p)) \(p.amount.formatted)", icon: "receipt-refund", destructive: true) {
                 Task { await model.voidPayment(p, in: t) }
             })
         }
-        return out
+        return .page("checkout-\(t.id)", primary: done, accent: true, actions: actions)
     }
 }
 
