@@ -216,7 +216,55 @@ struct QueuePinnedDineIn: View {
 
 // MARK: - 手機
 
-/// 手機點餐頁最上面的叫號卡（全外帶的店）：和 iPad 右欄同一張，小一點。點了打開叫號面板（sheet）
+/// 手機點餐頁的叫號：平常只是頁首的一顆小鍵「27・等 6」（畫面留給菜單），點了才展開下面這張卡
+struct PhoneQueueButton: View {
+    @Environment(POSModel.self) private var model
+    @Binding var open: Bool
+
+    var body: some View {
+        if model.queuePinned == .takeout {
+            Button {
+                withAnimation(Motion.spring) { open.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    HeroIcon("megaphone", size: 16)
+                    if let s = model.queue.state {
+                        Text(s.current.map(String.init) ?? "—")
+                            .font(.brand(16, .semibold))
+                            .monospacedDigit()
+                        if !s.waiting.isEmpty {
+                            Text("\(s.waiting.count)")
+                                .font(.brand(11.5, .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Theme.onAccent)
+                                .padding(.horizontal, 5)
+                                .frame(minWidth: 18, minHeight: 18)
+                                .background(Theme.accent, in: .capsule)
+                        }
+                    }
+                }
+                .foregroundStyle(open ? Theme.page : Theme.ink)
+                .padding(.horizontal, 12)
+                .frame(height: 44)
+                .background(open ? Theme.ink : Theme.surface, in: .capsule)
+                .overlay { Capsule().strokeBorder(open ? Color.clear : Theme.line) }
+                .contentShape(.capsule)
+            }
+            .buttonStyle(PressScale(scale: 0.96))
+            .accessibilityLabel(queueLabel)
+            .accessibilityHint(open ? "收起叫號" : "打開叫號")
+            // 收起來時也要知道叫到幾號：抓號碼的迴圈跟著這顆鍵
+            .task { await model.queuePinnedLoop() }
+        }
+    }
+
+    private var queueLabel: String {
+        guard let s = model.queue.state else { return "叫號" }
+        return "叫號：現在 \(s.current.map(String.init) ?? "沒有")，等 \(s.waiting.count) 位"
+    }
+}
+
+/// 手機點餐頁的叫號卡（全外帶的店）：頁首的叫號鍵點開才出現；和 iPad 右欄同一張，小一點。點了打開叫號面板（sheet）
 struct PhoneQueueCard: View {
     @Environment(POSModel.self) private var model
 
@@ -239,7 +287,6 @@ struct PhoneQueueCard: View {
                     Color.clear.frame(height: 0)
                 }
             }
-            .task { await model.queuePinnedLoop() }
         }
     }
 }

@@ -14,6 +14,8 @@ struct PaymentView: View {
     let ticketId: String
 
     @State private var carrierText = ""
+    /// 卡緊收（手機的感應收款）的卡
+    @State private var tapping = false
     /// 選了「手機條碼」：手打的框與相機的鍵出現（手機不自動叫出系統鍵盤：先用相機掃）
     @State private var carrierOpen = false
     @State private var shares: [Money] = []
@@ -66,6 +68,7 @@ struct PaymentView: View {
         .onChange(of: t.invoiceBuyer) { _, buyer in
             if case .consumer(let c?) = buyer { carrierText = c.id }
         }
+        .sheet(isPresented: $tapping) { TapToPaySheet(ticketId: t.id) }
     }
 
     // MARK: 上面：應收
@@ -161,10 +164,32 @@ struct PaymentView: View {
                 .disabled(x.isPaidInFull)
             }
 
+            // 手機：卡緊收（iPhone 感應收款）——手機接不了刷卡機，感應就是它的刷卡
+            if model.offersTapToPay {
+                Button {
+                    tapping = true
+                } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: "wave.3.right").font(.system(size: 24, weight: .regular))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("卡緊收").font(.brand(20, .semibold))
+                            Text("信用卡、Apple Pay 靠近 iPhone 上方就收").font(.brand(12.5, .regular)).opacity(0.7)
+                        }
+                        Spacer()
+                        Text("→").font(.brand(22, .regular))
+                    }
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, minHeight: 84)
+                }
+                .buttonStyle(.choice(false, height: 84))
+                .disabled(x.isPaidInFull)
+            }
+
             prepaidTile(t, x)
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
-                ForEach(Self.otherTenders, id: \.self) { tender in
+                // 手機的感應支付在上面的「卡緊收」：這裡不再列一次
+                ForEach(Self.otherTenders.filter { !(model.offersTapToPay && $0 == .tapToPay) }, id: \.self) { tender in
                     Button {
                         Task { await model.take(tender, for: t) }
                     } label: {

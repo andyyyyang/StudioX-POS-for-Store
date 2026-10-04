@@ -32,12 +32,17 @@ struct PhoneOrderView: View {
     /// 「開單」的選擇（空桌、外帶…）
     @State private var opening = false
     @State private var ticketDetent: PresentationDetent = .medium
+    /// 叫號卡展開著（平常收成頁首的一顆鍵，畫面留給菜單）
+    @AppStorage("phoneQueueCardOpen") private var queueOpen = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            // 全外帶的店（叫號用在外帶取餐）：現在叫到幾號、叫下一號（Keypad/DockPinned.swift）
-            PhoneQueueCard()
+            // 全外帶的店（叫號用在外帶取餐）：平常收成頁首的一顆鍵；點開才是這張卡（現在叫到幾號、叫下一號）
+            if queueOpen {
+                PhoneQueueCard()
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             if query.isEmpty {
                 chips
             }
@@ -103,6 +108,7 @@ struct PhoneOrderView: View {
                     }
                 }
                 Spacer(minLength: 8)
+                PhoneQueueButton(open: $queueOpen)
                 scanButton
                 Button {
                     withAnimation(Motion.fast) {
