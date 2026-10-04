@@ -35,7 +35,10 @@ struct MainShell: View {
                     workspace
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity)
+                // 工作區可以縮、超出的地方切掉：裡面的頁面再寬，也不會把單子與右側鍵盤擠出畫面
+                .frame(minWidth: 0, maxWidth: .infinity)
+                .clipped()
+                .layoutPriority(-1)
                 if roomy && showsTicket {
                     TicketColumn()
                         .frame(width: wide ? Metric.ticketColumn : Metric.ticketColumnNarrow)
