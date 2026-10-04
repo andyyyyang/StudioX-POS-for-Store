@@ -57,6 +57,8 @@ public protocol POSAPI: Sendable {
     func updateMember(id: String, _ update: MemberUpdate) async throws -> Member
     /// 那一天的團體課（健身、瑜珈）
     func classes(date: String) async throws -> [ClassSession]
+    /// 某個營業日的結帳、退款、作廢（iPad 只留最近兩天，更早的跟後台要）
+    func history(date: String) async throws -> DayHistory
 }
 
 extension POSAPI {
@@ -66,6 +68,10 @@ extension POSAPI {
     }
 
     public func classes(date: String) async throws -> [ClassSession] { [] }
+
+    public func history(date: String) async throws -> DayHistory {
+        throw APIError.http(status: 404, code: "not_found", message: "後台還不支援查歷史資料")
+    }
 }
 
 /// 真的後台（URLSession）
@@ -156,6 +162,10 @@ public struct POSClient: POSAPI {
     public func classes(date: String) async throws -> [ClassSession] {
         let r: ClassList = try await call("classes", query: ["date": date])
         return r.classes
+    }
+
+    public func history(date: String) async throws -> DayHistory {
+        try await call("history", query: ["date": date])
     }
 
     // MARK: 傳輸

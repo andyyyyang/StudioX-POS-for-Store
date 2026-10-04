@@ -1,5 +1,6 @@
 import Foundation
 import POSCore
+import POSInvoice
 
 /// 本機的事件日誌：iPad 上唯一的真相。
 ///
@@ -147,50 +148,74 @@ public final class EventJournal: @unchecked Sendable {
     }
 
     /// 檢查這台的雜湊鏈（設定頁的「檢查資料」、交班時）
+    /// 檢查這台的雜湊鏈。整理過（compact）的日誌中間會少一段：少的那段一定都已經送到後台（後台有完整的鏈），
+    /// 所以只要求「接得上的要接對、斷掉的地方在已送出的範圍內、最後一筆就是 cursor 記的那一筆」
     public func verifyChain() -> EventError? {
         lock.lock(); defer { lock.unlock() }
         var prev: POSEvent?
         for e in own.sorted(by: { $0.seq < $1.seq }) {
             if !e.isHashValid { return .badHash(id: e.id) }
-            if let p = prev, e.seq != p.seq + 1 || e.prevHash != p.hash { return .brokenChain(deviceId: deviceId, seq: e.seq) }
+            if let p = prev {
+                if e.seq == p.seq + 1 {
+                    if e.prevHash != p.hash { return .brokenChain(deviceId: deviceId, seq: e.seq) }
+                } else if e.seq <= p.seq || e.seq - 1 > cursor.pushedSeq {
+                    return .brokenChain(deviceId: deviceId, seq: e.seq)
+                }
+            } else if e.seq == 1 && e.prevHash != POSEvent.genesis {
+                return .brokenChain(deviceId: deviceId, seq: 1)
+            } else if e.seq > 1 && e.seq - 1 > cursor.pushedSeq {
+                return .brokenChain(deviceId: deviceId, seq: e.seq)
+            }
             prev = e
         }
+        if let last = prev, last.hash != cursor.lastHash { return .brokenChain(deviceId: deviceId, seq: last.seq) }
         return nil
     }
 
     // MARK: 整理（每天一次）
 
-    /// 把舊的事件移到 archive/：已經送到後台、超過 keepDays 天、而且不屬於還開著的單或還沒交班的班。
-    /// 雜湊鏈不會斷：cursor 記著最後一筆的雜湊，新的事件接著算
-    public func compact(keepDays: Int = 7, now: Date = Date(), state: StoreState) throws -> Int {
+    /// 整理：大部分的資料在後台，iPad 只留「快速開機、斷網照常營業」需要的：
+    ///   - 還沒送到後台的（一定留）
+    ///   - 最近 keepDays 天（今天、昨天：報表、補印、退款最常用）
+    ///   - 還開著的單、還沒交班的班
+    ///   - 這一期與上一期的發票事件（算下一張號碼不能重號；也是後台 usedThrough 之外的第二道保險）
+    /// 其他的刪掉（archive = true 時搬到 archive/ 而不是刪除，除錯用）。雜湊鏈不會斷：cursor 記著最後一筆的雜湊
+    public func compact(keepDays: Int = 2, now: Date = Date(), state: StoreState, archive: Bool = false) throws -> Int {
         lock.lock(); defer { lock.unlock() }
-        let cutoff = now.addingTimeInterval(-Double(keepDays) * 86_400)
+        let cutoff = now.addingTimeInterval(-Double(max(keepDays, 1)) * 86_400)
         let openTickets = Set(state.openTickets.map(\.id))
         let openShifts = Set(state.shifts.values.filter(\.isOpen).map(\.id))
+        let period = InvoicePeriod(date: now)
+        let invoicePeriods: Set<String> = [period.code, period.previous.code]
         func keep(_ e: POSEvent, pushed: Bool) -> Bool {
             if !pushed || e.date >= cutoff { return true }
             if let t = e.body.ticketId, openTickets.contains(t) { return true }
             switch e.body {
             case .shiftOpened(let s): return openShifts.contains(s.shiftId)
             case .cashMoved(let m): return openShifts.contains(m.shiftId)
+            case .invoiceIssued(let i): return invoicePeriods.contains(i.invoice.period)
+            case .invoiceVoided: return e.date >= now.addingTimeInterval(-62 * 86_400)
             default: return false
             }
         }
         let keptOwn = own.filter { keep($0, pushed: $0.seq <= cursor.pushedSeq) }
         let keptRemote = remote.filter { keep($0, pushed: true) }
-        let archived = (own.count - keptOwn.count) + (remote.count - keptRemote.count)
-        guard archived > 0 else { return 0 }
+        let removed = (own.count - keptOwn.count) + (remote.count - keptRemote.count)
+        guard removed > 0 else { return 0 }
 
-        let archive = directory.appendingPathComponent("archive", isDirectory: true)
-        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
-        let stamp = EventCoding.timestamp(now).replacingOccurrences(of: ":", with: "-")
-        try Self.write(own.filter { e in !keptOwn.contains { $0.id == e.id } }, to: archive.appendingPathComponent("own-\(stamp).jsonl"))
-        try Self.write(remote.filter { e in !keptRemote.contains { $0.id == e.id } }, to: archive.appendingPathComponent("remote-\(stamp).jsonl"))
+        if archive {
+            let dir = directory.appendingPathComponent("archive", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let stamp = EventCoding.timestamp(now).replacingOccurrences(of: ":", with: "-")
+            let keptOwnIds = Set(keptOwn.map(\.id)), keptRemoteIds = Set(keptRemote.map(\.id))
+            try Self.write(own.filter { !keptOwnIds.contains($0.id) }, to: dir.appendingPathComponent("own-\(stamp).jsonl"))
+            try Self.write(remote.filter { !keptRemoteIds.contains($0.id) }, to: dir.appendingPathComponent("remote-\(stamp).jsonl"))
+        }
         try Self.rewrite(keptOwn, to: ownURL)
         try Self.rewrite(keptRemote, to: remoteURL)
         own = keptOwn
         remote = keptRemote
-        return archived
+        return removed
     }
 
     /// 刪掉這台的所有資料（後台移除這台、重新配對）

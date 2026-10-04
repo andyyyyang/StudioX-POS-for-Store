@@ -65,8 +65,8 @@ public final class Ledger: @unchecked Sendable {
         }
     }
 
-    /// 整理舊事件後重播（狀態不變，只是記憶體小一點）
-    public func compact(keepDays: Int = 7, now: Date = Date()) throws -> Int {
+    /// 整理舊事件後重播（大部分資料在後台；這台只留最近兩天與還沒結束的）
+    public func compact(keepDays: Int = 2, now: Date = Date()) throws -> Int {
         let n = try journal.compact(keepDays: keepDays, now: now, state: state)
         if n > 0 {
             lock.lock(); defer { lock.unlock() }

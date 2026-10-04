@@ -13,6 +13,10 @@ extension POSModel {
             show("還沒有點東西", tone: .warning)
             return
         }
+        guard role.takesPayment else {
+            show("這台是「\(role.label)」，請到結帳櫃台結帳（單子已經同步過去了）", tone: .info)
+            return
+        }
         keypad.cancel()
         selectedTicketId = t.id
         checkoutTicketId = t.id
@@ -38,6 +42,10 @@ extension POSModel {
     func takeCash(_ t: Ticket) async {
         let due = t.totals.balance
         guard due.cents > 0, let me = currentStaff else { return }
+        guard role.hasDrawer else {
+            show("這台沒有錢櫃：現金請到結帳櫃台收，這裡可以刷卡或電子支付", tone: .warning)
+            return
+        }
         guard let tendered = await keypad.askMoney(.cashTendered(due: due, presets: store.cashQuickAmounts)), tendered.cents > 0 else { return }
         let p = Payment.cash(id: newID(), tendered: tendered, due: due, at: Date(), by: me.id, shiftId: openShift?.id)
         guard record(.paymentAdded(PaymentAdded(ticketId: t.id, payment: p))) else { return }

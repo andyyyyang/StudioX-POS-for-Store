@@ -200,7 +200,7 @@ struct SidebarRail: View {
                 .accessibilityLabel("StudioX POS")
 
             // 營業模式（後台開了兩種以上才能切）
-            if model.store.serviceModes.count > 1 && model.device.role != .kitchen {
+            if model.store.serviceModes.count > 1 && !model.role.isKitchen {
                 Menu {
                     ForEach(model.store.serviceModes, id: \.self) { m in
                         Button {
@@ -368,7 +368,7 @@ struct StatusBanners: View {
     var body: some View {
         let conflicts = model.state.unresolvedConflicts
         let numbersLeft = model.invoiceNumbersLeft
-        let showInvoice = model.features.invoice && model.invoiceSettings.enabled && model.device.role != .kitchen && numbersLeft < 10
+        let showInvoice = model.features.invoice && model.invoiceSettings.enabled && model.role.issuesInvoices && numbersLeft < 10
         VStack(spacing: 8) {
             if let c = conflicts.last {
                 Banner(text: c.message + (conflicts.count > 1 ? "（還有 \(conflicts.count - 1) 件）" : ""), tone: .danger)

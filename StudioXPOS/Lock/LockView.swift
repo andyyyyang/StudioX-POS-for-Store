@@ -127,7 +127,7 @@ struct LockView: View {
                 HStack(spacing: 8) {
                     Text(model.store.name)
                     Text("・")
-                    Text(model.device.name.isEmpty ? model.device.role.label : model.device.name)
+                    Text(model.device.name.isEmpty ? model.role.label : "\(model.device.name)・\(model.role.label)")
                 }
                 .textRole(.small)
                 .foregroundStyle(Theme.muted)

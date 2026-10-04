@@ -5,21 +5,56 @@ import POSInvoice
 // iPad ↔ 後台（atelier-cms 的「門市 POS」服務插件）的資料格式。和 docs/API.md 一一對應，改這裡就要改那裡。
 // 金額一律是整數「分」；時間一律是 ISO 8601（UTC、毫秒）；JSON 的 key 是 camelCase。
 
-/// 裝置的角色
+/// 崗位：這台 iPad 放在店裡的哪個位置、做什麼事。同一家店的每台 iPad 看的是同一份資料（事件同步），
+/// 崗位只決定它顯示哪些頁、先看哪一頁、能不能收錢開錢櫃。
+/// 後台配對時決定預設；店長可以在 iPad 上改（換位置用），改了會在心跳回報給後台。
 public enum DeviceRole: String, Codable, Sendable, CaseIterable, Hashable {
-    /// 櫃台收銀（有錢櫃、出單機）
+    /// 結帳櫃台：什麼都能做（收錢、錢櫃、交班、報表）
     case register
-    /// 手持點餐（桌邊點餐、不收現金）
+    /// 前場：桌邊點餐、帶位、送單（不收現金、不交班）
     case handheld
-    /// 廚房螢幕（只看出單、按出餐）
+    /// 後廚：只看出單、按出餐
     case kitchen
+    /// 報到接待：帶位與候位、預約表、會員報到（不結帳）
+    case reception
+    /// 出餐口：所有出單站的進度、叫號（櫃台模式的取餐號碼）
+    case expo
 
     public var label: String {
         switch self {
-        case .register: "收銀機"
-        case .handheld: "點餐機"
-        case .kitchen: "廚房螢幕"
+        case .register: "結帳櫃台"
+        case .handheld: "前場點餐"
+        case .kitchen: "後廚"
+        case .reception: "報到接待"
+        case .expo: "出餐口"
         }
+    }
+
+    public var summary: String {
+        switch self {
+        case .register: "收錢、開發票、錢櫃與交班，全部功能"
+        case .handheld: "桌邊點餐、帶位、送廚房；結帳交給櫃台（可以刷卡、電子支付）"
+        case .kitchen: "依出單站看單、按製作中／可出餐"
+        case .reception: "帶位候位、預約表、會員報到；開單後交給結帳"
+        case .expo: "看所有出單站的進度、出餐叫號"
+        }
+    }
+
+    /// 能結帳（收錢）
+    public var takesPayment: Bool { self == .register || self == .handheld }
+    /// 有錢櫃（收現金、交班點錢）
+    public var hasDrawer: Bool { self == .register }
+    /// 能開單點東西
+    public var takesOrders: Bool { self == .register || self == .handheld || self == .reception }
+    /// 廚房類（只看出單）
+    public var isKitchen: Bool { self == .kitchen || self == .expo }
+    /// 要不要發票號碼段（會結帳的才要）
+    public var issuesInvoices: Bool { takesPayment }
+
+    // 新版後台多了這版不認得的崗位：當作結帳櫃台，不要整份開機資料讀不進來
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = DeviceRole(rawValue: raw) ?? .register
     }
 }
 
@@ -477,9 +512,12 @@ public struct Heartbeat: Codable, Sendable {
     public var battery: Double?
     public var openTickets: Int
     public var staffId: String?
-    public init(appVersion: String, outbox: Int, lastSeq: Int, printers: [PrinterHealth], battery: Double?, openTickets: Int, staffId: String?) {
+    /// 這台現在的崗位（店長在 iPad 上改過才和後台的不一樣）
+    public var workstation: DeviceRole?
+    public init(appVersion: String, outbox: Int, lastSeq: Int, printers: [PrinterHealth], battery: Double?, openTickets: Int, staffId: String?,
+                workstation: DeviceRole? = nil) {
         self.appVersion = appVersion; self.outbox = outbox; self.lastSeq = lastSeq; self.printers = printers
-        self.battery = battery; self.openTickets = openTickets; self.staffId = staffId
+        self.battery = battery; self.openTickets = openTickets; self.staffId = staffId; self.workstation = workstation
     }
 }
 
@@ -491,6 +529,56 @@ public struct HeartbeatResponse: Codable, Sendable, Hashable {
     public var configVersion: String
     /// 後台的 serverSeq：比手上的新就拉事件
     public var serverSeq: Int
+}
+
+// MARK: - 歷史（後台存的；iPad 只留最近兩天）
+
+/// 一筆退款屬於哪張單
+public struct TicketRefund: Codable, Sendable, Hashable {
+    public var ticketId: String
+    public var refund: Refund
+    public init(ticketId: String, refund: Refund) { self.ticketId = ticketId; self.refund = refund }
+}
+
+/// 作廢的單（報表的「作廢」）
+public struct VoidedTicketSummary: Codable, Sendable, Hashable {
+    public var ticketId: String
+    public var number: String
+    public var items: Int
+    public var amount: Money
+    public var reason: String
+    public init(ticketId: String, number: String, items: Int, amount: Money, reason: String) {
+        self.ticketId = ticketId; self.number = number; self.items = items; self.amount = amount; self.reason = reason
+    }
+}
+
+/// GET {cms}/api/pos/v1/history?date=2026-10-03：那一個營業日所有裝置的結帳、退款、作廢、發票。
+/// sales 是 ticket.closed 事件裡的 SaleRecord 原樣（後台不重算）；報表用同一套 SalesSummary 在 iPad 上算
+public struct DayHistory: Codable, Sendable, Hashable {
+    public var businessDate: String
+    public var sales: [SaleRecord]
+    public var refunds: [TicketRefund]
+    public var voidedTickets: [VoidedTicketSummary]
+    /// 那天開的發票號碼（含之後作廢的）
+    public var invoiceNumbers: [String]
+    public var voidedInvoiceNumbers: [String]
+    public var checkIns: Int
+
+    public init(businessDate: String, sales: [SaleRecord] = [], refunds: [TicketRefund] = [], voidedTickets: [VoidedTicketSummary] = [],
+                invoiceNumbers: [String] = [], voidedInvoiceNumbers: [String] = [], checkIns: Int = 0) {
+        self.businessDate = businessDate; self.sales = sales; self.refunds = refunds; self.voidedTickets = voidedTickets
+        self.invoiceNumbers = invoiceNumbers; self.voidedInvoiceNumbers = voidedInvoiceNumbers; self.checkIns = checkIns
+    }
+
+    /// 那天的報表（和 iPad 上今天的報表同一套算法）
+    public var summary: SalesSummary {
+        SalesSummary(sales: sales, refunds: refunds.map(\.refund), voidedTicketCount: voidedTickets.count,
+                     voidedTicketItems: voidedTickets.reduce(0) { $0 + $1.items }, voidedTicketAmount: Money.sum(voidedTickets.map(\.amount)),
+                     invoiceNumbers: invoiceNumbers, voidedInvoiceCount: voidedInvoiceNumbers.count, checkIns: checkIns)
+    }
+
+    /// 某張單的退款
+    public func refunds(of ticketId: String) -> [Refund] { refunds.filter { $0.ticketId == ticketId }.map(\.refund) }
 }
 
 /// 錯誤：{ "error": "revoked", "message": "這台裝置已經被移除" }

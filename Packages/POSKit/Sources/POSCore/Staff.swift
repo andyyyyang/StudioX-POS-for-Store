@@ -51,12 +51,14 @@ public enum Permission: String, Codable, Sendable, CaseIterable, Hashable {
     case editFloor
     case manageReservations
     case reprintInvoice
+    /// 裝置設定：換崗位、換營業模式、解除配對
+    case manageDevice
 
     public var minimumRole: StaffRole {
         switch self {
         case .sell, .manageReservations: .cashier
         case .discount, .voidSentItem, .openDrawer, .priceOverride, .reprintInvoice: .supervisor
-        case .largeDiscount, .voidTicket, .refund, .voidInvoice, .cashInOut, .closeShift, .viewReports, .editFloor: .manager
+        case .largeDiscount, .voidTicket, .refund, .voidInvoice, .cashInOut, .closeShift, .viewReports, .editFloor, .manageDevice: .manager
         }
     }
 
@@ -77,6 +79,7 @@ public enum Permission: String, Codable, Sendable, CaseIterable, Hashable {
         case .editFloor: "改桌位圖"
         case .manageReservations: "訂位與候位"
         case .reprintInvoice: "補印證明聯"
+        case .manageDevice: "裝置設定（崗位、解除配對）"
         }
     }
 }

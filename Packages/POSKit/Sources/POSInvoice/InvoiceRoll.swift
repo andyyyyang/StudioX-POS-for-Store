@@ -15,9 +15,11 @@ public struct InvoiceRoll: Codable, Hashable, Sendable, Identifiable {
     public var start: Int
     /// 迄號（含）
     public var end: Int
+    /// 後台收到的這一段用到幾號（iPad 的事件只留最近兩天：更早用過的號碼靠這個，絕不重號）
+    public var usedThrough: Int?
 
-    public init(id: String, period: String, track: String, start: Int, end: Int) {
-        self.id = id; self.period = period; self.track = track; self.start = start; self.end = end
+    public init(id: String, period: String, track: String, start: Int, end: Int, usedThrough: Int? = nil) {
+        self.id = id; self.period = period; self.track = track; self.start = start; self.end = end; self.usedThrough = usedThrough
     }
 
     public var count: Int { end - start + 1 }
@@ -53,7 +55,9 @@ public struct InvoiceAllocator: Sendable {
     /// 這一段用到哪裡（下一張是幾號；用完了回 nil）
     public func next(in roll: InvoiceRoll) -> Int? {
         let usedHere = used.compactMap { InvoiceRoll.parse($0) }.filter { $0.track == roll.track && roll.contains($0.n) }.map(\.n)
-        let next = (usedHere.max() ?? roll.start - 1) + 1
+        let serverUsed = roll.usedThrough.flatMap { roll.contains($0) ? $0 : nil }
+        let last = [usedHere.max(), serverUsed].compactMap { $0 }.max() ?? roll.start - 1
+        let next = last + 1
         return next <= roll.end ? next : nil
     }
 

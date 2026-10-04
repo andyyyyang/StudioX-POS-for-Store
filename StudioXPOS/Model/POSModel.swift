@@ -96,6 +96,8 @@ final class POSModel {
     var reservations: [Reservation] = []
     /// 今天的團體課（健身、瑜珈）
     var classes: [ClassSession] = []
+    /// 跟後台要過的歷史（某個營業日）
+    var historyCache: [String: DayHistory] = [:]
     /// 查過的會員（後台的資料）。帳戶（儲值金、課程卡）要加上這台還沒同步的：用 account(for:)
     var members: [String: Member] = [:]
     /// 別台剛做的事（「A2 加點了 2 項」），畫面上閃一下
@@ -259,7 +261,7 @@ final class POSModel {
         let h = Heartbeat(
             appVersion: Bundle.main.appVersion, outbox: ledger.journal.pendingCount, lastSeq: ledger.journal.cursor.lastSeq,
             printers: printers.health, battery: UIDevice.current.batteryLevel >= 0 ? Double(UIDevice.current.batteryLevel) : nil,
-            openTickets: state.openTickets.count, staffId: currentStaff?.id
+            openTickets: state.openTickets.count, staffId: currentStaff?.id, workstation: role
         )
         do {
             let r = try await api.heartbeat(h)
@@ -360,6 +362,15 @@ final class POSModel {
         await topUpInvoiceRolls()
     }
 
+    /// 立刻和後台同步一次（設定頁的「立即同步」）；回傳同步後的狀態
+    @discardableResult
+    func syncNow() async -> SyncStatus? {
+        guard let engine else { return nil }
+        let s = await engine.syncNow()
+        syncStatus = s
+        return s
+    }
+
     /// 解除配對（店長）：清掉本機資料（還沒送出去的事件會先試著送）
     func unpair() async {
         await engine?.syncNow()
@@ -394,18 +405,8 @@ final class POSModel {
     func login(_ member: StaffMember) {
         currentStaff = member
         lastActivity = Date()
-        // 照營業模式決定先看哪一頁：餐廳看桌況、美業看預約表、健身房看報到；其他直接點餐
-        if device.role != .kitchen {
-            switch mode.home {
-            case .floor: section = .floor
-            case .appointments: section = .appointments
-            case .checkIn: section = .checkIn
-            case .order: section = .order
-            }
-            if mode.home == .order && usesTables && state.openTickets.contains(where: { !$0.tableIds.isEmpty }) { section = .floor }
-        }
-        if device.role == .kitchen { section = .kitchen }
-        if !visibleSections.contains(section) { section = visibleSections.first ?? .order }
+        // 照崗位與營業模式決定先看哪一頁（餐廳看桌況、美業看預約表、健身房看報到、後廚看出單）
+        section = home
         phase = .ready
     }
 
@@ -543,25 +544,86 @@ final class POSModel {
     /// 會員頁（美業、健身，或開了儲值與課程卡的店）
     var usesMembersPage: Bool { features.members && (mode.wantsCustomer || features.accounts) }
 
+    /// 這台的崗位：店長在 iPad 上改過的，否則後台配對時給的
+    var role: DeviceRole {
+        if let r = DeviceRole(rawValue: settings.workstation) { return r }
+        return device.role
+    }
+
+    /// 換崗位（nil＝回到後台給的）：要店長授權；換了之後照新崗位的首頁
+    func setRole(_ r: DeviceRole?) async {
+        guard await authorize(.manageDevice, detail: "把這台換到「\((r ?? device.role).label)」") != nil else { return }
+        settings.workstation = r?.rawValue ?? ""
+        section = home
+        show("這台現在是「\(role.label)」：\(role.summary)", tone: .info)
+        if role.issuesInvoices { await topUpInvoiceRolls() }
+    }
+
+    /// 這個營業模式有哪些頁（不分崗位）
+    private var modeSections: [AppSection] {
+        var out: [AppSection] = [.order]
+        if usesTables { out.append(.floor) }
+        if usesAppointments { out.append(.appointments) }
+        if usesCheckIn { out.append(.checkIn) }
+        out.append(.orders)
+        if usesMembersPage { out.append(.members) }
+        if features.reservations && usesTables { out.append(.reservations) }
+        if usesKitchen { out.append(.kitchen) }
+        if currentStaff?.can(.viewReports) ?? true { out.append(.dashboard) }
+        out += [.shift, .settings]
+        return out
+    }
+
+    /// 側欄：營業模式有的頁 ∩ 這個崗位會用到的頁
     var visibleSections: [AppSection] {
-        switch device.role {
-        case .kitchen: return [.kitchen, .orders, .settings]
-        case .handheld:
-            return [.order] + (usesTables ? [.floor] : []) + (usesAppointments ? [.appointments] : []) + (usesCheckIn ? [.checkIn] : [])
-                + [.orders] + (usesMembersPage ? [.members] : []) + (features.reservations && usesTables ? [.reservations] : []) + [.settings]
-        case .register:
-            var out: [AppSection] = [.order]
-            if usesTables { out.append(.floor) }
-            if usesAppointments { out.append(.appointments) }
-            if usesCheckIn { out.append(.checkIn) }
-            out.append(.orders)
-            if usesMembersPage { out.append(.members) }
-            if features.reservations && usesTables { out.append(.reservations) }
-            if usesKitchen { out.append(.kitchen) }
-            if currentStaff?.can(.viewReports) ?? true { out.append(.dashboard) }
-            out += [.shift, .settings]
-            return out
+        let allowed: Set<AppSection> = switch role {
+        case .register: Set(AppSection.allCases)
+        case .handheld: [.order, .floor, .appointments, .checkIn, .orders, .members, .reservations, .settings]
+        case .reception: [.floor, .appointments, .checkIn, .members, .reservations, .orders, .settings]
+        case .kitchen, .expo: [.kitchen, .orders, .settings]
         }
+        var out = modeSections.filter { allowed.contains($0) }
+        // 廚房類的崗位一定有廚房頁（就算這個模式不出廚房單，出餐口也要看得到）
+        if role.isKitchen && !out.contains(.kitchen) { out.insert(.kitchen, at: 0) }
+        // 報到接待在沒有桌位、預約、報到的模式（櫃台、零售）至少有訂單與會員
+        return out.isEmpty ? [.orders, .settings] : out
+    }
+
+    /// 登入、換崗位後先看哪一頁：廚房類看出單；報到接待看報到／預約／訂位；其他照營業模式
+    var home: AppSection {
+        let candidates: [AppSection]
+        switch role {
+        case .kitchen, .expo: candidates = [.kitchen]
+        case .reception: candidates = [.checkIn, .appointments, .reservations, .floor, .members]
+        case .register, .handheld:
+            switch mode.home {
+            case .floor: candidates = [.floor, .order]
+            case .appointments: candidates = [.appointments, .order]
+            case .checkIn: candidates = [.checkIn, .order]
+            case .order:
+                let seated = usesTables && state.openTickets.contains { !$0.tableIds.isEmpty }
+                candidates = seated ? [.floor, .order] : [.order]
+            }
+        }
+        return candidates.first { visibleSections.contains($0) } ?? visibleSections.first ?? .orders
+    }
+
+    // MARK: 歷史（後台的）
+
+    /// 某個營業日的結帳與報表：今天、昨天在這台算（快、斷網也行）；更早的跟後台要（快取在記憶體）
+    func history(date: String) async -> DayHistory? {
+        if let cached = historyCache[date] { return cached }
+        guard let api else { return nil }
+        guard let h = try? await api.history(date: date) else { return nil }
+        historyCache[date] = h
+        return h
+    }
+
+    /// 這台還留著這個營業日的資料（今天、昨天）
+    func isLocal(date: String) -> Bool {
+        let today = businessDate
+        let yesterday = TaipeiTime.businessDate(Date().addingTimeInterval(-86_400), cutoffHour: store.businessDayCutoffHour)
+        return date == today || date == yesterday
     }
 
     /// 30 分鐘內有預約的桌子
@@ -582,7 +644,7 @@ final class POSModel {
 
     /// 剩不到 10 張、或下一期快開始（最後 3 天）就跟後台要一段
     func topUpInvoiceRolls() async {
-        guard let api, features.invoice, invoiceSettings.enabled, device.role != .kitchen else { return }
+        guard let api, features.invoice, invoiceSettings.enabled, role.issuesInvoices else { return }
         var periods = [invoicePeriod]
         if invoicePeriod.endsAt.timeIntervalSinceNow < 3 * 86_400 { periods.append(invoicePeriod.next) }
         for p in periods where allocator.needsMore(period: p) {
@@ -614,6 +676,8 @@ final class LocalSettings {
     var openDrawerOnCash: Bool { didSet { d.set(openDrawerOnCash, forKey: "openDrawerOnCash") } }
     /// 這台的營業模式（ServiceMode 的 rawValue；空的＝用後台的預設）
     var serviceMode: String { didSet { d.set(serviceMode, forKey: "serviceMode") } }
+    /// 這台的崗位（DeviceRole 的 rawValue；空的＝用後台配對時給的）
+    var workstation: String { didSet { d.set(workstation, forKey: "workstation") } }
 
     var consoleURL: URL { URL(string: consoleURLString) ?? URL(string: "https://console.studiox.tw")! }
 
@@ -633,6 +697,7 @@ final class LocalSettings {
         consoleURLString = d.string(forKey: "consoleURL") ?? "https://console.studiox.tw"
         openDrawerOnCash = d.object(forKey: "openDrawerOnCash") as? Bool ?? true
         serviceMode = d.string(forKey: "serviceMode") ?? ""
+        workstation = d.string(forKey: "workstation") ?? ""
     }
 }
 

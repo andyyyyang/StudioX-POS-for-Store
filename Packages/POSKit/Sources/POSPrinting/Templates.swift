@@ -170,6 +170,11 @@ public enum Templates {
         if s.tips.cents > 0 { r.add(.row("小費", s.tips.plain, .body)) }
         if s.refunds.cents > 0 { r.add(.row("退款", "−" + s.refunds.plain, .body)) }
         r.add(.row("客單價", s.averageTicket.plain, .body))
+        if s.prepaidSold.cents > 0 { r.add(.row("其中儲值（預收）", s.prepaidSold.plain, .body)) }
+        if s.passesSold.cents > 0 { r.add(.row("其中課程卡、會籍", s.passesSold.plain, .body)) }
+        if s.prepaidUsed.cents > 0 { r.add(.row("儲值金扣款", s.prepaidUsed.plain, .body)) }
+        if s.redeemedValue.cents > 0 { r.add(.row("課程卡抵用（價值）", s.redeemedValue.plain, .body)) }
+        if s.checkIns > 0 { r.add(.row("入場報到", "\(s.checkIns) 人次", .body)) }
         r.add(.rule)
         r.add(.text("付款方式", .strong))
         for t in s.byTender { r.add(.row("\(t.tender.label) \(t.count) 筆", t.amount.plain, .body)) }
@@ -178,6 +183,7 @@ public enum Templates {
         r.add(.row("零用金", rep.openingCash.plain, .body))
         r.add(.row("現金收入", rep.cashSales.plain, .body))
         if rep.cashRefunds.cents > 0 { r.add(.row("現金退款", "−" + rep.cashRefunds.plain, .body)) }
+        if rep.cashBack.cents > 0 { r.add(.row("換貨退差額", "−" + rep.cashBack.plain, .body)) }
         if rep.payIns.cents > 0 { r.add(.row("存入", rep.payIns.plain, .body)) }
         if rep.payOuts.cents > 0 { r.add(.row("取出", "−" + rep.payOuts.plain, .body)) }
         r.add(.row("應有現金", rep.expectedCash.plain, .strong))
@@ -191,6 +197,16 @@ public enum Templates {
         r.add(.row("作廢單", "\(s.voidedTickets) 張", .body))
         r.add(.row("發票", "開 \(s.invoicesIssued)・作廢 \(s.invoicesVoided)", .body))
         for range in s.invoiceRanges { r.add(.detail(range)) }
+        if !s.byStaff.isEmpty && s.byStaff.contains(where: { $0.commission.cents > 0 || $0.redeemed.cents > 0 || $0.assists > 0 }) {
+            r.add(.rule)
+            r.add(.text("業績", .strong))
+            for st in s.byStaff {
+                r.add(.row(staffName(st.staffId), st.performance.plain, .body))
+                if st.commission.cents > 0 || st.assists > 0 {
+                    r.add(.detail("抽成 \(st.commission.plain)" + (st.assists > 0 ? "・助理 \(st.assists) 次" : "")))
+                }
+            }
+        }
         if !s.byCategory.isEmpty {
             r.add(.rule)
             r.add(.text("分類", .strong))

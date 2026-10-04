@@ -98,6 +98,15 @@ public struct SalesSummary: Codable, Sendable, Hashable {
     public static let empty = SalesSummary(sales: [], refunds: [], voidedTickets: [], invoices: [], voidedInvoices: [])
 
     public init(sales: [SaleRecord], refunds: [Refund], voidedTickets: [Ticket], invoices: [EInvoice], voidedInvoices: [String], checkIns: Int = 0) {
+        self.init(sales: sales, refunds: refunds, voidedTicketCount: voidedTickets.count,
+                  voidedTicketItems: voidedTickets.reduce(0) { $0 + $1.activeLines.reduce(0) { $0 + $1.quantity } },
+                  voidedTicketAmount: Money.sum(voidedTickets.map { $0.totals.itemsGross }),
+                  invoiceNumbers: invoices.map(\.number), voidedInvoiceCount: voidedInvoices.count, checkIns: checkIns)
+    }
+
+    /// 只有數字的版本（後台給的歷史：作廢的單只有件數與金額、發票只有號碼）
+    public init(sales: [SaleRecord], refunds: [Refund], voidedTicketCount: Int, voidedTicketItems: Int, voidedTicketAmount: Money,
+                invoiceNumbers: [String], voidedInvoiceCount: Int, checkIns: Int = 0) {
         tickets = sales.count
         guests = sales.reduce(0) { $0 + $1.guests }
         itemsGross = Money.sum(sales.map(\.itemsGross))
@@ -154,12 +163,12 @@ public struct SalesSummary: Codable, Sendable, Hashable {
         for s in sales { types[s.orderType.rawValue, default: .zero] += s.total }
         byOrderType = types
 
-        voidedItems = sales.reduce(0) { $0 + $1.voidedItems } + voidedTickets.reduce(0) { $0 + $1.activeLines.reduce(0) { $0 + $1.quantity } }
-        voidedAmount = Money.sum(sales.map(\.voidedAmount)) + Money.sum(voidedTickets.map { $0.totals.itemsGross })
-        self.voidedTickets = voidedTickets.count
-        invoicesIssued = invoices.count
-        invoicesVoided = voidedInvoices.count
-        invoiceRanges = SalesSummary.ranges(invoices.map(\.number))
+        voidedItems = sales.reduce(0) { $0 + $1.voidedItems } + voidedTicketItems
+        voidedAmount = Money.sum(sales.map(\.voidedAmount)) + voidedTicketAmount
+        self.voidedTickets = voidedTicketCount
+        invoicesIssued = invoiceNumbers.count
+        invoicesVoided = voidedInvoiceCount
+        invoiceRanges = SalesSummary.ranges(invoiceNumbers)
 
         var staff: [String: StaffTotal] = [:]
         var modes: [String: Money] = [:]
