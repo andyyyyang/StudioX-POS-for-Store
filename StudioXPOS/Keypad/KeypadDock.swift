@@ -11,6 +11,7 @@ import SwiftUI
 ///   │                    │
 ///   │      NT$ 1,500     │  大字顯示（PIN 是圓點、統編四碼一組）
 ///   │  ✓ 統一編號正確     │  規則：對了打勾、錯了紅字搖一下
+///   │ 找零 NT$220        │  這一刻最需要的（DockContext：找零、熟客、熱賣、桌況…）
 ///   │ [剛好][1,300][1,500]│  快速鍵
 ///   │  1    2    3       │
 ///   │  4    5    6       │  鍵位永遠一樣
@@ -35,7 +36,10 @@ struct KeypadDock: View {
             header
                 .padding(.bottom, 18)
             display
-            Spacer(minLength: 12)
+            // 上面空出來的地方：跟著現在在做的事（找零、熟客、熱賣、桌況、接下來的預約…）
+            DockContext()
+                .padding(.top, 18)
+                .padding(.bottom, 12)
             quickKeys
                 .padding(.bottom, 12)
             keys
