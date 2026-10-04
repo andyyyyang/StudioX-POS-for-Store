@@ -204,6 +204,7 @@ struct MainShell: View {
                 MembersView()
             }
         case .reservations: ReservationsView()
+        case .queue: QueueView()
         case .kitchen: KitchenView()
         case .dashboard: DashboardView()
         case .shift: ShiftView()
@@ -343,6 +344,7 @@ struct SidebarRail: View {
         case .appointments:
             // 已到店、等著開始的預約
             model.reservations.filter { $0.kind == .appointment && $0.status == .arrived }.count
+        case .queue: model.queue.state?.waiting.count ?? 0
         default: 0
         }
     }

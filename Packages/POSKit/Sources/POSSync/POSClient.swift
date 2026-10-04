@@ -59,6 +59,10 @@ public protocol POSAPI: Sendable {
     func classes(date: String) async throws -> [ClassSession]
     /// 某個營業日的結帳、退款、作廢（iPad 只留最近兩天，更早的跟後台要）
     func history(date: String) async throws -> DayHistory
+    /// 叫號：現在的號碼
+    func queue() async throws -> QueueState
+    /// 叫號的動作（取號、下一號、過號…）：回應是改完的狀態
+    func queue(_ action: QueueAction) async throws -> QueueState
 }
 
 extension POSAPI {
@@ -71,6 +75,14 @@ extension POSAPI {
 
     public func history(date: String) async throws -> DayHistory {
         throw APIError.http(status: 404, code: "not_found", message: "後台還不支援查歷史資料")
+    }
+
+    public func queue() async throws -> QueueState {
+        throw APIError.http(status: 404, code: "not_found", message: "後台還不支援叫號")
+    }
+
+    public func queue(_ action: QueueAction) async throws -> QueueState {
+        throw APIError.http(status: 404, code: "not_found", message: "後台還不支援叫號")
     }
 }
 
@@ -166,6 +178,14 @@ public struct POSClient: POSAPI {
 
     public func history(date: String) async throws -> DayHistory {
         try await call("history", query: ["date": date])
+    }
+
+    public func queue() async throws -> QueueState {
+        try await call("queue")
+    }
+
+    public func queue(_ action: QueueAction) async throws -> QueueState {
+        try await call("queue/\(action.path)", method: "POST", body: action.body)
     }
 
     // MARK: 傳輸

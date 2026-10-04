@@ -72,7 +72,8 @@ struct SettingsView: View {
     private var sidebar: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(SettingsGroup.allCases) { g in
+                // 叫號：後台開了才有這一類
+                ForEach(SettingsGroup.allCases.filter { $0 != .queue || model.features.queue }) { g in
                     Button {
                         group = g
                         draft = nil
@@ -120,6 +121,9 @@ struct SettingsView: View {
         case .workstation:
             // 換過崗位（不是後台配對時設的）：提醒一下
             return model.role != model.device.role ? ("已改", .info) : nil
+        case .queue:
+            // 這台取號要印：沒有號碼牌出單機就提醒
+            return model.features.queue && !model.hasQueuePrinter ? ("沒出單機", .warning) : nil
         case .mode, .store, .receipts, .appearance, .data, .advanced:
             return nil
         }
@@ -138,6 +142,7 @@ struct SettingsView: View {
                 case .printers: printersSection
                 case .receipts: SettingsReceiptsSection()
                 case .invoice: SettingsInvoiceSection()
+                case .queue: SettingsQueueSection(openPrinters: { group = .printers; draft = nil })
                 case .appearance: SettingsAppearanceSection()
                 case .data: SettingsDataSection()
                 case .advanced: SettingsAdvancedSection()
@@ -212,7 +217,7 @@ struct SettingsView: View {
 // MARK: - 分類
 
 private enum SettingsGroup: String, CaseIterable, Identifiable {
-    case device, workstation, mode, store, printers, receipts, invoice, appearance, data, advanced
+    case device, workstation, mode, store, printers, receipts, invoice, queue, appearance, data, advanced
 
     var id: String { rawValue }
 
@@ -225,6 +230,7 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
         case .printers: "出單機"
         case .receipts: "收據與出單"
         case .invoice: "電子發票"
+        case .queue: "叫號"
         case .appearance: "外觀與安全"
         case .data: "資料"
         case .advanced: "進階"
@@ -240,6 +246,7 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
         case .printers: "printer"
         case .receipts: "document-text"
         case .invoice: "qr-code"
+        case .queue: "ticket"
         case .appearance: "swatch"
         case .data: "circle-stack"
         case .advanced: "adjustments-horizontal"
@@ -1081,7 +1088,7 @@ private struct SettingsPrintPreview: View {
                             .padding(12)
                             // 印出來的證明聯：熱感紙是白的（單據例外，深、淺色都一樣）
                             .background(Color.white, in: .rect(cornerRadius: Metric.radius))
-                            .accessibilityLabel("證明聯")
+                            .accessibilityLabel(job.title)
                     }
                     if let r = job.receipt {
                         ReceiptPaper(receipt: r, paper: paper)
@@ -1353,6 +1360,7 @@ private struct SettingsPrinterEditor: View {
         case .receipt: "交易明細、結帳單、交班單、退款單"
         case .invoice: "電子發票證明聯（一律照 5.7 公分寬印）"
         case .kitchen: "送單、催菜、作廢時的廚房、吧台出單"
+        case .queue: "叫號的號碼牌：這台取號就印（照後台的版面畫成圖，和樹莓派印的一樣）"
         }
     }
 
@@ -1796,6 +1804,148 @@ private struct SettingsRollRow: View {
         if roll.period == current { return ("本期", .active) }
         if roll.period > current { return ("下一期", .info) }
         return ("過期", .neutral)
+    }
+}
+
+// MARK: - 叫號
+
+/// 叫號：號碼存在哪裡（後台的）、號碼牌出單機、這台要不要也印別台取的、要不要唸號碼；右邊是號碼牌的預覽。
+/// 右欄：大鍵「印一張測試號碼牌」
+private struct SettingsQueueSection: View {
+    @Environment(POSModel.self) private var model
+    @Environment(PrinterHub.self) private var printers
+    /// 打開「出單機」
+    let openPrinters: () -> Void
+
+    var body: some View {
+        @Bindable var settings = model.settings
+        let queuePrinters = printers.targets(.queue)
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsHeading(title: "叫號", detail: "號碼牌由這台 iPad 直接印，不用樹莓派。號碼存在哪裡、號碼牌的版面在後台設定；這裡是這台自己的習慣。")
+            if !model.features.queue {
+                Text("後台沒有開叫號")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.muted)
+            } else {
+                HStack(alignment: .top, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 24) {
+                        infoPanel
+                        printerPanel(queuePrinters)
+                        VStack(alignment: .leading, spacing: 18) {
+                            Toggle(isOn: Binding(get: { model.settings.queuePrintsOthers }, set: { model.setQueuePrintsOthers($0) })) {
+                                SettingsToggleLabel(
+                                    title: "也印別台取的號碼（取代樹莓派）",
+                                    detail: queuePrinters.isEmpty
+                                        ? "要先有號碼牌出單機。"
+                                        : "別台 iPad 取的號碼，這台看到就印（同一個營業日不重複，號碼從 1 重新開始時重算；打開時已經在等的不補印）。一家店只開一台。"
+                                )
+                            }
+                            .disabled(queuePrinters.isEmpty)
+                            Rule(color: Theme.hair)
+                            Toggle(isOn: $settings.queueSpeaks) {
+                                SettingsToggleLabel(title: "這台唸號碼", detail: "按「下一號」「再叫一次」時用 iPad 的喇叭唸出來（叫號螢幕會唸的話不用開）")
+                            }
+                        }
+                        .panel(padding: 22)
+                        HStack(alignment: .top, spacing: 10) {
+                            HeroIcon("information-circle", size: 16)
+                                .padding(.top, 2)
+                            Text("樹莓派只要負責叫號螢幕：在它的後台把列印關掉，避免印兩張")
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .textRole(.small)
+                        .foregroundStyle(Theme.muted)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    preview
+                }
+            }
+        }
+        .dockSelection(DockSelection.page(
+            "settings-queue",
+            primary: POSAction("印一張測試號碼牌", icon: "printer", enabled: model.features.queue) { model.printTestQueueTicket() }
+        ))
+        .task { await model.queue.art.prefetch(model.queueConfig?.ticket.backgroundUrl) }
+    }
+
+    private var infoPanel: some View {
+        let ticket = model.queueConfig?.ticket ?? .standard
+        return VStack(alignment: .leading, spacing: 12) {
+            ValueRow(label: "號碼存在", value: model.queueMode.label, strong: true)
+            ValueRow(label: "號碼牌的 QR", value: model.queueConfig?.customerUrl == nil ? "沒有設定（不印 QR）" : "客人掃了看現在叫到幾號")
+            ValueRow(label: "版面", value: layoutText(ticket))
+            ValueRow(label: "一個號碼印", value: "\(ticket.copies) 張")
+        }
+        .panel(padding: 22)
+    }
+
+    private func layoutText(_ t: QueueTicketLayout) -> String {
+        guard let url = t.backgroundUrl else { return "StudioX 預設版面" }
+        return model.queue.art.image(for: url) == nil ? "後台的背景圖（下載中，先用預設版面）" : "後台的背景圖"
+    }
+
+    private func printerPanel(_ list: [PrinterConfig]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Eyebrow("號碼牌出單機")
+            if list.isEmpty {
+                Text("這台還沒有號碼牌出單機。新增或編輯一台（例如 XPrinter 58 mm：網路埠 9100 或藍牙），在「這台印什麼」勾「號碼牌」。")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(list) { p in
+                        HStack(spacing: 12) {
+                            HeroIcon("printer", size: 18)
+                                .foregroundStyle(Theme.ink2)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.name.isEmpty ? "出單機" : p.name)
+                                    .font(.brand(15.5, .medium))
+                                    .foregroundStyle(Theme.ink)
+                                Text(address(p))
+                                    .font(.brand(12.5, .regular))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Theme.muted)
+                            }
+                            Spacer(minLength: 8)
+                            if let h = printers.status[p.id] {
+                                StatusBadge(h.ok ? "正常" : "連不到", tone: h.ok ? .active : .danger)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        if p.id != list.last?.id { Rule(color: Theme.hair) }
+                    }
+                }
+            }
+            Button(list.isEmpty ? "設定出單機" : "改出單機", action: openPrinters)
+                .buttonStyle(.brand(.ghost, size: .sm, arrow: true))
+        }
+        .panel(padding: 22)
+    }
+
+    private func address(_ p: PrinterConfig) -> String {
+        let where_ = p.connection == .network ? (p.host.isEmpty ? "沒有 IP" : "\(p.host):\(p.port)") : "藍牙 \(p.peripheralName ?? "")"
+        return "\(where_)・\(p.paper.label)"
+    }
+
+    /// 號碼牌的樣子（縮小）：下一張的號碼、現在的等候人數
+    private var preview: some View {
+        let ticket = model.sampleQueueTicket()
+        let k: CGFloat = 0.56
+        let height = ticket.background != nil ? CGFloat(ticket.layout.height) : QueueTicketView.standardHeight
+        return VStack(alignment: .leading, spacing: 10) {
+            Eyebrow("號碼牌預覽")
+            QueueTicketView(ticket: ticket)
+                .scaleEffect(k, anchor: .topLeading)
+                .frame(width: CGFloat(QueueTicketLayout.baseWidth) * k, height: height * k, alignment: .topLeading)
+                .clipShape(.rect(cornerRadius: Metric.radiusSm, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous).strokeBorder(Theme.line, lineWidth: 1) }
+                .accessibilityLabel("號碼牌預覽：\(ticket.number) 號，\(ticket.waitingText)")
+            Text("印出來是黑白的（熱感紙）")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+        }
+        .frame(width: CGFloat(QueueTicketLayout.baseWidth) * k, alignment: .leading)
     }
 }
 

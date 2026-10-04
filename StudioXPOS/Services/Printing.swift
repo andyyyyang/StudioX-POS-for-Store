@@ -18,12 +18,15 @@ enum PrinterRole: String, Codable, CaseIterable, Hashable {
     case invoice
     /// 廚房、吧台的出單
     case kitchen
+    /// 叫號的號碼牌（取代樹莓派出單：取號時這台直接印）
+    case queue
 
     var label: String {
         switch self {
         case .receipt: "收據"
         case .invoice: "發票證明聯"
         case .kitchen: "廚房出單"
+        case .queue: "號碼牌"
         }
     }
 }
@@ -161,6 +164,36 @@ final class PrinterHub {
         }
     }
 
+    /// 號碼牌：照後台的版面畫成點陣圖（和樹莓派印的一樣：GS v 0、走紙、切紙），每台號碼牌出單機印 copies 張；
+    /// 出單機畫不出圖時印文字版。沒有號碼牌出單機就留在「最近列印」（畫面上看得到）
+    func printQueueTicket(_ ticket: QueueTicket) {
+        let title = "號碼牌 \(ticket.number) 號"
+        let list = targets(.queue)
+        let preview = ticket.preview()
+        guard !list.isEmpty else {
+            remember(PrintJob(title: title, receipt: ticket.fallback(paper: .mm58), image: preview, printer: nil, error: nil))
+            return
+        }
+        let copies = min(max(ticket.layout.copies, 1), 5)
+        for p in list {
+            var e = ESCPOS(encode: Self.encoder(p))
+            if let image = ticket.bitmap(paper: p.paper) {
+                for _ in 0..<copies {
+                    e.initialize()
+                    // ESC 2：標準行距（樹莓派也先送這個）
+                    e.raw([0x1B, 0x32])
+                    e.raster(image)
+                    e.feed(3)
+                    e.cut(feed: 0)
+                }
+            } else {
+                let text = ReceiptRenderer.escpos(ticket.fallback(paper: p.paper), width: p.paper, encode: Self.encoder(p))
+                for _ in 0..<copies { e.raw(text) }
+            }
+            send(e.bytes, to: p, title: title, receipt: ticket.fallback(paper: p.paper), image: preview)
+        }
+    }
+
     func openDrawer() {
         let list = printers.filter(\.hasDrawer)
         for p in list {
@@ -194,7 +227,7 @@ final class PrinterHub {
         send(bytes, to: p, title: "測試", receipt: r)
     }
 
-    private func send(_ bytes: [UInt8], to p: PrinterConfig, title: String, receipt: Receipt?) {
+    private func send(_ bytes: [UInt8], to p: PrinterConfig, title: String, receipt: Receipt?, image: UIImage? = nil) {
         let host = p.host, port = p.port, name = p.name, id = p.id
         let connection = p.connection, peripheral = p.peripheralId
         Task {
@@ -207,10 +240,10 @@ final class PrinterHub {
                     try await BluetoothPrinters.shared.send(bytes, to: peripheral)
                 }
                 status[id] = PrinterHealth(name: name, ok: true)
-                remember(PrintJob(title: title, receipt: receipt, printer: name, error: nil))
+                remember(PrintJob(title: title, receipt: receipt, image: image, printer: name, error: nil))
             } catch {
                 status[id] = PrinterHealth(name: name, ok: false, message: error.localizedDescription)
-                remember(PrintJob(title: title, receipt: receipt, printer: name, error: "印不出來：\(error.localizedDescription)"))
+                remember(PrintJob(title: title, receipt: receipt, image: image, printer: name, error: "印不出來：\(error.localizedDescription)"))
             }
         }
     }
@@ -311,7 +344,8 @@ nonisolated final class Once: @unchecked Sendable {
 
 /// 把 SwiftUI 畫面轉成出單機的 1-bit 點陣圖（門檻二值化：字、條碼、QR Code 都要銳利）
 enum Raster {
-    static func bitmap<V: View>(_ view: V, width: Int) -> Bitmap? {
+    /// threshold：比它暗的印黑。收據的字細，用 150 讓字粗一點；號碼牌有黑底白字，用 128（和樹莓派一樣）白字才不會被吃掉
+    static func bitmap<V: View>(_ view: V, width: Int, threshold: UInt8 = 150) -> Bitmap? {
         let renderer = ImageRenderer(content: view.frame(width: CGFloat(width)).background(Color.white).environment(\.colorScheme, .light))
         renderer.scale = 1
         guard let cg = renderer.cgImage else { return nil }
@@ -326,14 +360,14 @@ enum Raster {
             return true
         }
         guard ok else { return nil }
-        return Bitmap(gray: gray, width: w, height: h, threshold: 150)
+        return Bitmap(gray: gray, width: w, height: h, threshold: threshold)
     }
 
-    /// QR Code（容錯 L）：每一格 scale 個點
-    static func qr(_ text: String, maxSide: Int) -> UIImage? {
+    /// QR Code（容錯預設 L；號碼牌用 M，和樹莓派一樣）：每一格 scale 個點
+    static func qr(_ text: String, maxSide: Int, correction: String = "L") -> UIImage? {
         let f = CIFilter.qrCodeGenerator()
         f.message = Data(text.utf8)
-        f.correctionLevel = "L"
+        f.correctionLevel = correction
         guard let out = f.outputImage else { return nil }
         let modules = Int(out.extent.width)
         let scale = max(1, maxSide / max(modules, 1))

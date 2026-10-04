@@ -69,6 +69,7 @@
     "invoice" : true,
     "kitchen" : true,
     "members" : true,
+    "queue" : true,
     "reservations" : true,
     "seating" : true,
     "waitlistSMS" : false
@@ -116,6 +117,30 @@
   "mesh" : {
     "enabled" : true,
     "key" : "abababababababababababababababababababababababababababababababab"
+  },
+  "queue" : {
+    "customerUrl" : "https://shop.example.tw/q?no={number}&waiting={waiting}",
+    "mode" : "native",
+    "ticket" : {
+      "backgroundUrl" : "https://cms.example.tw/uploads/queue-ticket-bg.jpg",
+      "copies" : 1,
+      "height" : 640,
+      "number" : {
+        "color" : "white",
+        "size" : 90,
+        "y" : 140
+      },
+      "qr" : {
+        "bottom" : 100,
+        "size" : 0.45
+      },
+      "waiting" : {
+        "color" : "black",
+        "size" : 20,
+        "text" : "目前 {waiting} 人等候中",
+        "y" : 290
+      }
+    }
   },
   "serverTime" : "2026-09-21T14:13:20.000Z",
   "staff" : [

@@ -264,17 +264,20 @@ public struct FeatureFlags: Codable, Sendable, Hashable {
     public var accounts: Bool
     /// 業績與抽成報表
     public var commission: Bool
+    /// 叫號（號碼牌）：取號、叫號、過號（Bootstrap.queue 是它的設定）。要後台設好號碼存在哪裡，所以預設關
+    public var queue: Bool
 
     public init(seating: Bool = true, kitchen: Bool = true, reservations: Bool = true, invoice: Bool = true, members: Bool = true, waitlistSMS: Bool = false,
-                appointments: Bool = true, accounts: Bool = true, commission: Bool = true) {
+                appointments: Bool = true, accounts: Bool = true, commission: Bool = true, queue: Bool = false) {
         self.seating = seating; self.kitchen = kitchen; self.reservations = reservations; self.invoice = invoice
         self.members = members; self.waitlistSMS = waitlistSMS
         self.appointments = appointments; self.accounts = accounts; self.commission = commission
+        self.queue = queue
     }
 
     public static let all = FeatureFlags()
 
-    enum CodingKeys: String, CodingKey { case seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission }
+    enum CodingKeys: String, CodingKey { case seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission, queue }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -288,6 +291,7 @@ public struct FeatureFlags: Codable, Sendable, Hashable {
         appointments = try c.decodeIfPresent(Bool.self, forKey: .appointments) ?? false
         accounts = try c.decodeIfPresent(Bool.self, forKey: .accounts) ?? false
         commission = try c.decodeIfPresent(Bool.self, forKey: .commission) ?? false
+        queue = try c.decodeIfPresent(Bool.self, forKey: .queue) ?? false
     }
 }
 

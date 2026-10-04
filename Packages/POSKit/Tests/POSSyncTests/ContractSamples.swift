@@ -53,7 +53,7 @@ struct ContractSamples {
             device: DeviceProfile(id: "dev-a", name: "櫃台 1", code: "A", role: .register, stations: []),
             store: StoreProfile(name: "晨麥手作", legalName: "晨麥手作有限公司", taxId: "04595257", address: "台南市中西區民族路二段1號", phone: "06-2220000",
                                 serviceChargeBps: 1000, tableTimeLimitMinutes: 90),
-            features: .all,
+            features: { var f = FeatureFlags.all; f.queue = true; return f }(),
             catalog: Catalog(
                 categories: [MenuCategory(id: "cat-drinks", name: "飲料", swatch: .lavender, sortOrder: 1, station: "吧台")],
                 items: [MenuItem(id: "itm-milktea", categoryId: "cat-drinks", name: "珍珠奶茶", shortName: "珍奶", price: Money(dollars: 60),
@@ -65,7 +65,9 @@ struct ContractSamples {
             floor: FloorPlan(areas: [FloorArea(id: "area-1f", name: "1F", tables: [DiningTable(id: "tbl-a1", areaId: "area-1f", name: "A1", seats: 4, x: 10, y: 10)])]),
             staff: [StaffMember(id: "staff-leslie", name: "Leslie", role: .cashier, pinHash: Staff.hash(pin: "1234", salt: "8c1f0e5a"), pinSalt: "8c1f0e5a", swatch: .lavender)],
             invoice: bootSettings,
-            mesh: MeshConfig(key: String(repeating: "ab", count: 32), enabled: true)
+            mesh: MeshConfig(key: String(repeating: "ab", count: 32), enabled: true),
+            queue: QueueConfig(mode: .native, customerUrl: "https://shop.example.tw/q?no={number}&waiting={waiting}",
+                               ticket: QueueTicketLayout(backgroundUrl: "https://cms.example.tw/uploads/queue-ticket-bg.jpg"))
         )
 
         // 服飾、美業、健身
@@ -123,6 +125,12 @@ struct ContractSamples {
                                   recentVisits: [MemberVisit(ticketId: salon.id, number: "B007", at: at, total: salonSale.total, items: ["剪髮", "染髮", "剪髮 10 次卡"],
                                                              staffNames: ["Mori"], note: nil)],
                                   birthday: "10-12")
+        // 叫號：現在叫到 23，24–26 在等（25 標了星號），19 過號
+        let calledAt = at.addingTimeInterval(-90)
+        let queueState = QueueState(mode: .native, current: 23, waiting: [24, 25, 26], missed: [19], marked: [25], nextNo: 27,
+                                    calledAt: calledAt, updatedAt: calledAt,
+                                    takenAt: ["24": at.addingTimeInterval(-11 * 60), "25": at.addingTimeInterval(-7 * 60), "26": at.addingTimeInterval(-2 * 60)],
+                                    servedToday: 22)
         let history = DayHistory(businessDate: "2026-09-21", sales: [salonSale], refunds: [], voidedTickets: [], invoiceNumbers: [], voidedInvoiceNumbers: [], checkIns: 1)
         let appointment = Reservation(id: "rsv-appt-1", kind: .appointment, name: "王小美", phone: "0912345678", partySize: 1, startsAt: at, durationMinutes: 180,
                                       createdAt: at, staffId: "staff-mori",
@@ -146,6 +154,7 @@ struct ContractSamples {
             "event-sale-exchanged.json": try j(s3),
             "member.json": try j(MemberLookup(member: memberSample)),
             "history.json": try j(history),
+            "queue-state.json": try j(queueState),
             "invoice-qr.txt": {
                 let p = InvoiceProof(invoice: invoice, storeName: "晨麥手作", qrKey: settings.qrKey)
                 return "barcode: \(p.barcode)\nleft:  \(p.qrLeft ?? "")\nright: \(p.qrRight ?? "")\n"
@@ -166,6 +175,11 @@ struct ContractSamples {
         _ = try dec.decode(DayHistory.self, from: Data(s["history.json"]!.utf8))
         _ = try dec.decode(Catalog.self, from: Data(s["catalog-industries.json"]!.utf8))
         _ = try dec.decode(ClassList.self, from: Data(s["class-list.json"]!.utf8))
+        let boot = try dec.decode(Bootstrap.self, from: Data(s["bootstrap.json"]!.utf8))
+        #expect(boot.features.queue)
+        #expect(boot.queue?.ticket.number.y == 140)
+        let queue = try dec.decode(QueueState.self, from: Data(s["queue-state.json"]!.utf8))
+        #expect(queue.current == 23 && queue.waiting == [24, 25, 26] && queue.takenAt.count == 3 && queue.servedToday == 22)
         if ProcessInfo.processInfo.environment["POSKIT_WRITE_SAMPLES"] == "1" {
             let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../../../docs/samples").standardized
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

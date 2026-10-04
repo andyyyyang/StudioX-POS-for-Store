@@ -62,6 +62,7 @@ struct DockContext: View {
         case .appointments: DockUpcoming()
         case .checkIn: DockCheckInPulse()
         case .reservations: DockReservationsPulse()
+        case .queue: DockQueuePulse()
         case .shift: DockDrawer()
         case .members, .dashboard, .settings: EmptyView()
         }
@@ -528,6 +529,60 @@ private struct DockReservationsPulse: View {
                         ForEach(Array(next), id: \.id) { r in
                             DockRow(title: "\(TaipeiTime.clock(r.startsAt))　\(r.name)", detail: "\(r.partySize) 位", trailing: nil)
                             Rule()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 叫號
+
+/// 等候幾位、下一號、平均等了多久；號碼牌印在哪台
+private struct DockQueuePulse: View {
+    @Environment(POSModel.self) private var model
+
+    var body: some View {
+        let s = model.queue.state
+        let waiting = s?.waiting.count ?? 0
+        // 每 30 秒重算平均等候
+        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            let average = s?.averageWaitMinutes(now: ctx.date)
+            VStack(alignment: .leading, spacing: 22) {
+                DockSection(title: "叫號") {
+                    Grid(horizontalSpacing: 12, verticalSpacing: 12) {
+                        GridRow {
+                            DockStat(value: "\(waiting)", label: "位等候中", tint: waiting > 0 ? Theme.accentText : Theme.ink)
+                            DockStat(value: s?.waiting.first.map { "\($0)" } ?? "—", label: "下一號")
+                        }
+                        GridRow {
+                            DockStat(value: average.map { "\($0) 分" } ?? "—", label: "平均等候",
+                                     tint: (average ?? 0) >= 15 ? Theme.warningFG : Theme.ink)
+                            DockStat(value: s?.current.map { "\($0)" } ?? "—", label: "現在叫到")
+                        }
+                    }
+                }
+                if let p = model.queue.problem {
+                    Text(p.message)
+                        .font(.brand(12.5, .medium))
+                        .foregroundStyle(p.blocksPage ? Theme.dangerFG : Theme.warningFG)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                DockSection(title: "號碼牌") {
+                    let printers = model.printers.targets(.queue)
+                    if printers.isEmpty {
+                        Text("這台沒有號碼牌出單機（設定 → 出單機，勾「號碼牌」）")
+                            .font(.brand(12.5, .regular))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(printers) { p in
+                                DockRow(title: p.name.isEmpty ? "號碼牌出單機" : p.name, detail: model.queuePrintsOthers ? "取號就印・也印別台取的" : "這台取號就印",
+                                        trailing: p.paper.label)
+                                Rule()
+                            }
                         }
                     }
                 }

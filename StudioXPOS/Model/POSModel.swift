@@ -9,7 +9,7 @@ import UIKit
 
 /// 側欄的每一頁
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
-    case order, floor, appointments, checkIn, orders, members, reservations, kitchen, dashboard, shift, settings
+    case order, floor, appointments, checkIn, queue, orders, members, reservations, kitchen, dashboard, shift, settings
 
     var id: String { rawValue }
 
@@ -19,6 +19,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .floor: "桌位"
         case .appointments: "預約"
         case .checkIn: "報到"
+        case .queue: "叫號"
         case .orders: "訂單"
         case .members: "會員"
         case .reservations: "訂位"
@@ -35,6 +36,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .floor: "table-cells"
         case .appointments: "calendar"
         case .checkIn: "qr-code"
+        case .queue: "ticket"
         case .orders: "queue-list"
         case .members: "user-group"
         case .reservations: "calendar-days"
@@ -85,6 +87,8 @@ final class POSModel {
     var staff: [StaffMember] = []
     var invoiceSettings = InvoiceSettings.disabled
     var meshConfig: MeshConfig?
+    /// 叫號的設定（號碼存在哪裡、號碼牌的版面）；features.queue 開著才有
+    var queueConfig: QueueConfig?
     var configVersion: String?
     var isDemo = false
 
@@ -129,6 +133,8 @@ final class POSModel {
     let printers = PrinterHub()
     let mesh = MeshService()
     let settings = LocalSettings()
+    /// 叫號（號碼牌）：後台的號碼、連線狀況（POSModel+Queue）
+    let queue = QueueBoard()
 
     // MARK: 內部
 
@@ -225,6 +231,13 @@ final class POSModel {
                     self?.checkAutoLock()
                 }
             },
+            // 叫號：側欄的等候人數每 15 秒；這台「也印別台取的號碼」時每 2 秒（叫號頁開著時頁面自己抓）
+            Task { [weak self] in
+                while !Task.isCancelled {
+                    let wait = await self?.queueBackgroundTick() ?? 15
+                    try? await Task.sleep(for: .seconds(wait))
+                }
+            },
         ]
     }
 
@@ -238,6 +251,12 @@ final class POSModel {
         staff = b.staff.filter(\.isActive)
         invoiceSettings = b.invoice
         meshConfig = b.mesh
+        queueConfig = b.features.queue ? b.queue : nil
+        if !b.features.queue { queue.reset() }
+        if let url = queueConfig?.ticket.backgroundUrl {
+            let art = queue.art
+            Task { await art.prefetch(url) }
+        }
         if let current = currentStaff, let fresh = staff.first(where: { $0.id == current.id }) { currentStaff = fresh }
         if !visibleSections.contains(section) { section = visibleSections.first ?? .order }
     }
@@ -338,6 +357,8 @@ final class POSModel {
         historyCache = [:]
         classes = []
         reservations = []
+        queue.reset()
+        queueConfig = nil
         phase = .pairing
     }
 
@@ -571,6 +592,8 @@ final class POSModel {
         if usesTables { out.append(.floor) }
         if usesAppointments { out.append(.appointments) }
         if usesCheckIn { out.append(.checkIn) }
+        // 叫號：任何營業模式都可以開（號碼牌）
+        if features.queue { out.append(.queue) }
         out.append(.orders)
         if usesMembersPage { out.append(.members) }
         if features.reservations && usesTables { out.append(.reservations) }
@@ -585,8 +608,10 @@ final class POSModel {
         let allowed: Set<AppSection> = switch role {
         case .register: Set(AppSection.allCases)
         case .handheld: [.order, .floor, .appointments, .checkIn, .orders, .members, .reservations, .settings]
-        case .reception: [.floor, .appointments, .checkIn, .members, .reservations, .orders, .settings]
-        case .kitchen, .expo: [.kitchen, .orders, .settings]
+        case .reception: [.floor, .appointments, .checkIn, .queue, .members, .reservations, .orders, .settings]
+        case .kitchen: [.kitchen, .orders, .settings]
+        // 出餐口：叫號（取餐號碼牌）也在這裡
+        case .expo: [.kitchen, .queue, .orders, .settings]
         }
         var out = modeSections.filter { allowed.contains($0) }
         // 廚房類的崗位一定有廚房頁（就算這個模式不出廚房單，出餐口也要看得到）
@@ -684,6 +709,10 @@ final class LocalSettings {
     var serviceMode: String { didSet { d.set(serviceMode, forKey: "serviceMode") } }
     /// 這台的崗位（DeviceRole 的 rawValue；空的＝用後台配對時給的）
     var workstation: String { didSet { d.set(workstation, forKey: "workstation") } }
+    /// 叫號時這台用喇叭唸號碼（叫號螢幕會唸，所以預設關）
+    var queueSpeaks: Bool { didSet { d.set(queueSpeaks, forKey: "queueSpeaks") } }
+    /// 也印別台取的號碼（取代樹莓派出單；一家店只開一台）。要這台有「號碼牌」出單機
+    var queuePrintsOthers: Bool { didSet { d.set(queuePrintsOthers, forKey: "queuePrintsOthers") } }
 
     var consoleURL: URL { URL(string: consoleURLString) ?? URL(string: "https://console.studiox.tw")! }
 
@@ -704,6 +733,8 @@ final class LocalSettings {
         openDrawerOnCash = d.object(forKey: "openDrawerOnCash") as? Bool ?? true
         serviceMode = d.string(forKey: "serviceMode") ?? ""
         workstation = d.string(forKey: "workstation") ?? ""
+        queueSpeaks = d.object(forKey: "queueSpeaks") as? Bool ?? false
+        queuePrintsOthers = d.object(forKey: "queuePrintsOthers") as? Bool ?? false
     }
 }
 

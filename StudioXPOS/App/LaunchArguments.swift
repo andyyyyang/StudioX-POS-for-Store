@@ -10,7 +10,7 @@ import UIKit
 ///
 ///   -demo <cafe|apparel|salon|fitness>   示範店（示範模式自己處理）
 ///   -autologin <PIN>                     跳過鎖定畫面，用這個 PIN 的人登入
-///   -section <頁>                        登入後打開這一頁（AppSection 的 rawValue：order、floor、appointments、checkIn…）
+///   -section <頁>                        登入後打開這一頁（AppSection 的 rawValue：order、floor、appointments、checkIn、queue…）
 ///   -landscape                           請系統轉成橫的（iPad 收銀台的樣子）
 ///   -serviceMode <模式>、-workstation <崗位>   UserDefaults 的參數網域會直接蓋過這台的設定
 ///   -preselect                           打開的那一頁先選起第一筆（截右欄「選起來之後」的樣子）

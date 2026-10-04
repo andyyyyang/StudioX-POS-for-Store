@@ -125,9 +125,10 @@ public struct MeshConfig: Codable, Sendable, Hashable {
 /// GET {cms}/api/pos/v1/bootstrap：開機、每 5 分鐘、收到「設定改了」時重抓。帶 If-None-Match: <version> 沒變回 304
 public struct Bootstrap: Codable, Sendable, Hashable {
     public init(version: String, serverTime: Date, device: DeviceProfile, store: StoreProfile, features: FeatureFlags, catalog: Catalog,
-                floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig) {
+                floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig, queue: QueueConfig? = nil) {
         self.version = version; self.serverTime = serverTime; self.device = device; self.store = store; self.features = features
         self.catalog = catalog; self.floor = floor; self.staff = staff; self.invoice = invoice; self.mesh = mesh
+        self.queue = queue
     }
 
     public var version: String
@@ -140,6 +141,8 @@ public struct Bootstrap: Codable, Sendable, Hashable {
     public var staff: [StaffMember]
     public var invoice: InvoiceSettings
     public var mesh: MeshConfig
+    /// 叫號（號碼牌）的設定；features.queue 關著、或舊版後台沒有時是 nil
+    public var queue: QueueConfig?
 }
 
 // MARK: - 事件
@@ -476,6 +479,325 @@ public struct ReservationResponse: Codable, Sendable, Hashable {
     public init(reservation: Reservation) { self.reservation = reservation }
 
     public var reservation: Reservation
+}
+
+// MARK: - 叫號（號碼牌）
+
+/// 號碼存在哪裡（後台「叫號」的設定）
+public enum QueueMode: String, Codable, Sendable, Hashable, CaseIterable {
+    /// 原本的叫號伺服器（黃毛丫頭的 Flask）：後台代轉。沒有取號、叫號的時間，也不能「再叫一次」過號的
+    case legacy
+    /// 後台自己的資料庫：有取號時間、今天服務了幾位，過號的可以再叫一次
+    case native
+
+    public var label: String {
+        switch self {
+        case .legacy: "原本的叫號伺服器"
+        case .native: "後台"
+        }
+    }
+
+    /// 過號的可以再叫一次（舊伺服器沒有這個動作，會回 409 unsupported）
+    public var canRecall: Bool { self == .native }
+
+    // 新版後台多了這版不認得的模式：當作後台自己的（不認得的動作後台會回錯，畫面照常）
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = QueueMode(rawValue: raw) ?? .native
+    }
+}
+
+/// 號碼牌的版面（iPad 直接印，不用樹莓派）。座標都以 58 mm 的 384 點寬為準（80 mm 的機器等比放大）；
+/// 預設值和樹莓派原本印的一模一樣（pi-display/app.py 的 compose_ticket_image）
+public struct QueueTicketLayout: Codable, Sendable, Hashable {
+    /// 字的顏色（背景圖上的黑框裡用白字）
+    public enum Ink: String, Codable, Sendable, Hashable {
+        case white, black
+
+        public init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Ink(rawValue: raw.lowercased()) ?? .black
+        }
+    }
+
+    /// 一行字，水平置中：y＝字型 ascender 線的位置（和 PIL 的 draw.text 一樣，不是字的上緣）
+    public struct Line: Codable, Sendable, Hashable {
+        public var y: Double
+        public var size: Double
+        public var color: Ink
+        /// 字（{waiting}、{number} 會被換掉）；號碼那一行沒有
+        public var text: String?
+
+        public init(y: Double, size: Double, color: Ink, text: String? = nil) {
+            self.y = y; self.size = size; self.color = color; self.text = text
+        }
+    }
+
+    public struct QR: Codable, Sendable, Hashable {
+        /// 邊長＝size × 384（0.45 → 172 點）
+        public var size: Double
+        /// 下緣離紙的底部幾點
+        public var bottom: Double
+
+        public init(size: Double, bottom: Double) { self.size = size; self.bottom = bottom }
+    }
+
+    /// 背景圖（照比例裁滿 384×height、置中）；沒有就用 iPad 自己的版面
+    public var backgroundUrl: String?
+    /// 紙的長度（點，384 寬時）
+    public var height: Int
+    /// 一個號碼印幾張
+    public var copies: Int
+    public var number: Line
+    public var waiting: Line
+    public var qr: QR
+
+    /// 座標的基準寬度（58 mm）
+    public static let baseWidth = 384
+    public static let defaultNumber = Line(y: 140, size: 90, color: .white)
+    public static let defaultWaiting = Line(y: 290, size: 20, color: .black, text: "目前 {waiting} 人等候中")
+    public static let defaultQR = QR(size: 0.45, bottom: 100)
+    /// 樹莓派原本的版面（沒有背景圖）
+    public static let standard = QueueTicketLayout()
+
+    public init(backgroundUrl: String? = nil, height: Int = 640, copies: Int = 1, number: Line = QueueTicketLayout.defaultNumber,
+                waiting: Line = QueueTicketLayout.defaultWaiting, qr: QR = QueueTicketLayout.defaultQR) {
+        self.backgroundUrl = backgroundUrl
+        self.height = height
+        self.copies = copies
+        self.number = number
+        self.waiting = waiting
+        self.qr = qr
+    }
+
+    enum CodingKeys: String, CodingKey { case backgroundUrl, height, copies, number, waiting, qr }
+
+    /// 只寫了一部分的 Line、QR：沒寫的用預設
+    private struct LinePatch: Decodable {
+        var y: Double?
+        var size: Double?
+        var color: Ink?
+        var text: String?
+
+        func applied(to base: Line) -> Line {
+            Line(y: y ?? base.y, size: size ?? base.size, color: color ?? base.color, text: text ?? base.text)
+        }
+    }
+
+    private struct QRPatch: Decodable {
+        var size: Double?
+        var bottom: Double?
+    }
+
+    // 後台少給、給錯的欄位都用預設：號碼牌一定印得出來
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let url = (try? c.decodeIfPresent(String.self, forKey: .backgroundUrl))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        backgroundUrl = (url?.isEmpty ?? true) ? nil : url
+        height = min(max((try? c.decodeIfPresent(Int.self, forKey: .height)) ?? 640, 200), 2000)
+        copies = min(max((try? c.decodeIfPresent(Int.self, forKey: .copies)) ?? 1, 1), 5)
+        number = ((try? c.decodeIfPresent(LinePatch.self, forKey: .number)) ?? nil)?.applied(to: Self.defaultNumber) ?? Self.defaultNumber
+        waiting = ((try? c.decodeIfPresent(LinePatch.self, forKey: .waiting)) ?? nil)?.applied(to: Self.defaultWaiting) ?? Self.defaultWaiting
+        let q = (try? c.decodeIfPresent(QRPatch.self, forKey: .qr)) ?? nil
+        qr = QR(size: min(max(q?.size ?? Self.defaultQR.size, 0.1), 1), bottom: max(q?.bottom ?? Self.defaultQR.bottom, 0))
+    }
+
+    /// 等候人數那一行（「目前 5 人等候中」）
+    public func waitingText(waiting count: Int, number n: Int) -> String {
+        (waiting.text ?? "目前 {waiting} 人等候中")
+            .replacingOccurrences(of: "{waiting}", with: String(count))
+            .replacingOccurrences(of: "{number}", with: String(n))
+    }
+
+    /// QR 的邊長（384 寬時；樹莓派是 int(384 × 0.45) = 172）
+    public var qrSide: Int { Int(Double(Self.baseWidth) * qr.size) }
+}
+
+/// 開機資料的 `queue`：號碼存在哪裡、號碼牌的 QR 網址與版面
+public struct QueueConfig: Codable, Sendable, Hashable {
+    public var mode: QueueMode
+    /// 號碼牌 QR 的網址樣板：{number}、{waiting} 會被換掉（例：https://shop.tw/q?no={number}&waiting={waiting}）
+    public var customerUrl: String?
+    public var ticket: QueueTicketLayout
+
+    public init(mode: QueueMode = .native, customerUrl: String? = nil, ticket: QueueTicketLayout = .standard) {
+        self.mode = mode
+        self.customerUrl = customerUrl
+        self.ticket = ticket
+    }
+
+    enum CodingKeys: String, CodingKey { case mode, customerUrl, ticket }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = (try? c.decodeIfPresent(QueueMode.self, forKey: .mode)) ?? .native
+        let url = (try? c.decodeIfPresent(String.self, forKey: .customerUrl))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        customerUrl = (url?.isEmpty ?? true) ? nil : url
+        ticket = ((try? c.decodeIfPresent(QueueTicketLayout.self, forKey: .ticket)) ?? nil) ?? .standard
+    }
+
+    /// 號碼牌上的 QR：這個號碼的網址（沒設網址樣板是 nil）
+    public func customerLink(number: Int, waiting: Int) -> String? {
+        guard let t = customerUrl else { return nil }
+        return t.replacingOccurrences(of: "{number}", with: String(number)).replacingOccurrences(of: "{waiting}", with: String(waiting))
+    }
+}
+
+/// GET {cms}/api/pos/v1/queue、POST /queue/<action> 的回應：現在的號碼。
+/// 每個欄位都可能沒有（舊的叫號伺服器只有 current、waiting、missed、marked、next_no）：少了、看不懂的都當作空的
+public struct QueueState: Codable, Sendable, Hashable {
+    public var mode: QueueMode?
+    /// 現在叫到的號碼
+    public var current: Int?
+    /// 等候中（照順序）
+    public var waiting: [Int]
+    /// 過號
+    public var missed: [Int]
+    /// 標記（店員自己看的星號）
+    public var marked: [Int]
+    /// 下一張號碼牌
+    public var nextNo: Int?
+    /// current 什麼時候叫的（native）
+    public var calledAt: Date?
+    public var updatedAt: Date?
+    /// 每個等候中的號碼什麼時候取的（native；key 是號碼的字串）
+    public var takenAt: [String: Date]
+    /// 今天服務完的人數（native）
+    public var servedToday: Int?
+    /// 取號的回應：這次取到的號碼
+    public var numbers: [Int]?
+
+    public init(mode: QueueMode? = nil, current: Int? = nil, waiting: [Int] = [], missed: [Int] = [], marked: [Int] = [], nextNo: Int? = nil,
+                calledAt: Date? = nil, updatedAt: Date? = nil, takenAt: [String: Date] = [:], servedToday: Int? = nil, numbers: [Int]? = nil) {
+        self.mode = mode; self.current = current; self.waiting = waiting; self.missed = missed; self.marked = marked; self.nextNo = nextNo
+        self.calledAt = calledAt; self.updatedAt = updatedAt; self.takenAt = takenAt; self.servedToday = servedToday; self.numbers = numbers
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case mode, current, waiting, missed, marked, nextNo, calledAt, updatedAt, takenAt, servedToday, numbers
+        /// 舊伺服器 /status 的寫法
+        case nextNoSnake = "next_no"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func ints(_ k: CodingKeys) -> [Int] { ((try? c.decodeIfPresent([Int].self, forKey: k)) ?? nil) ?? [] }
+        func date(_ k: CodingKeys) -> Date? { ((try? c.decodeIfPresent(String.self, forKey: k)) ?? nil).flatMap(EventCoding.parseTimestamp) }
+        mode = (try? c.decodeIfPresent(QueueMode.self, forKey: .mode)) ?? nil
+        current = (try? c.decodeIfPresent(Int.self, forKey: .current)) ?? nil
+        waiting = ints(.waiting)
+        missed = ints(.missed)
+        marked = ints(.marked)
+        nextNo = ((try? c.decodeIfPresent(Int.self, forKey: .nextNo)) ?? nil) ?? ((try? c.decodeIfPresent(Int.self, forKey: .nextNoSnake)) ?? nil)
+        calledAt = date(.calledAt)
+        updatedAt = date(.updatedAt)
+        let raw = ((try? c.decodeIfPresent([String: String].self, forKey: .takenAt)) ?? nil) ?? [:]
+        takenAt = raw.compactMapValues(EventCoding.parseTimestamp)
+        servedToday = (try? c.decodeIfPresent(Int.self, forKey: .servedToday)) ?? nil
+        numbers = (try? c.decodeIfPresent([Int].self, forKey: .numbers)) ?? nil
+    }
+
+    // 選填的沒有值就不出現；時間一律是 ISO 8601（UTC、毫秒）
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encodeIfPresent(mode, forKey: .mode)
+        try c.encodeIfPresent(current, forKey: .current)
+        try c.encode(waiting, forKey: .waiting)
+        try c.encode(missed, forKey: .missed)
+        try c.encode(marked, forKey: .marked)
+        try c.encodeIfPresent(nextNo, forKey: .nextNo)
+        try c.encodeIfPresent(calledAt.map(EventCoding.timestamp), forKey: .calledAt)
+        try c.encodeIfPresent(updatedAt.map(EventCoding.timestamp), forKey: .updatedAt)
+        if !takenAt.isEmpty { try c.encode(takenAt.mapValues(EventCoding.timestamp), forKey: .takenAt) }
+        try c.encodeIfPresent(servedToday, forKey: .servedToday)
+        try c.encodeIfPresent(numbers, forKey: .numbers)
+    }
+
+    /// 沒有人在等、也沒有在叫、沒有過號
+    public var isEmpty: Bool { current == nil && waiting.isEmpty && missed.isEmpty }
+
+    public func isMarked(_ n: Int) -> Bool { marked.contains(n) }
+
+    /// 這個號碼什麼時候取的（native）
+    public func takenTime(of n: Int) -> Date? { takenAt[String(n)] }
+
+    /// 等了幾分鐘（沒有取號時間是 nil）
+    public func waitMinutes(_ n: Int, now: Date) -> Int? {
+        takenTime(of: n).map { max(Int(now.timeIntervalSince($0) / 60), 0) }
+    }
+
+    /// 還在等的人平均等了幾分鐘（沒有取號時間是 nil）
+    public func averageWaitMinutes(now: Date) -> Int? {
+        let minutes = waiting.compactMap { waitMinutes($0, now: now) }
+        guard !minutes.isEmpty else { return nil }
+        return Int((Double(minutes.reduce(0, +)) / Double(minutes.count)).rounded())
+    }
+
+    /// 今天取了幾張（號碼每天從 1 開始：下一張減 1）
+    public var takenToday: Int? { nextNo.map { max($0 - 1, 0) } }
+
+    /// 目前用到的最大號碼（號碼從 1 重新開始時會變小）
+    public var highestNumber: Int {
+        let seen = (waiting + missed + [current ?? 0]).max() ?? 0
+        return max(seen, (nextNo ?? 1) - 1)
+    }
+}
+
+/// POST {cms}/api/pos/v1/queue/<action> 的 body
+public struct QueueActionBody: Codable, Sendable, Hashable {
+    public var count: Int?
+    public var requestId: String?
+    public var number: Int?
+    public var staffId: String?
+
+    public init(count: Int? = nil, requestId: String? = nil, number: Int? = nil, staffId: String? = nil) {
+        self.count = count; self.requestId = requestId; self.number = number; self.staffId = staffId
+    }
+}
+
+/// 叫號的動作（docs/API.md「叫號」）：回應一律是改完的 QueueState
+public enum QueueAction: Sendable, Hashable {
+    /// 取號：nextNo 起連續 count 張（1–20）加到最後；同一個 requestId 十分鐘內重送不會再取
+    case take(count: Int, requestId: String)
+    /// 叫下一號（原本的 current 算服務完了）
+    case next(requestId: String)
+    /// 過號：current 移到過號，自動叫下一號
+    case miss(requestId: String)
+    /// 返回前一號：current 放回等候的最前面
+    case previous
+    /// 再叫一次過號的（只有 native）
+    case recall(Int)
+    /// 從過號清單刪掉
+    case unmiss(Int)
+    case mark(Int)
+    case unmark(Int)
+    /// 全部歸零（店長授權過）
+    case reset(staffId: String)
+
+    /// POST /queue/<path>
+    public var path: String {
+        switch self {
+        case .take: "take"
+        case .next: "next"
+        case .miss: "miss"
+        case .previous: "previous"
+        case .recall: "recall"
+        case .unmiss: "unmiss"
+        case .mark: "mark"
+        case .unmark: "unmark"
+        case .reset: "reset"
+        }
+    }
+
+    public var body: QueueActionBody {
+        switch self {
+        case .take(let count, let id): QueueActionBody(count: min(max(count, 1), 20), requestId: id)
+        case .next(let id), .miss(let id): QueueActionBody(requestId: id)
+        case .previous: QueueActionBody()
+        case .recall(let n), .unmiss(let n), .mark(let n), .unmark(let n): QueueActionBody(number: n)
+        case .reset(let staffId): QueueActionBody(staffId: staffId)
+        }
+    }
 }
 
 // MARK: - 桌位圖、心跳

@@ -89,6 +89,7 @@ jobs:
             "09-cafe-settings|-demo cafe $L -section settings"
             "10-counter-order|-demo cafe -serviceMode counter $L -section order"
             "11-expo|-demo cafe -workstation expo $L"
+            "12-cafe-queue|-demo cafe $L -section queue"
             "20-apparel-order|-demo apparel $L -section order"
             "21-apparel-orders|-demo apparel $L -section orders"
             "22-apparel-dashboard|-demo apparel $L -section dashboard"
@@ -110,6 +111,7 @@ jobs:
             "55-salon-appointment-selected|-demo salon $L -section appointments -preselect"
             "56-salon-member-selected|-demo salon $L -section members -preselect"
             "57-fitness-checkin-selected|-demo fitness $L -section checkIn -preselect"
+            "58-cafe-queue-selected|-demo cafe $L -section queue -preselect"
           )
           # 淺色再拍一輪（外觀預設跟著 iPad）
           light=(
@@ -117,6 +119,7 @@ jobs:
             "02-cafe-floor|-demo cafe $L -section floor"
             "03-cafe-order|-demo cafe $L -section order"
             "07-cafe-reservations|-demo cafe $L -section reservations"
+            "12-cafe-queue|-demo cafe $L -section queue"
             "21-apparel-orders|-demo apparel $L -section orders"
             "30-salon-appointments|-demo salon $L -section appointments"
             "32-salon-members|-demo salon $L -section members"

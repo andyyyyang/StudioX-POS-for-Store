@@ -92,4 +92,23 @@ struct PrintingTests {
         #expect(bill.contains("A1"))
         #expect(bill.contains("服務費 10%"))
     }
+
+    /// 號碼牌的文字版：號碼放到最大，58／80 mm 都放得進紙寬；有網址才印 QR Code
+    @Test func queueTicketFitsBothPapers() {
+        let at = Date(timeIntervalSince1970: 1_791_000_000)
+        for w in PaperWidth.allCases {
+            let r = Templates.queueTicket(number: 1000, waiting: 12, storeName: "黃毛丫頭", at: at, link: "https://shop.tw/q?no=1000&waiting=12", paper: w)
+            let text = r.plainText(width: w)
+            #expect(text.contains("1000"))
+            #expect(text.contains("目前 12 人等候中"))
+            #expect(text.contains("[QR https://shop.tw/q?no="))
+            for line in text.split(separator: "\n") { #expect(TextWidth.of(String(line)) <= w.columns, "\(w) \(line)") }
+            let big = r.blocks.compactMap { b -> Int? in if case .text("1000", let st) = b { st.scale } else { nil } }
+            #expect(big == [w == .mm58 ? 4 : 6])
+        }
+        let plain = Templates.queueTicket(number: 7, waiting: 0, storeName: "晨麥手作", at: at, link: nil, waitingText: "前面還有 0 位")
+        #expect(!plain.blocks.contains { if case .qr = $0 { true } else { false } })
+        #expect(plain.plainText(width: .mm58).contains("前面還有 0 位"))
+        #expect(plain.blocks.last == .cut)
+    }
 }

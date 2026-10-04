@@ -218,6 +218,29 @@ public enum Templates {
         return r
     }
 
+    // MARK: 號碼牌（叫號）
+
+    /// 號碼牌的文字版：店名、很大的號碼、「目前 N 人等候中」、時間、看叫號進度的 QR Code（客人的網址）。
+    /// iPad 平常照後台的版面畫成點陣圖印（和樹莓派印的一樣）；這一份是出單機只能印文字時的備案，也是「最近列印」裡看得到的內容。
+    /// 號碼放到最大：58 mm 一列 32 格 → 4 倍（8 格）；80 mm 48 格 → 6 倍（8 格），四位數也放得下
+    public static func queueTicket(number: Int, waiting: Int, storeName: String, at: Date, link: String?, paper: PaperWidth = .mm58,
+                                   waitingText: String? = nil) -> Receipt {
+        var r = Receipt()
+        r.add(.text(storeName, .title))
+        r.add(.text("你的號碼", ReceiptStyle(align: .center, bold: true)))
+        r.add(.text(String(number), ReceiptStyle(align: .center, bold: true, scale: paper == .mm58 ? 4 : 6)))
+        r.add(.text(waitingText ?? "目前 \(waiting) 人等候中", ReceiptStyle(align: .center, bold: true)))
+        r.add(.text(TaipeiTime.dayString(at) + " " + TaipeiTime.clock(at), .center))
+        if let link, !link.isEmpty {
+            r.add(.feed(1))
+            r.add(.text("掃描看現在叫到幾號", .center))
+            r.add(.qr(link))
+        }
+        r.add(.feed(1))
+        r.add(.cut)
+        return r
+    }
+
     // MARK: 電子發票證明聯（文字模式的備案）
 
     /// 出單機不能印點陣圖時的備案：條碼與 QR Code 用出單機自己的指令，兩個 QR Code 上下排（正式的證明聯請用 App 畫的點陣圖：左右並排）

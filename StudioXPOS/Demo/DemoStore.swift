@@ -218,14 +218,16 @@ struct DemoStore {
                 defaultOrderType: .dineIn, tableTimeLimitMinutes: 90, businessDayCutoffHour: 4, discountLimitBps: 1000,
                 serviceModes: [.tableService, .counter, .cafe], defaultServiceMode: .tableService
             ),
-            // 餐飲：沒有預約表、儲值與課程卡、抽成（會員只查電話、累積消費）
+            // 餐飲：沒有預約表、儲值與課程卡、抽成（會員只查電話、累積消費）；有叫號（號碼牌）
             features: FeatureFlags(seating: true, kitchen: true, reservations: true, invoice: true, members: true, waitlistSMS: true,
-                                   appointments: false, accounts: false, commission: false),
+                                   appointments: false, accounts: false, commission: false, queue: true),
             catalog: Self.catalog,
             floor: Self.floor,
             staff: Self.staff,
             invoice: invoice,
-            mesh: MeshConfig(key: String(repeating: "5d", count: 32), enabled: false)
+            mesh: MeshConfig(key: String(repeating: "5d", count: 32), enabled: false),
+            // 號碼存在示範的「後台」（DemoQueue）；號碼牌用 iPad 的預設版面（沒有背景圖）
+            queue: QueueConfig(mode: DemoQueue.mode, customerUrl: "https://chenmai.example.tw/q?no={number}&waiting={waiting}", ticket: QueueTicketLayout())
         )
     }
 
@@ -506,6 +508,8 @@ actor DemoAPI: POSAPI {
     /// 開幕到昨天的歷史（要哪天才產生，產生過的記著）
     private let past: DemoHistory?
     private var pastDays: [String: DayHistory] = [:]
+    /// 叫號（後台開了才有）：號碼存在這裡，每 20 秒左右有人自己取號
+    private var line: DemoQueue?
 
     init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil) {
         base = bootstrap
@@ -514,6 +518,7 @@ actor DemoAPI: POSAPI {
         timetable = classes
         today = TaipeiTime.businessDate(bootstrap.serverTime, cutoffHour: bootstrap.store.businessDayCutoffHour)
         past = history
+        line = bootstrap.features.queue ? DemoQueue(now: bootstrap.serverTime) : nil
     }
 
     func bootstrap(ifNoneMatch version: String?) async throws -> Bootstrap {
@@ -629,6 +634,49 @@ actor DemoAPI: POSAPI {
         return day
     }
 
+    // MARK: 叫號
+
+    func queue() async throws -> QueueState {
+        guard var q = line else { throw APIError.http(status: 409, code: "queue_off", message: "後台沒有開叫號") }
+        let now = Date()
+        q.tick(now: now)
+        line = q
+        return q.state(now: now)
+    }
+
+    func queue(_ action: QueueAction) async throws -> QueueState {
+        guard var q = line else { throw APIError.http(status: 409, code: "queue_off", message: "後台沒有開叫號") }
+        let now = Date()
+        q.tick(now: now)
+        var numbers: [Int]?
+        switch action {
+        case .take(let count, let requestId):
+            numbers = q.take(count: count, requestId: requestId, at: now)
+        case .next:
+            q.next(at: now)
+        case .miss:
+            q.miss(at: now)
+        case .previous:
+            guard q.current != nil else { throw APIError.http(status: 400, code: "nothing_called", message: "現在沒有在叫號") }
+            q.previous()
+        case .recall(let n):
+            guard q.missed.contains(n) else { throw APIError.http(status: 404, code: "not_found", message: "\(n) 號不在過號清單裡") }
+            q.recall(n, at: now)
+        case .unmiss(let n):
+            q.unmiss(n)
+        case .mark(let n):
+            if !q.marked.contains(n) { q.marked.append(n) }
+        case .unmark(let n):
+            q.marked.removeAll { $0 == n }
+        case .reset:
+            q.reset(at: now)
+        }
+        line = q
+        var s = q.state(now: now)
+        s.numbers = numbers
+        return s
+    }
+
     // MARK: 課表
 
     /// 今天的課表；別天照同一張表（以前的照原本的人數，之後的越後面報名的人越少）
@@ -656,6 +704,145 @@ actor DemoAPI: POSAPI {
         let parts = s.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }
         return TaipeiTime.calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12))
+    }
+}
+
+/// 示範店的叫號（晨麥手作）：和原本的叫號伺服器一樣的規則（取號加到最後、下一號、過號自動叫下一號、
+/// 返回前一號放回最前面、號碼到 1000 從 1 開始），另外記取號、叫號的時間，所以畫面上看得到等了幾分、今天服務幾位。
+/// 一打開：今天服務了 22 位，現在叫到 23，24–31 在等（26 標了星號），19、21 過號；之後每 20 秒左右有人取號（最多排 14 位）
+nonisolated struct DemoQueue: Sendable {
+    /// 示範用後台自己的號碼（看得到等候時間、今天的數字、過號可以再叫一次）；改成 .legacy 就是原本叫號伺服器的樣子
+    static let mode: QueueMode = .native
+
+    var current: Int?
+    var waiting: [Int]
+    var missed: [Int]
+    var marked: [Int]
+    var nextNo: Int
+    var calledAt: Date?
+    var takenAt: [Int: Date]
+    var served: Int
+    /// 上一次有人自己取號
+    var lastAuto: Date
+    /// 取號的 requestId（重送不再取）
+    var requests: [String: [Int]] = [:]
+    var rng = SeededRandom(seed: 2310)
+
+    init(now: Date) {
+        current = 23
+        calledAt = now.addingTimeInterval(-70)
+        waiting = Array(24...31)
+        missed = [19, 21]
+        marked = [26]
+        nextNo = 32
+        served = 22
+        lastAuto = now
+        let minutesAgo = [17, 15, 12, 10, 8, 5, 3, 1]
+        var taken: [Int: Date] = [:]
+        for (n, m) in zip(waiting, minutesAgo) { taken[n] = now.addingTimeInterval(TimeInterval(-m * 60 - 20)) }
+        takenAt = taken
+    }
+
+    /// 店裡有客人：每 16–24 秒有人取一張（排太長就先不取）
+    mutating func tick(now: Date) {
+        while now.timeIntervalSince(lastAuto) >= 20 {
+            lastAuto = lastAuto.addingTimeInterval(TimeInterval(16 + rng.next(9)))
+            if waiting.count < 14 { append(1, at: lastAuto) }
+        }
+    }
+
+    mutating func take(count: Int, requestId: String, at now: Date) -> [Int] {
+        if let done = requests[requestId] { return done }
+        let numbers = append(min(max(count, 1), 20), at: now)
+        requests[requestId] = numbers
+        return numbers
+    }
+
+    @discardableResult
+    private mutating func append(_ count: Int, at now: Date) -> [Int] {
+        var out: [Int] = []
+        for _ in 0..<count {
+            out.append(nextNo)
+            waiting.append(nextNo)
+            takenAt[nextNo] = now
+            nextNo = nextNo >= 999 ? 1 : nextNo + 1
+        }
+        return out
+    }
+
+    /// 下一號：原本叫的算服務完了（取消標記）；沒有人在等就清掉
+    mutating func next(at now: Date) {
+        finishCurrent()
+        callFirst(at: now)
+    }
+
+    /// 過號：現在叫的移到過號，自動叫下一號
+    mutating func miss(at now: Date) {
+        guard let c = current else { return }
+        missed.append(c)
+        current = nil
+        calledAt = nil
+        callFirst(at: now)
+    }
+
+    /// 返回前一號：現在叫的放回等候的最前面
+    mutating func previous() {
+        guard let c = current else { return }
+        waiting.insert(c, at: 0)
+        missed.removeAll { $0 == c }
+        takenAt[c] = takenAt[c] ?? Date()
+        current = nil
+        calledAt = nil
+    }
+
+    /// 再叫一次過號的
+    mutating func recall(_ n: Int, at now: Date) {
+        finishCurrent()
+        missed.removeAll { $0 == n }
+        current = n
+        calledAt = now
+    }
+
+    mutating func unmiss(_ n: Int) {
+        missed.removeAll { $0 == n }
+        marked.removeAll { $0 == n }
+    }
+
+    mutating func reset(at now: Date) {
+        current = nil
+        calledAt = nil
+        waiting = []
+        missed = []
+        marked = []
+        takenAt = [:]
+        nextNo = 1
+        served = 0
+        lastAuto = now
+    }
+
+    private mutating func finishCurrent() {
+        guard let c = current else { return }
+        served += 1
+        marked.removeAll { $0 == c }
+    }
+
+    private mutating func callFirst(at now: Date) {
+        if waiting.isEmpty {
+            current = nil
+            calledAt = nil
+        } else {
+            let n = waiting.removeFirst()
+            current = n
+            calledAt = now
+        }
+    }
+
+    func state(now: Date) -> QueueState {
+        let native = Self.mode == .native
+        var taken: [String: Date] = [:]
+        if native { for n in waiting { if let at = takenAt[n] { taken[String(n)] = at } } }
+        return QueueState(mode: Self.mode, current: current, waiting: waiting, missed: missed, marked: marked, nextNo: nextNo,
+                          calledAt: native ? calledAt : nil, updatedAt: now, takenAt: taken, servedToday: native ? served : nil)
     }
 }
 

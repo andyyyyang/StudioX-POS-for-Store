@@ -327,6 +327,12 @@ extension KeypadSpec {
     /// 會員電話或會員編號（健身房報到：打電話號碼或掃會員卡）
     public static let memberCode = KeypadSpec(kind: .code(minLength: 4, maxLength: 10), title: "會員", subtitle: "手機號碼或會員卡號", confirmLabel: "查詢")
 
+    /// 叫號：一次取幾張號碼牌（1–20；舊的 iPad App 長按取號也是 1–20）
+    public static func queueTickets() -> KeypadSpec {
+        KeypadSpec(kind: .count, title: "取幾張", subtitle: "一次取 1–20 張，號碼連續", quickKeys: [2, 3, 4, 5].map { QuickKey("\($0) 張", digits: String($0)) },
+                   confirmLabel: "取號", maxValue: 20, minValue: 1)
+    }
+
     public static func partySize() -> KeypadSpec {
         KeypadSpec(kind: .count, title: "幾位", quickKeys: [2, 3, 4, 5, 6].map { QuickKey("\($0) 位", digits: String($0)) }, confirmLabel: "下一步", maxValue: 99, minValue: 1)
     }
