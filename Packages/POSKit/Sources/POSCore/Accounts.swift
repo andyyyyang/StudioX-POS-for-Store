@@ -310,7 +310,7 @@ public struct AccountEntry: Codable, Sendable, Hashable {
 }
 
 extension TaipeiTime {
-    /// 從 date 那天（台北）算起第 days 天的結束：30 天的月卡 10/4 買 → 11/3 23:59:59 到期（存成 11/4 00:00）
+    /// 從 date 那天（台北）00:00 算起 days 天後的 00:00：30 天的月卡 10/4 買 → 10/4–11/2 這 30 天能用，存成 11/3 00:00 到期
     public static func endOfDay(_ date: Date, plusDays days: Int) -> Date {
         let cal = calendar
         let start = cal.startOfDay(for: date)
