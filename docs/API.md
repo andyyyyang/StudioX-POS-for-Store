@@ -48,7 +48,7 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 |---|---|
 | `version` | 設定的版本（菜單、桌位、人員、店家設定、號碼段任一個改了就變） |
 | `device` | 這台：`id, name, code, role, stations` |
-| `store` | `StoreProfile`：店名、統編、地址、服務費、營業日分界、折扣上限、找零快速鍵… |
+| `store` | `StoreProfile`：店名、統編、地址、服務費、營業日分界、折扣上限、找零快速鍵、`serviceModes`（開了哪些營業模式：`tableService`／`counter`／`retail`／`cafe`）與 `defaultServiceMode`。少給的欄位 iPad 用預設值 |
 | `features` | 開了哪些功能：`seating, kitchen, reservations, invoice, members, waitlistSMS` |
 | `catalog` | `categories`（`swatch` 是色塊名稱）、`items`（只給上架的；`isAvailable=false` 是今天賣完）、`modifierGroups` |
 | `floor` | `areas[].tables[]`，座標是 0–100 的格子 |
