@@ -223,7 +223,7 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 
 預約服務（美業、私人教練）與團體課報名也走這組 API：
 - `kind`：`reservation`（訂位）、`waitlist`（候位）、`appointment`（預約服務）、`classBooking`（團體課報名）
-- 選填：`staffId`（指定的設計師、教練）、`services[]`（`itemId, name, durationMinutes, staffId?, price?`）、`memberId`、`sessionId`（團體課）、`ticketId`（到店後開的單）
+- 選填：`staffId`（指定的設計師、教練；`PATCH` 時送 `""`＝改回不指定）、`services[]`（`itemId, name, durationMinutes, staffId?, price?`）、`memberId`、`sessionId`（團體課）、`ticketId`（到店後開的單）
 - `GET /classes?date=2026-10-04` → `{ "classes": [ { id, name, staffId, startsAt, durationMinutes, capacity, booked, room, itemId, dropInPrice, note } ] }`（後台「課表」排的；`booked` 不含取消）
 
 ## 歷史
