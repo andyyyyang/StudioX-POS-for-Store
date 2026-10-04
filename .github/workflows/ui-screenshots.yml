@@ -196,10 +196,21 @@ jobs:
           limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
           limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
           limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
-          ( limit 90 xcrun simctl launch --console-pty "$dev" "$bundle" -demo cafe -autologin 1234 -section order -printerLab 127.0.0.1 > prints/app.log 2>&1 ) &
-          for i in $(seq 1 80); do grep -q "PrinterLab: done" prints/app.log 2>/dev/null && break; sleep 1; done
+          # 開機後第一次啟動偶爾卡住（App 根本沒開、什麼都沒印）：45 秒還沒開始印就關掉重開一次
+          launch() {
+            limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
+            ( limit 110 xcrun simctl launch --console-pty "$dev" "$bundle" -demo cafe -autologin 1234 -section order -printerLab 127.0.0.1 > "prints/app-$1.log" 2>&1 ) &
+            for i in $(seq 1 100); do
+              grep -q "PrinterLab: done" "prints/app-$1.log" 2>/dev/null && return 0
+              if [ "$i" -ge 45 ] && ! grep -q "PrinterLab" "prints/app-$1.log" 2>/dev/null; then return 1; fi
+              sleep 1
+            done
+            return 1
+          }
           sleep 5
-          echo "== App"; grep "PrinterLab" prints/app.log || tail -40 prints/app.log
+          launch 1 || { echo "第一次沒開始印：重開"; launch 2 || true; }
+          sleep 5
+          for f in prints/app-*.log; do echo "== $f"; grep "PrinterLab" "$f" || tail -40 "$f"; done
           for f in prints/58.log prints/80.log prints/80-raster.log; do echo "== $f"; cat "$f"; done
           limit 60 xcrun simctl shutdown "$dev" || true
 
