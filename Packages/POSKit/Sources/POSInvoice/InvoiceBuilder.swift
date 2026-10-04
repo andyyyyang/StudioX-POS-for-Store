@@ -37,46 +37,94 @@ public enum InvoiceError: Error, Equatable, Sendable {
 
 /// 單子 → 電子發票
 public enum InvoiceBuilder {
-    /// 發票品項：每一行照原價列，折扣、服務費各一行（加起來剛好等於總計）。
-    /// 品名帶加料（「珍珠奶茶（半糖・少冰）」）；超過 256 字截掉（MIG 的長度上限）
-    public static func items(for ticket: Ticket) -> [EInvoiceItem] {
+    /// 這張單哪些行不開發票、金額要扣多少（儲值金、課程卡）
+    public struct Coverage: Sendable, Hashable {
+        /// 不開發票的行（消費時才開的儲值、用課程卡抵的）
+        public var excludedLineIds: Set<String>
+        /// 不開發票的行的實收
+        public var excludedNet: Money
+        /// 用已經開過發票的儲值金付的（儲值時開發票）：發票上列一行「儲值金扣抵」
+        public var prepaidDeduction: Money
+        /// 這張發票的金額
+        public var amount: Money
+    }
+
+    /// 發票要開多少：
+    ///   儲值時開（atTopUp）：儲值那一行照常開；之後用儲值金付的那部分扣掉（之前開過了）
+    ///   消費時開（atRedemption）：儲值那一行不開；用儲值金付的照常開
+    ///   用課程卡抵的行金額是 0，不列
+    public static func coverage(for ticket: Ticket, prepaid: PrepaidInvoicing = .atTopUp) -> Coverage {
         let totals = ticket.totals
+        var excluded = Set<String>()
+        var excludedNet = Money.zero
+        for l in ticket.activeLines {
+            let net = totals.lines.first { $0.lineId == l.id }?.net ?? l.gross
+            if l.redeem != nil || (prepaid == .atRedemption && l.itemKind == .storedValue) {
+                excluded.insert(l.id)
+                excludedNet += net
+            }
+        }
+        let base = totals.total - excludedNet
+        var deduction = Money.zero
+        if prepaid == .atTopUp {
+            let used = Money.sum(ticket.approvedPayments.filter { $0.tender == .prepaid }.map(\.amount))
+            deduction = min(used, max(base, .zero))
+        }
+        return Coverage(excludedLineIds: excluded, excludedNet: excludedNet, prepaidDeduction: deduction, amount: max(base - deduction, .zero))
+    }
+
+    /// 發票品項：每一行照原價列，折扣、服務費各一行（加起來剛好等於總計）。
+    /// 品名帶規格與加料（「直筒褲 黑・M」「珍珠奶茶（半糖・少冰）」）；超過 256 字截掉（MIG 的長度上限）
+    public static func items(for ticket: Ticket, prepaid: PrepaidInvoicing = .atTopUp) -> [EInvoiceItem] {
+        let totals = ticket.totals
+        let cover = coverage(for: ticket, prepaid: prepaid)
         var out: [EInvoiceItem] = []
         var seq = 1
-        for line in ticket.activeLines {
-            let name = line.modifiers.isEmpty ? line.name : "\(line.name)（\(line.modifierText)）"
+        var discount = Money.zero
+        for line in ticket.activeLines where !cover.excludedLineIds.contains(line.id) {
+            let base = line.displayName
+            let name = line.modifiers.isEmpty ? base : "\(base)（\(line.modifierText)）"
             out.append(EInvoiceItem(sequence: seq, description: String(name.prefix(256)), quantity: line.quantity,
                                     unitPrice: line.unitTotal, amount: line.gross, taxKind: line.taxKind))
             seq += 1
+            if let a = totals.lines.first(where: { $0.lineId == line.id }) { discount += a.lineDiscount + a.orderDiscountShare }
         }
-        if totals.discountTotal.cents > 0 {
+        if discount.cents > 0 {
             let reason = ticket.discount?.reason.isEmpty == false ? "折扣（\(ticket.discount!.reason)）" : "折扣"
-            out.append(EInvoiceItem(sequence: seq, description: reason, quantity: 1, unitPrice: -totals.discountTotal, amount: -totals.discountTotal))
+            out.append(EInvoiceItem(sequence: seq, description: reason, quantity: 1, unitPrice: -discount, amount: -discount))
             seq += 1
         }
         if totals.serviceCharge.cents > 0 {
             out.append(EInvoiceItem(sequence: seq, description: "服務費", quantity: 1, unitPrice: totals.serviceCharge, amount: totals.serviceCharge))
+            seq += 1
+        }
+        if cover.prepaidDeduction.cents > 0 {
+            out.append(EInvoiceItem(sequence: seq, description: "儲值金扣抵（儲值時已開立）", quantity: 1,
+                                    unitPrice: -cover.prepaidDeduction, amount: -cover.prepaidDeduction))
         }
         return out
     }
 
     /// 開一張發票（還沒存、還沒印）。號碼由 allocator 給；呼叫的人要先把 invoiceIssued 事件寫進日誌再印
     public static func issue(ticket: Ticket, settings: InvoiceSettings, allocator: InvoiceAllocator, deviceId: String,
-                             at date: Date, randomCode: String = InvoiceBuilder.randomCode()) throws -> EInvoice {
+                             at date: Date, randomCode: String = InvoiceBuilder.randomCode(), prepaid: PrepaidInvoicing = .atTopUp) throws -> EInvoice {
         if let p = settings.problem { throw InvoiceError.notConfigured(p) }
         if let p = ticket.invoiceBuyer.problem { throw InvoiceError.invalidBuyer(p) }
         let totals = ticket.totals
-        guard totals.total.cents > 0 else { throw InvoiceError.nothingToInvoice }
+        let cover = coverage(for: ticket, prepaid: prepaid)
+        guard cover.amount.cents > 0 else { throw InvoiceError.nothingToInvoice }
         let period = InvoicePeriod(date: date)
         guard let (number, roll) = allocator.next(period: period) else { throw InvoiceError.noNumbers(period: period.code) }
 
-        let items = items(for: ticket)
+        let items = items(for: ticket, prepaid: prepaid)
         // 課稅別：餐飲幾乎都是應稅；有零稅率／免稅品項時分開加總、TaxType = 9（混合）
-        let byKind = Dictionary(grouping: ticket.activeLines, by: \.taxKind)
+        let invoiced = ticket.activeLines.filter { !cover.excludedLineIds.contains($0.id) }
+        let byKind = Dictionary(grouping: invoiced, by: \.taxKind)
         let kinds = Set(byKind.keys)
         let zero = Money.sum((byKind[.zeroRated] ?? []).map { l in totals.lines.first { $0.lineId == l.id }?.net ?? l.gross })
         let free = Money.sum((byKind[.exempt] ?? []).map { l in totals.lines.first { $0.lineId == l.id }?.net ?? l.gross })
-        let taxableInclusive = totals.total - zero - free
+        // 儲值金扣抵從應稅的部分扣（儲值本身是應稅）
+        let taxableInclusive = cover.amount - zero - free
         let taxType = kinds.count > 1 ? 9 : (kinds.first ?? .taxable).rawValue
 
         let buyerTaxId = ticket.invoiceBuyer.buyerTaxId
@@ -95,7 +143,7 @@ public enum InvoiceBuilder {
             number: number, randomCode: randomCode, period: period.code, issuedAt: date,
             sellerTaxId: settings.sellerTaxId, sellerName: settings.sellerName, sellerAddress: settings.sellerAddress,
             buyer: ticket.invoiceBuyer, buyerName: buyerName, items: items, salesAmount: sales,
-            zeroTaxSalesAmount: zero, freeTaxSalesAmount: free, taxAmount: tax, totalAmount: totals.total,
+            zeroTaxSalesAmount: zero, freeTaxSalesAmount: free, taxAmount: tax, totalAmount: cover.amount,
             taxType: taxType, taxRateBps: Tax.standardRateBps, printed: ticket.invoiceBuyer.printsProof,
             ticketId: ticket.id, deviceId: deviceId, rollId: roll.id
         )
@@ -109,13 +157,14 @@ public enum InvoiceBuilder {
 
     /// 折讓單（部分退款、跨期退款）
     public static func allowance(for invoice: EInvoice, refund: Refund, ticket: Ticket, number: String, at date: Date) -> EInvoiceAllowance {
-        let refundTotal = refund.amount.roundedToDollar()
+        // 折讓不能超過發票金額（用儲值金、課程卡付的部分本來就不在這張發票上）
+        let refundTotal = min(refund.amount.roundedToDollar(), invoice.totalAmount)
         var items: [EInvoiceItem] = []
         if refund.lines.isEmpty {
             items = [EInvoiceItem(sequence: 1, description: "退貨折讓", quantity: 1, unitPrice: refundTotal, amount: refundTotal)]
         } else {
             for (i, rl) in refund.lines.enumerated() {
-                let name = ticket.lines.first { $0.id == rl.lineId }?.name ?? "品項"
+                let name = ticket.lines.first { $0.id == rl.lineId }?.displayName ?? "品項"
                 let unit = rl.quantity > 0 ? Money(dollars: Int((Double(rl.amount.dollars) / Double(rl.quantity)).rounded())) : rl.amount
                 items.append(EInvoiceItem(sequence: i + 1, description: name, quantity: rl.quantity, unitPrice: unit, amount: rl.amount))
             }

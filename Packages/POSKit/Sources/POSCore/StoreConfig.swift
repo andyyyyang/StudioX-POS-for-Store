@@ -13,7 +13,10 @@ public enum OrderType: String, Codable, Sendable, CaseIterable, Hashable {
     }
 }
 
-/// 營業模式：同一套 POS 用在不同的店、不同的時段（每台 iPad 可以切換）
+/// 營業模式：同一套 POS 用在不同的店、不同的時段（每台 iPad 可以切換）。
+///
+/// 模式只決定「流程」：先結帳還是後結帳、開哪個畫面、要不要桌位與廚房、業績算給誰。
+/// 底下的單子、付款、發票、事件、同步每個模式都一樣，所以一家店可以同時有好幾種（健身房的櫃台賣飲料＝櫃台點餐）。
 public enum ServiceMode: String, Codable, Sendable, CaseIterable, Hashable {
     /// 餐廳桌邊：帶位 → 點餐 → 送廚房 → 吃完再結帳
     case tableService
@@ -23,6 +26,12 @@ public enum ServiceMode: String, Codable, Sendable, CaseIterable, Hashable {
     case retail
     /// 咖啡甜點：內用外帶都有，點完先結帳、內用送到桌
     case cafe
+    /// 服飾配件（衣服、鞋包、選物）：款式選顏色尺寸、掃吊牌條碼、換貨、業績算給店員
+    case apparel
+    /// 美業預約（髮廊、美甲、美容、寵物美容）：照設計師排預約、到店開單、做完再結帳；儲值金與療程卡
+    case salon
+    /// 會員課程（健身房、瑜珈、舞蹈、才藝教室）：入場報到、會籍與堂數、課表與私人教練
+    case fitness
 
     public var label: String {
         switch self {
@@ -30,6 +39,9 @@ public enum ServiceMode: String, Codable, Sendable, CaseIterable, Hashable {
         case .counter: "櫃台點餐"
         case .retail: "零售攤位"
         case .cafe: "咖啡甜點"
+        case .apparel: "服飾零售"
+        case .salon: "美業預約"
+        case .fitness: "會員課程"
         }
     }
 
@@ -39,23 +51,95 @@ public enum ServiceMode: String, Codable, Sendable, CaseIterable, Hashable {
         case .counter: "點完先結帳，印取餐號碼、出餐叫號"
         case .retail: "掃條碼或點品項就結帳，不出廚房單"
         case .cafe: "內用外帶都有，先結帳、內用送到桌"
+        case .apparel: "選顏色尺寸、掃吊牌，換貨退貨，業績算給店員"
+        case .salon: "照設計師排預約，到店開單、做完結帳，儲值與療程卡"
+        case .fitness: "入場報到、會籍與堂數，課表與私人教練"
         }
     }
 
-    /// 先結帳才送廚房（櫃台、咖啡、零售）
-    public var payFirst: Bool { self != .tableService }
+    /// 例子（設定畫面、後台選模式時的說明）
+    public var examples: String {
+        switch self {
+        case .tableService: "餐廳、火鍋、居酒屋"
+        case .counter: "手搖飲、早餐、便當、小吃"
+        case .retail: "市集攤位、伴手禮、書店、雜貨"
+        case .cafe: "咖啡廳、甜點店、麵包店"
+        case .apparel: "服飾、鞋包、配件、選物店"
+        case .salon: "髮廊、美甲、美睫、美容、寵物美容"
+        case .fitness: "健身房、瑜珈、舞蹈、拳擊、才藝教室"
+        }
+    }
+
+    /// 先結帳才送廚房／才服務（櫃台、咖啡、零售、服飾、課程）；餐廳與美業是做完再結帳
+    public var payFirst: Bool { self != .tableService && self != .salon }
     /// 用桌位圖
     public var usesTables: Bool { self == .tableService || self == .cafe }
     /// 有廚房出單
-    public var usesKitchen: Bool { self != .retail }
+    public var usesKitchen: Bool { self == .tableService || self == .counter || self == .cafe }
     /// 收據上印大大的取餐號碼
     public var printsPickupNumber: Bool { self == .counter || self == .cafe }
+    /// 單子、收據上顯示內用／外帶（服飾、美業、課程沒有這回事）
+    public var showsOrderType: Bool { self == .tableService || self == .counter || self == .cafe }
+    /// 預約表（照服務人員排時段）
+    public var usesAppointments: Bool { self == .salon || self == .fitness }
+    /// 團體課的課表
+    public var usesClasses: Bool { self == .fitness }
+    /// 入場報到（掃會員、扣堂數）
+    public var usesCheckIn: Bool { self == .fitness }
+    /// 換貨（同款換尺寸、換別的商品補差價）
+    public var usesExchanges: Bool { self == .retail || self == .apparel }
+    /// 每一行可以指定服務人員（設計師、教練）：業績、抽成照行算
+    public var staffPerLine: Bool { self == .salon || self == .fitness }
+    /// 整張單算給一位店員（服飾的銷售業績）
+    public var staffPerTicket: Bool { self == .apparel }
+    /// 單子一定要有客人（美業做完要記在客人的紀錄上；課程要扣會員的堂數）
+    public var wantsCustomer: Bool { self == .salon || self == .fitness }
 
-    /// 新單的用餐方式
+    /// 服務人員的稱呼
+    public var staffTitle: String {
+        switch self {
+        case .salon: "設計師"
+        case .fitness: "教練"
+        case .apparel: "銷售人員"
+        default: "服務人員"
+        }
+    }
+
+    /// 新單的用餐方式（服飾、美業、課程用「外帶」：不收內用服務費，畫面上也不顯示）
     public var defaultOrderType: OrderType {
         switch self {
         case .tableService, .cafe: .dineIn
-        case .counter, .retail: .takeout
+        case .counter, .retail, .apparel, .salon, .fitness: .takeout
+        }
+    }
+
+    /// 登入後先看哪個畫面
+    public var home: ModeHome {
+        switch self {
+        case .tableService: .floor
+        case .salon: .appointments
+        case .fitness: .checkIn
+        case .counter, .retail, .cafe, .apparel: .order
+        }
+    }
+}
+
+/// 模式的首頁（App 對到自己的分頁）
+public enum ModeHome: String, Sendable, Hashable {
+    case order, floor, appointments, checkIn
+}
+
+/// 儲值金的發票什麼時候開
+public enum PrepaidInvoicing: String, Codable, Sendable, Hashable, CaseIterable {
+    /// 儲值（收錢）時開；之後用儲值金付的部分不再開（台灣美業、健身多半這樣：預收款收款時開立）
+    case atTopUp
+    /// 消費時才開；儲值時不開（像「現金禮券」：只寫金額、憑券兌換時開立）
+    case atRedemption
+
+    public var label: String {
+        switch self {
+        case .atTopUp: "儲值時開發票"
+        case .atRedemption: "消費時開發票"
         }
     }
 }
@@ -92,6 +176,12 @@ public struct StoreProfile: Codable, Sendable, Hashable {
     /// 這家店開了哪些營業模式（每台 iPad 在這幾個裡面切換）
     public var serviceModes: [ServiceMode]
     public var defaultServiceMode: ServiceMode
+    /// 儲值金的發票什麼時候開
+    public var prepaidInvoicing: PrepaidInvoicing
+    /// 幾天內可以換貨（0 = 不限）
+    public var exchangeDays: Int
+    /// 預約表一格幾分鐘
+    public var bookingSlotMinutes: Int
 
     public init(
         name: String, legalName: String = "", taxId: String = "", address: String = "", phone: String = "",
@@ -99,7 +189,8 @@ public struct StoreProfile: Codable, Sendable, Hashable {
         tipsEnabled: Bool = false, defaultOrderType: OrderType = .dineIn, tableTimeLimitMinutes: Int = 0,
         businessDayCutoffHour: Int = 4, discountLimitBps: Int = 1000, discountPresetsBps: [Int] = [500, 1000, 1500, 2000],
         cashQuickAmounts: [Money] = [Money(dollars: 100), Money(dollars: 500), Money(dollars: 1000)],
-        serviceModes: [ServiceMode] = ServiceMode.allCases, defaultServiceMode: ServiceMode = .tableService
+        serviceModes: [ServiceMode] = ServiceMode.allCases, defaultServiceMode: ServiceMode = .tableService,
+        prepaidInvoicing: PrepaidInvoicing = .atTopUp, exchangeDays: Int = 7, bookingSlotMinutes: Int = 15
     ) {
         self.name = name; self.legalName = legalName; self.taxId = taxId; self.address = address; self.phone = phone
         self.receiptFooter = receiptFooter; self.serviceChargeBps = serviceChargeBps; self.serviceChargeOn = serviceChargeOn
@@ -108,6 +199,7 @@ public struct StoreProfile: Codable, Sendable, Hashable {
         self.discountPresetsBps = discountPresetsBps; self.cashQuickAmounts = cashQuickAmounts
         self.serviceModes = serviceModes.isEmpty ? ServiceMode.allCases : serviceModes
         self.defaultServiceMode = defaultServiceMode
+        self.prepaidInvoicing = prepaidInvoicing; self.exchangeDays = exchangeDays; self.bookingSlotMinutes = bookingSlotMinutes
     }
 
     public func serviceChargeBps(for type: OrderType) -> Int { serviceChargeOn.contains(type) ? serviceChargeBps : 0 }
@@ -116,6 +208,7 @@ public struct StoreProfile: Codable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey {
         case name, legalName, taxId, address, phone, receiptFooter, serviceChargeBps, serviceChargeOn, tipsEnabled, defaultOrderType
         case tableTimeLimitMinutes, businessDayCutoffHour, discountLimitBps, discountPresetsBps, cashQuickAmounts, serviceModes, defaultServiceMode
+        case prepaidInvoicing, exchangeDays, bookingSlotMinutes
     }
 
     public init(from decoder: Decoder) throws {
@@ -144,6 +237,10 @@ public struct StoreProfile: Codable, Sendable, Hashable {
         let rawDefault = try c.decodeIfPresent(String.self, forKey: .defaultServiceMode)
         let wanted = rawDefault.flatMap(ServiceMode.init(rawValue:))
         defaultServiceMode = wanted.flatMap { modes.contains($0) ? $0 : nil } ?? modes[0]
+        let rawInvoicing = try c.decodeIfPresent(String.self, forKey: .prepaidInvoicing)
+        prepaidInvoicing = rawInvoicing.flatMap(PrepaidInvoicing.init(rawValue:)) ?? d.prepaidInvoicing
+        exchangeDays = try c.decodeIfPresent(Int.self, forKey: .exchangeDays) ?? d.exchangeDays
+        bookingSlotMinutes = max(5, try c.decodeIfPresent(Int.self, forKey: .bookingSlotMinutes) ?? d.bookingSlotMinutes)
     }
 }
 
@@ -161,15 +258,23 @@ public struct FeatureFlags: Codable, Sendable, Hashable {
     public var members: Bool
     /// 候位叫號簡訊（要有「簡訊」服務）
     public var waitlistSMS: Bool
+    /// 預約表（美業的設計師、健身的私人教練）與團體課
+    public var appointments: Bool
+    /// 會員的儲值金、課程卡、會籍（要後台支援；舊版後台沒有就關）
+    public var accounts: Bool
+    /// 業績與抽成報表
+    public var commission: Bool
 
-    public init(seating: Bool = true, kitchen: Bool = true, reservations: Bool = true, invoice: Bool = true, members: Bool = true, waitlistSMS: Bool = false) {
+    public init(seating: Bool = true, kitchen: Bool = true, reservations: Bool = true, invoice: Bool = true, members: Bool = true, waitlistSMS: Bool = false,
+                appointments: Bool = true, accounts: Bool = true, commission: Bool = true) {
         self.seating = seating; self.kitchen = kitchen; self.reservations = reservations; self.invoice = invoice
         self.members = members; self.waitlistSMS = waitlistSMS
+        self.appointments = appointments; self.accounts = accounts; self.commission = commission
     }
 
     public static let all = FeatureFlags()
 
-    enum CodingKeys: String, CodingKey { case seating, kitchen, reservations, invoice, members, waitlistSMS }
+    enum CodingKeys: String, CodingKey { case seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -179,6 +284,10 @@ public struct FeatureFlags: Codable, Sendable, Hashable {
         invoice = try c.decodeIfPresent(Bool.self, forKey: .invoice) ?? false
         members = try c.decodeIfPresent(Bool.self, forKey: .members) ?? true
         waitlistSMS = try c.decodeIfPresent(Bool.self, forKey: .waitlistSMS) ?? false
+        // 後台沒說就是沒有（這些要後台有對應的資料表）
+        appointments = try c.decodeIfPresent(Bool.self, forKey: .appointments) ?? false
+        accounts = try c.decodeIfPresent(Bool.self, forKey: .accounts) ?? false
+        commission = try c.decodeIfPresent(Bool.self, forKey: .commission) ?? false
     }
 }
 

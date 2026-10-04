@@ -171,15 +171,66 @@ public struct Member: Codable, Sendable, Hashable {
     public var lifetimeSpend: Money
     public var visits: Int
     public var lastVisitAt: Date?
-    /// 店家看得到的備註（過敏、偏好）
+    /// 店家看得到的備註（過敏、偏好、染髮配方）
     public var note: String?
+    /// 儲值金餘額（後台算到 accountEventIds 為止；features.accounts 開的店才有）
+    public var wallet: Money?
+    /// 課程卡、會籍（含用完、過期的最近幾張）
+    public var passes: [MemberPass]?
+    /// 後台的餘額已經算進去的 POS 事件 id（最近 7 天）：iPad 再補上不在這裡面的
+    public var accountEventIds: [String]?
+    /// 最近幾次消費（美業看上次做了什麼、誰做的）
+    public var recentVisits: [MemberVisit]?
+    /// 會員照片（健身房報到核對）
+    public var photoURL: String?
+    /// 生日（MM-DD；當月壽星提醒）
+    public var birthday: String?
 
-    public init(id: String, phone: String, name: String?, tierName: String?, lifetimeSpend: Money, visits: Int, lastVisitAt: Date?, note: String?) {
+    public init(id: String, phone: String, name: String?, tierName: String?, lifetimeSpend: Money, visits: Int, lastVisitAt: Date?, note: String?,
+                wallet: Money? = nil, passes: [MemberPass]? = nil, accountEventIds: [String]? = nil, recentVisits: [MemberVisit]? = nil,
+                photoURL: String? = nil, birthday: String? = nil) {
         self.id = id; self.phone = phone; self.name = name; self.tierName = tierName
         self.lifetimeSpend = lifetimeSpend; self.visits = visits; self.lastVisitAt = lastVisitAt; self.note = note
+        self.wallet = wallet; self.passes = passes; self.accountEventIds = accountEventIds; self.recentVisits = recentVisits
+        self.photoURL = photoURL; self.birthday = birthday
     }
 
     public var ref: MemberRef { MemberRef(id: id, phone: phone, name: name, tierName: tierName) }
+
+    /// 後台查到的帳戶（還沒加上這台的）
+    public var serverAccount: MemberAccount { MemberAccount(wallet: wallet ?? .zero, passes: passes ?? []) }
+
+    /// 現在的帳戶：後台的＋這台記了但後台還沒算進去的（斷網也對）
+    public func account(in state: StoreState) -> MemberAccount {
+        state.account(memberId: id, server: serverAccount, included: Set(accountEventIds ?? []))
+    }
+}
+
+/// 會員的一次消費（後台從 pos_sales 與網路訂單整理）
+public struct MemberVisit: Codable, Sendable, Hashable, Identifiable {
+    public var id: String { ticketId }
+    public var ticketId: String
+    public var number: String
+    public var at: Date
+    public var total: Money
+    /// 「剪髮」「染髮 6N」
+    public var items: [String]
+    /// 服務人員的名字
+    public var staffNames: [String]
+    public var note: String?
+
+    public init(ticketId: String, number: String, at: Date, total: Money, items: [String], staffNames: [String] = [], note: String? = nil) {
+        self.ticketId = ticketId; self.number = number; self.at = at; self.total = total; self.items = items
+        self.staffNames = staffNames; self.note = note
+    }
+}
+
+/// PATCH {cms}/api/pos/v1/members/:id（只送要改的）
+public struct MemberUpdate: Codable, Sendable, Hashable {
+    public var name: String?
+    public var note: String?
+    public var birthday: String?
+    public init(name: String? = nil, note: String? = nil, birthday: String? = nil) { self.name = name; self.note = note; self.birthday = birthday }
 }
 
 /// GET {cms}/api/pos/v1/members?phone=0912345678
@@ -203,6 +254,19 @@ public enum ReservationKind: String, Codable, Sendable, Hashable {
     case reservation
     /// 現場候位（抽號碼）
     case waitlist
+    /// 預約服務（美業的設計師、私人教練）：有服務項目、指定的人、時間長度
+    case appointment
+    /// 團體課報名（瑜珈、飛輪）
+    case classBooking
+
+    public var label: String {
+        switch self {
+        case .reservation: "訂位"
+        case .waitlist: "候位"
+        case .appointment: "預約"
+        case .classBooking: "課程報名"
+        }
+    }
 }
 
 public enum ReservationStatus: String, Codable, Sendable, Hashable, CaseIterable {
@@ -226,6 +290,29 @@ public enum ReservationStatus: String, Codable, Sendable, Hashable, CaseIterable
     }
 
     public var isActive: Bool { [.booked, .notified, .arrived].contains(self) }
+
+    /// 依種類換說法：訂位「已入座」、預約「服務中」、課程「已報到」
+    public func label(for kind: ReservationKind) -> String {
+        switch (kind, self) {
+        case (.appointment, .seated): "服務中"
+        case (.classBooking, .seated), (.classBooking, .arrived): "已報到"
+        default: label
+        }
+    }
+}
+
+/// 預約的服務項目
+public struct BookedService: Codable, Sendable, Hashable {
+    public var itemId: String
+    public var name: String
+    public var durationMinutes: Int
+    /// 這一項由誰做（沒指定就是預約上的 staffId）
+    public var staffId: String?
+    public var price: Money?
+
+    public init(itemId: String, name: String, durationMinutes: Int, staffId: String? = nil, price: Money? = nil) {
+        self.itemId = itemId; self.name = name; self.durationMinutes = durationMinutes; self.staffId = staffId; self.price = price
+    }
 }
 
 public struct Reservation: Codable, Sendable, Hashable, Identifiable {
@@ -246,14 +333,75 @@ public struct Reservation: Codable, Sendable, Hashable, Identifiable {
     public var queueNumber: Int?
     public var notifiedAt: Date?
     public var createdAt: Date
+    /// 指定的服務人員（設計師、教練；nil = 不指定）
+    public var staffId: String?
+    /// 預約的服務項目
+    public var services: [BookedService]?
+    public var memberId: String?
+    /// 團體課（classBooking）
+    public var sessionId: String?
+    /// 到店後開的單
+    public var ticketId: String?
 
     public init(id: String, kind: ReservationKind, name: String, phone: String, partySize: Int, startsAt: Date, durationMinutes: Int = 90,
                 tableIds: [String] = [], status: ReservationStatus = .booked, note: String = "", source: String = "pos",
-                queueNumber: Int? = nil, notifiedAt: Date? = nil, createdAt: Date) {
+                queueNumber: Int? = nil, notifiedAt: Date? = nil, createdAt: Date, staffId: String? = nil, services: [BookedService]? = nil,
+                memberId: String? = nil, sessionId: String? = nil, ticketId: String? = nil) {
         self.id = id; self.kind = kind; self.name = name; self.phone = phone; self.partySize = partySize; self.startsAt = startsAt
         self.durationMinutes = durationMinutes; self.tableIds = tableIds; self.status = status; self.note = note; self.source = source
         self.queueNumber = queueNumber; self.notifiedAt = notifiedAt; self.createdAt = createdAt
+        self.staffId = staffId; self.services = services; self.memberId = memberId; self.sessionId = sessionId; self.ticketId = ticketId
     }
+
+    public var endsAt: Date { startsAt.addingTimeInterval(TimeInterval(durationMinutes * 60)) }
+
+    /// 跟另一筆時間重疊
+    public func overlaps(_ other: Reservation) -> Bool { startsAt < other.endsAt && other.startsAt < endsAt }
+
+    /// 這個人這段時間被約走了沒（預約表排班用；取消、未到、做完的不算）
+    public static func conflicts(staffId: String, start: Date, minutes: Int, in list: [Reservation], ignoring id: String? = nil) -> [Reservation] {
+        let end = start.addingTimeInterval(TimeInterval(minutes * 60))
+        return list.filter { r in
+            r.id != id && r.kind == .appointment && r.status.isActive && r.staffId == staffId && r.startsAt < end && start < r.endsAt
+        }
+    }
+}
+
+/// 團體課的一堂（後台「門市 POS → 課表」排的）
+public struct ClassSession: Codable, Sendable, Hashable, Identifiable {
+    public var id: String
+    public var name: String
+    /// 教練
+    public var staffId: String?
+    public var startsAt: Date
+    public var durationMinutes: Int
+    /// 名額（0 = 不限）
+    public var capacity: Int
+    /// 已報名（不含取消）
+    public var booked: Int
+    /// 教室
+    public var room: String?
+    /// 哪些課程卡、會籍可以用（PassSpec 的 itemIds 對到這個 id 或分類）
+    public var itemId: String?
+    /// 單堂價（沒有卡的人現場付）
+    public var dropInPrice: Money?
+    public var note: String?
+
+    public init(id: String, name: String, staffId: String? = nil, startsAt: Date, durationMinutes: Int = 60, capacity: Int = 0, booked: Int = 0,
+                room: String? = nil, itemId: String? = nil, dropInPrice: Money? = nil, note: String? = nil) {
+        self.id = id; self.name = name; self.staffId = staffId; self.startsAt = startsAt; self.durationMinutes = durationMinutes
+        self.capacity = capacity; self.booked = booked; self.room = room; self.itemId = itemId; self.dropInPrice = dropInPrice; self.note = note
+    }
+
+    public var endsAt: Date { startsAt.addingTimeInterval(TimeInterval(durationMinutes * 60)) }
+    public var isFull: Bool { capacity > 0 && booked >= capacity }
+    public var spotsLeft: Int? { capacity > 0 ? max(capacity - booked, 0) : nil }
+}
+
+/// GET {cms}/api/pos/v1/classes?date=2026-10-04
+public struct ClassList: Codable, Sendable, Hashable {
+    public var classes: [ClassSession]
+    public init(classes: [ClassSession]) { self.classes = classes }
 }
 
 /// GET {cms}/api/pos/v1/reservations?date=2026-10-03
@@ -274,11 +422,18 @@ public struct ReservationInput: Codable, Sendable, Hashable {
     public var tableIds: [String]?
     public var status: ReservationStatus?
     public var note: String?
+    public var staffId: String?
+    public var services: [BookedService]?
+    public var memberId: String?
+    public var sessionId: String?
+    public var ticketId: String?
 
     public init(kind: ReservationKind? = nil, name: String? = nil, phone: String? = nil, partySize: Int? = nil, startsAt: Date? = nil,
-                durationMinutes: Int? = nil, tableIds: [String]? = nil, status: ReservationStatus? = nil, note: String? = nil) {
+                durationMinutes: Int? = nil, tableIds: [String]? = nil, status: ReservationStatus? = nil, note: String? = nil,
+                staffId: String? = nil, services: [BookedService]? = nil, memberId: String? = nil, sessionId: String? = nil, ticketId: String? = nil) {
         self.kind = kind; self.name = name; self.phone = phone; self.partySize = partySize; self.startsAt = startsAt
         self.durationMinutes = durationMinutes; self.tableIds = tableIds; self.status = status; self.note = note
+        self.staffId = staffId; self.services = services; self.memberId = memberId; self.sessionId = sessionId; self.ticketId = ticketId
     }
 }
 

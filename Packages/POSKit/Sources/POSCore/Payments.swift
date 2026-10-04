@@ -18,6 +18,10 @@ public enum Tender: String, Codable, Sendable, Hashable, CaseIterable {
     /// 轉帳
     case transfer
     case other
+    /// 會員的儲值金（扣客人的餘額；要先找到會員）
+    case prepaid
+    /// 換貨：退回的商品抵掉的金額（不是真的收錢）
+    case exchange
 
     public var label: String {
         switch self {
@@ -32,13 +36,21 @@ public enum Tender: String, Codable, Sendable, Hashable, CaseIterable {
         case .voucher: "禮券"
         case .transfer: "轉帳"
         case .other: "其他"
+        case .prepaid: "儲值金"
+        case .exchange: "換貨抵用"
         }
     }
+
+    /// 付款畫面上列出來給人選的（儲值金要有會員才出現、換貨抵用是自動的）
+    public static let selectable: [Tender] = [.cash, .card, .tapToPay, .linePay, .jkoPay, .pxPay, .easyWallet, .stored, .voucher, .transfer, .other]
+
+    /// 不是真的收到錢（儲值金是之前收過的、換貨是退回的商品抵的）：「實收」不算
+    public var isInternal: Bool { self == .prepaid || self == .exchange }
 
     /// 會進錢櫃的（交班時要點錢）
     public var isCash: Bool { self == .cash }
     /// 需要輸入交易序號／授權碼（對帳用）
-    public var wantsReference: Bool { self != .cash }
+    public var wantsReference: Bool { self != .cash && !isInternal }
     /// 電子支付（掃客人的付款碼）
     public var isWallet: Bool { [.linePay, .jkoPay, .pxPay, .easyWallet].contains(self) }
 }
@@ -54,7 +66,7 @@ public struct Payment: Codable, Sendable, Hashable, Identifiable {
     public var amount: Money
     /// 現金：客人給的錢
     public var tendered: Money?
-    /// 現金：找零
+    /// 找零（一律是現金從錢櫃拿出去；換貨抵用比新買的多時，差額也是這樣退給客人）
     public var change: Money
     /// 刷卡授權碼、電子支付的交易序號
     public var reference: String?
@@ -72,6 +84,12 @@ public struct Payment: Codable, Sendable, Hashable, Identifiable {
         self.id = id; self.tender = tender; self.amount = amount; self.tendered = tendered; self.change = change
         self.reference = reference; self.cardLast4 = cardLast4; self.status = status; self.at = at; self.by = by
         self.shiftId = shiftId; self.voidReason = voidReason
+    }
+
+    /// 這筆讓錢櫃多了多少現金：現金收的錢扣掉找零；其他方式只有找零（從錢櫃拿出去）
+    public var drawerDelta: Money {
+        guard status == .approved else { return .zero }
+        return tender == .cash ? amount : .zero - change
     }
 
     /// 現金收款：給了多少、要付多少 → 這筆算多少、找多少

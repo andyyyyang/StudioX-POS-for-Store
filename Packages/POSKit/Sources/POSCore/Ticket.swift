@@ -107,6 +107,19 @@ public struct VoidInfo: Codable, Sendable, Hashable {
     }
 }
 
+/// 這一行用客人的課程卡抵（不收錢；業績照每次的價值算）
+public struct PassRedemption: Codable, Sendable, Hashable {
+    public var passId: String
+    /// 「剪髮 10 次卡」
+    public var name: String
+    /// 每次的價值（卡價 ÷ 次數；業績、報表用，不是收的錢）
+    public var value: Money
+
+    public init(passId: String, name: String, value: Money) {
+        self.passId = passId; self.name = name; self.value = value
+    }
+}
+
 public struct TicketLine: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     /// 菜單上的品項（自訂品項是 nil）
@@ -131,39 +144,111 @@ public struct TicketLine: Codable, Sendable, Hashable, Identifiable {
     public var sentAt: Date?
     public var kitchen: KitchenStatus
     public var voided: VoidInfo?
+    /// 網路商店的商品與規格（賣出扣同一份庫存）
     public var productId: String?
     public var variantId: String?
+
+    // 以下是非餐飲業用的欄位（沒有就是 nil，JSON 裡不出現）
+
+    /// 品項種類（nil = 一般商品）
+    public var kind: ItemKind?
+    /// 門市的規格 id（ItemVariant.id）
+    public var skuId: String?
+    /// 「黑・M」
+    public var variantName: String?
+    /// 業績算給誰（設計師、教練、店員；nil = 整張單的銷售人員或開單的人）
+    public var staffId: String?
+    /// 助理（洗髮、吹整）
+    public var assistantId: String?
+    /// 服務要多久（分鐘）
+    public var durationMinutes: Int?
+    /// 賣出的課程卡／會籍的規則（加進來那一刻抄一份）
+    public var pass: PassSpec?
+    /// 會籍續約：新的這張從哪一天開始（接在舊的到期日後面；nil = 結帳那天）
+    public var passStartsAt: Date?
+    /// 儲值：每一份加多少儲值金
+    public var credit: Money?
+    /// 用客人的課程卡抵
+    public var redeem: PassRedemption?
+    /// 抽成（萬分比）：品項的，沒有就用服務人員的
+    public var commissionBps: Int?
+    /// 出餐進度最後一次改的時間（廚房螢幕的「剛出餐」）
+    public var kitchenAt: Date?
 
     public init(
         id: String, itemId: String?, name: String, categoryId: String? = nil, categoryName: String? = nil,
         unitPrice: Money, modifiers: [AppliedModifier] = [], quantity: Int = 1, note: String = "", discount: Discount? = nil,
         seat: Int? = nil, course: Int = 0, station: String? = nil, taxKind: TaxKind = .taxable, addedAt: Date, addedBy: String,
-        sentAt: Date? = nil, kitchen: KitchenStatus = .new, voided: VoidInfo? = nil, productId: String? = nil, variantId: String? = nil
+        sentAt: Date? = nil, kitchen: KitchenStatus = .new, voided: VoidInfo? = nil, productId: String? = nil, variantId: String? = nil,
+        kind: ItemKind? = nil, skuId: String? = nil, variantName: String? = nil, staffId: String? = nil, assistantId: String? = nil,
+        durationMinutes: Int? = nil, pass: PassSpec? = nil, passStartsAt: Date? = nil, credit: Money? = nil,
+        redeem: PassRedemption? = nil, commissionBps: Int? = nil
     ) {
         self.id = id; self.itemId = itemId; self.name = name; self.categoryId = categoryId; self.categoryName = categoryName
         self.unitPrice = unitPrice; self.modifiers = modifiers; self.quantity = quantity; self.note = note; self.discount = discount
         self.seat = seat; self.course = course; self.station = station; self.taxKind = taxKind; self.addedAt = addedAt
         self.addedBy = addedBy; self.sentAt = sentAt; self.kitchen = kitchen; self.voided = voided
         self.productId = productId; self.variantId = variantId
+        self.kind = kind; self.skuId = skuId; self.variantName = variantName; self.staffId = staffId; self.assistantId = assistantId
+        self.durationMinutes = durationMinutes; self.pass = pass; self.passStartsAt = passStartsAt; self.credit = credit
+        self.redeem = redeem; self.commissionBps = commissionBps
     }
 
     public var isActive: Bool { voided == nil }
     public var isSent: Bool { kitchen != .new }
+    public var itemKind: ItemKind { kind ?? .goods }
 
-    /// 單價＋加料
-    public var unitTotal: Money { unitPrice + Money.sum(modifiers.map(\.priceDelta)) }
+    /// 單價＋加料（用課程卡抵的是 0）
+    public var unitTotal: Money { redeem != nil ? .zero : unitPrice + Money.sum(modifiers.map(\.priceDelta)) }
     /// 小計（折扣前）
     public var gross: Money { unitTotal * quantity }
     public var lineDiscount: Money { discount?.amount(on: gross) ?? .zero }
+    /// 課程卡抵掉的價值（業績用）
+    public var redeemedValue: Money { (redeem?.value ?? .zero) * quantity }
 
     /// 「半糖・少冰・加珍珠」
     public var modifierText: String { modifiers.map(\.name).joined(separator: "・") }
+
+    /// 「經典直筒褲 黑・M」
+    public var displayName: String { variantName.map { "\(name) \($0)" } ?? name }
 
     /// 同一個品項、同樣的加料與備註、還沒送出：再點一次就加數量，不另起一行
     public func canMerge(with other: TicketLine) -> Bool {
         itemId != nil && itemId == other.itemId && unitPrice == other.unitPrice && modifiers == other.modifiers
             && note == other.note && discount == nil && other.discount == nil && seat == other.seat && course == other.course
+            && skuId == other.skuId && staffId == other.staffId && assistantId == other.assistantId && redeem == other.redeem
+            && passStartsAt == other.passStartsAt
             && !isSent && !other.isSent && isActive && other.isActive
+    }
+}
+
+/// 換貨：退回原單的哪些品項、值多少（新單結帳時當作付款抵掉）
+public struct ExchangeCredit: Codable, Sendable, Hashable {
+    /// 原單
+    public var ticketId: String
+    public var number: String
+    public var lines: [RefundLine]
+    /// 退回的品項值多少（照原單實收）
+    public var amount: Money
+
+    public init(ticketId: String, number: String, lines: [RefundLine], amount: Money) {
+        self.ticketId = ticketId; self.number = number; self.lines = lines; self.amount = amount
+    }
+}
+
+/// 同款換規格（換尺寸、換顏色、價格一樣）：不動錢、不動發票，只記庫存
+public struct VariantSwap: Codable, Sendable, Hashable {
+    public var lineId: String
+    public var quantity: Int
+    public var fromSkuId: String?
+    public var toSkuId: String
+    public var toVariantName: String
+    /// 新規格在網路商店的規格（扣庫存）
+    public var toProductVariantId: String?
+
+    public init(lineId: String, quantity: Int, fromSkuId: String?, toSkuId: String, toVariantName: String, toProductVariantId: String? = nil) {
+        self.lineId = lineId; self.quantity = quantity; self.fromSkuId = fromSkuId; self.toSkuId = toSkuId
+        self.toVariantName = toVariantName; self.toProductVariantId = toProductVariantId
     }
 }
 
@@ -247,6 +332,16 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
     public var mergedInto: String?
     /// 在哪一台結帳（錢進了哪個錢櫃）
     public var closedDeviceId: String?
+    /// 開單時的營業模式（收據要不要印內用外帶、報表分模式）
+    public var serviceMode: ServiceMode?
+    /// 整張單的銷售人員（服飾的業績；行上沒指定的都算他）
+    public var salespersonId: String?
+    /// 換貨單：退回原單的品項當作付款
+    public var exchange: ExchangeCredit?
+    /// 從哪一筆預約開的（美業、私人教練）
+    public var appointmentId: String?
+    /// 結帳後同款換規格的紀錄
+    public var swaps: [VariantSwap]?
 
     public init(
         id: String, number: String, deviceId: String, orderType: OrderType, tableIds: [String] = [], guests: Int = 0,
@@ -254,7 +349,9 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
         note: String = "", invoiceBuyer: InvoiceBuyer = .paper, status: TicketStatus = .open, payments: [Payment] = [],
         invoice: InvoiceStamp? = nil, refunds: [Refund] = [], openedAt: Date, openedBy: String, businessDate: String,
         billPrintedAt: Date? = nil, closedAt: Date? = nil, closedBy: String? = nil, voidInfo: VoidInfo? = nil,
-        splitFrom: String? = nil, customerName: String? = nil, mergedInto: String? = nil, closedDeviceId: String? = nil
+        splitFrom: String? = nil, customerName: String? = nil, mergedInto: String? = nil, closedDeviceId: String? = nil,
+        serviceMode: ServiceMode? = nil, salespersonId: String? = nil, exchange: ExchangeCredit? = nil, appointmentId: String? = nil,
+        swaps: [VariantSwap]? = nil
     ) {
         self.id = id; self.number = number; self.deviceId = deviceId; self.orderType = orderType; self.tableIds = tableIds
         self.guests = guests; self.lines = lines; self.discount = discount; self.serviceChargeBps = serviceChargeBps; self.tip = tip
@@ -263,6 +360,8 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
         self.businessDate = businessDate; self.billPrintedAt = billPrintedAt; self.closedAt = closedAt; self.closedBy = closedBy
         self.voidInfo = voidInfo; self.splitFrom = splitFrom; self.customerName = customerName
         self.mergedInto = mergedInto; self.closedDeviceId = closedDeviceId
+        self.serviceMode = serviceMode; self.salespersonId = salespersonId; self.exchange = exchange
+        self.appointmentId = appointmentId; self.swaps = swaps
     }
 
     public var activeLines: [TicketLine] { lines.filter(\.isActive) }
@@ -273,10 +372,25 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
     public var approvedPayments: [Payment] { payments.filter { $0.status == .approved } }
     public var refundedAmount: Money { Money.sum(refunds.map(\.amount)) }
 
-    /// 「A1+A2・4 位」「外帶 A023」
+    /// 「A1+A2・4 位」「外帶 A023」；服飾、美業、課程：「王小美」「A023」
     public func title(floor: FloorPlan) -> String {
         if orderType == .dineIn && !tableIds.isEmpty { return floor.tableNames(tableIds) }
+        if serviceMode?.showsOrderType == false {
+            if let name = customerName, !name.isEmpty { return name }
+            if let m = member { return m.name ?? m.maskedPhone }
+            return number
+        }
         if let name = customerName, !name.isEmpty { return "\(orderType.label) \(name)" }
         return "\(orderType.label) \(number)"
+    }
+
+    /// 這一行的業績算給誰：行上指定的 → 整單的銷售人員 → 開單的人
+    public func performer(of line: TicketLine) -> String {
+        line.staffId ?? salespersonId ?? openedBy
+    }
+
+    /// 換貨單已經抵掉多少（換貨的付款）
+    public var exchangeApplied: Money {
+        Money.sum(approvedPayments.filter { $0.tender == .exchange }.map(\.amount))
     }
 }

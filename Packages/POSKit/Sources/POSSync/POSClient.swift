@@ -53,6 +53,19 @@ public protocol POSAPI: Sendable {
     func updateReservation(id: String, _ input: ReservationInput) async throws -> Reservation
     func notifyReservation(id: String) async throws
     func saveFloor(_ update: FloorUpdate) async throws -> FloorResponse
+    /// 改會員的名字、備註（配方、偏好）
+    func updateMember(id: String, _ update: MemberUpdate) async throws -> Member
+    /// 那一天的團體課（健身、瑜珈）
+    func classes(date: String) async throws -> [ClassSession]
+}
+
+extension POSAPI {
+    // 舊的假後台（測試）沒有這些：當作後台還不支援
+    public func updateMember(id: String, _ update: MemberUpdate) async throws -> Member {
+        throw APIError.http(status: 404, code: "not_found", message: "後台還不支援修改會員")
+    }
+
+    public func classes(date: String) async throws -> [ClassSession] { [] }
 }
 
 /// 真的後台（URLSession）
@@ -132,6 +145,17 @@ public struct POSClient: POSAPI {
 
     public func saveFloor(_ update: FloorUpdate) async throws -> FloorResponse {
         try await call("floor", method: "PUT", body: update)
+    }
+
+    public func updateMember(id: String, _ update: MemberUpdate) async throws -> Member {
+        struct R: Decodable { var member: Member }
+        let r: R = try await call("members/\(id)", method: "PATCH", body: update)
+        return r.member
+    }
+
+    public func classes(date: String) async throws -> [ClassSession] {
+        let r: ClassList = try await call("classes", query: ["date": date])
+        return r.classes
     }
 
     // MARK: 傳輸

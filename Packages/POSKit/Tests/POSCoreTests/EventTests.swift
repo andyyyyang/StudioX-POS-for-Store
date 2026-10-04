@@ -43,10 +43,19 @@ struct EventTests {
         #expect(EventCoding.parseTimestamp("garbage") == nil)
     }
 
-    @Test func unknownEventTypeIsAnError() {
-        #expect(throws: EventError.unknownType("future.thing")) {
-            try EventBody.decode(type: "future.thing", data: "{}")
-        }
+    /// 新版 App 的事件：舊版照樣收下、原樣保留（雜湊不變、轉送不變），只是不做投影
+    @Test func unknownEventTypeIsKeptVerbatim() throws {
+        let body = try EventBody.decode(type: "future.thing", data: #"{"b":1,"a":2}"#)
+        #expect(body == .unknown(type: "future.thing", data: #"{"b":1,"a":2}"#))
+        #expect(body.type == "future.thing")
+        #expect(try body.encodedData() == #"{"b":1,"a":2}"#)
+        let e = try POSEvent(id: "e1", deviceId: "d", seq: 1, lamport: 1, at: Date(timeIntervalSince1970: 0), staffId: nil, body: body, prevHash: POSEvent.genesis)
+        let round = try JSONDecoder().decode(POSEvent.self, from: JSONEncoder().encode(e))
+        #expect(round.isHashValid)
+        #expect(round.data == #"{"b":1,"a":2}"#)
+        var state = StoreState()
+        state.apply(round)
+        #expect(state.applied == 1)
     }
 }
 

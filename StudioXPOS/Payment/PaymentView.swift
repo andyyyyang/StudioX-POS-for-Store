@@ -143,6 +143,8 @@ struct PaymentView: View {
         case .transfer: HeroIcon("arrows-right-left", size: 22)
         case .cash: HeroIcon("banknotes", size: 22)
         case .other: HeroIcon("ellipsis-horizontal", size: 22)
+        case .prepaid: HeroIcon("gift", size: 22)
+        case .exchange: HeroIcon("arrows-right-left", size: 22)
         }
     }
 

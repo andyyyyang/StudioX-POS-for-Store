@@ -19,11 +19,23 @@ public struct TicketOpened: Codable, Sendable, Hashable {
     public var businessDate: String
     public var customerName: String?
     public var splitFrom: String?
+    /// 開單時的營業模式
+    public var serviceMode: ServiceMode?
+    /// 一開單就知道是誰（美業從預約開單、健身房報到後開單）
+    public var member: MemberRef?
+    public var salespersonId: String?
+    /// 換貨單
+    public var exchange: ExchangeCredit?
+    public var appointmentId: String?
 
     public init(ticketId: String, number: String, orderType: OrderType, tableIds: [String] = [], guests: Int = 0,
-                serviceChargeBps: Int = 0, businessDate: String, customerName: String? = nil, splitFrom: String? = nil) {
+                serviceChargeBps: Int = 0, businessDate: String, customerName: String? = nil, splitFrom: String? = nil,
+                serviceMode: ServiceMode? = nil, member: MemberRef? = nil, salespersonId: String? = nil, exchange: ExchangeCredit? = nil,
+                appointmentId: String? = nil) {
         self.ticketId = ticketId; self.number = number; self.orderType = orderType; self.tableIds = tableIds; self.guests = guests
         self.serviceChargeBps = serviceChargeBps; self.businessDate = businessDate; self.customerName = customerName; self.splitFrom = splitFrom
+        self.serviceMode = serviceMode; self.member = member; self.salespersonId = salespersonId; self.exchange = exchange
+        self.appointmentId = appointmentId
     }
 }
 
@@ -46,12 +58,30 @@ public struct LineUpdated: Codable, Sendable, Hashable {
     public var clearDiscount: Bool?
     /// 改價、折扣的授權主管
     public var authorizedBy: String?
+    /// 業績算給誰（"" = 拿掉，回到整單的銷售人員）
+    public var staffId: String?
+    /// 助理（"" = 拿掉）
+    public var assistantId: String?
+    public var commissionBps: Int?
+    /// 用課程卡抵
+    public var redeem: PassRedemption?
+    public var clearRedeem: Bool?
+    /// 會籍續約：接在舊的到期日後面
+    public var passStartsAt: Date?
+    /// 換規格（還沒結帳前換尺寸）
+    public var skuId: String?
+    public var variantName: String?
+    public var variantId: String?
 
     public init(ticketId: String, lineId: String, quantity: Int? = nil, unitPrice: Money? = nil, note: String? = nil, seat: Int? = nil,
-                course: Int? = nil, modifiers: [AppliedModifier]? = nil, discount: Discount? = nil, clearDiscount: Bool? = nil, authorizedBy: String? = nil) {
+                course: Int? = nil, modifiers: [AppliedModifier]? = nil, discount: Discount? = nil, clearDiscount: Bool? = nil, authorizedBy: String? = nil,
+                staffId: String? = nil, assistantId: String? = nil, commissionBps: Int? = nil, redeem: PassRedemption? = nil, clearRedeem: Bool? = nil,
+                passStartsAt: Date? = nil, skuId: String? = nil, variantName: String? = nil, variantId: String? = nil) {
         self.ticketId = ticketId; self.lineId = lineId; self.quantity = quantity; self.unitPrice = unitPrice; self.note = note
         self.seat = seat; self.course = course; self.modifiers = modifiers; self.discount = discount
         self.clearDiscount = clearDiscount; self.authorizedBy = authorizedBy
+        self.staffId = staffId; self.assistantId = assistantId; self.commissionBps = commissionBps; self.redeem = redeem
+        self.clearRedeem = clearRedeem; self.passStartsAt = passStartsAt; self.skuId = skuId; self.variantName = variantName; self.variantId = variantId
     }
 }
 
@@ -93,13 +123,16 @@ public struct TicketUpdated: Codable, Sendable, Hashable {
     public var member: MemberRef?
     public var clearMember: Bool?
     public var customerName: String?
+    /// 整張單的銷售人員（"" = 拿掉）
+    public var salespersonId: String?
 
     public init(ticketId: String, guests: Int? = nil, note: String? = nil, orderType: OrderType? = nil, serviceChargeBps: Int? = nil,
                 discount: Discount? = nil, clearDiscount: Bool? = nil, tip: Money? = nil, invoiceBuyer: InvoiceBuyer? = nil,
-                member: MemberRef? = nil, clearMember: Bool? = nil, customerName: String? = nil) {
+                member: MemberRef? = nil, clearMember: Bool? = nil, customerName: String? = nil, salespersonId: String? = nil) {
         self.ticketId = ticketId; self.guests = guests; self.note = note; self.orderType = orderType
         self.serviceChargeBps = serviceChargeBps; self.discount = discount; self.clearDiscount = clearDiscount; self.tip = tip
         self.invoiceBuyer = invoiceBuyer; self.member = member; self.clearMember = clearMember; self.customerName = customerName
+        self.salespersonId = salespersonId
     }
 }
 
@@ -236,6 +269,26 @@ public struct ItemAvailability: Codable, Sendable, Hashable {
     public init(itemId: String, available: Bool) { self.itemId = itemId; self.available = available }
 }
 
+/// 結帳後同款換規格（換尺寸、換顏色）：不動錢、不動發票，後台照這個調庫存
+public struct SaleExchanged: Codable, Sendable, Hashable {
+    public var ticketId: String
+    public var swaps: [VariantSwap]
+    public var reason: String
+    public init(ticketId: String, swaps: [VariantSwap], reason: String = "") { self.ticketId = ticketId; self.swaps = swaps; self.reason = reason }
+}
+
+/// 入場報到（at、by 由事件本身決定，內容裡的會被蓋掉）
+public struct CheckedIn: Codable, Sendable, Hashable {
+    public var checkIn: CheckIn
+    public init(checkIn: CheckIn) { self.checkIn = checkIn }
+}
+
+public struct CheckInVoided: Codable, Sendable, Hashable {
+    public var checkInId: String
+    public var reason: String
+    public init(checkInId: String, reason: String) { self.checkInId = checkInId; self.reason = reason }
+}
+
 // MARK: - 事件種類
 
 public enum EventBody: Sendable, Hashable {
@@ -264,6 +317,11 @@ public enum EventBody: Sendable, Hashable {
     case clockedIn(StaffRef)
     case clockedOut(StaffRef)
     case itemAvailability(ItemAvailability)
+    case saleExchanged(SaleExchanged)
+    case checkedIn(CheckedIn)
+    case checkInVoided(CheckInVoided)
+    /// 這個版本不認得的事件（新版 App 送來的）：原樣保留、轉送，不做投影
+    case unknown(type: String, data: String)
 
     /// 事件的種類名稱（API 的 type 欄位；後台用它分流）
     public var type: String {
@@ -293,6 +351,10 @@ public enum EventBody: Sendable, Hashable {
         case .clockedIn: "staff.clockedIn"
         case .clockedOut: "staff.clockedOut"
         case .itemAvailability: "item.availability"
+        case .saleExchanged: "sale.exchanged"
+        case .checkedIn: "member.checkedIn"
+        case .checkInVoided: "member.checkInVoided"
+        case .unknown(let type, _): type
         }
     }
 
@@ -317,7 +379,8 @@ public enum EventBody: Sendable, Hashable {
         case .ticketClosed(let e): e.ticketId
         case .ticketVoided(let e): e.ticketId
         case .saleRefunded(let e): e.ticketId
-        case .tableCleaned, .shiftOpened, .cashMoved, .shiftClosed, .clockedIn, .clockedOut, .itemAvailability: nil
+        case .saleExchanged(let e): e.ticketId
+        case .tableCleaned, .shiftOpened, .cashMoved, .shiftClosed, .clockedIn, .clockedOut, .itemAvailability, .checkedIn, .checkInVoided, .unknown: nil
         }
     }
 
@@ -350,6 +413,10 @@ public enum EventBody: Sendable, Hashable {
         case .clockedIn(let e): try encoder.encode(e)
         case .clockedOut(let e): try encoder.encode(e)
         case .itemAvailability(let e): try encoder.encode(e)
+        case .saleExchanged(let e): try encoder.encode(e)
+        case .checkedIn(let e): try encoder.encode(e)
+        case .checkInVoided(let e): try encoder.encode(e)
+        case .unknown(_, let raw): Data(raw.utf8)
         }
         return String(decoding: data, as: UTF8.self)
     }
@@ -383,7 +450,10 @@ public enum EventBody: Sendable, Hashable {
         case "staff.clockedIn": return .clockedIn(try d.decode(StaffRef.self, from: bytes))
         case "staff.clockedOut": return .clockedOut(try d.decode(StaffRef.self, from: bytes))
         case "item.availability": return .itemAvailability(try d.decode(ItemAvailability.self, from: bytes))
-        default: throw EventError.unknownType(type)
+        case "sale.exchanged": return .saleExchanged(try d.decode(SaleExchanged.self, from: bytes))
+        case "member.checkedIn": return .checkedIn(try d.decode(CheckedIn.self, from: bytes))
+        case "member.checkInVoided": return .checkInVoided(try d.decode(CheckInVoided.self, from: bytes))
+        default: return .unknown(type: type, data: data)
         }
     }
 }

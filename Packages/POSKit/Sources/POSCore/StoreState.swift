@@ -44,6 +44,10 @@ public struct StoreState: Codable, Sendable, Hashable {
     public var voidedInvoices: [String: VoidInfo] = [:]
     public var allowances: [EInvoiceAllowance] = []
     public var conflicts: [Conflict] = []
+    /// 入場報到（健身房、教室）
+    public var checkIns: [String: CheckIn] = [:]
+    /// 每一筆事件造成的會員帳戶變動（儲值金、課程卡）。查會員時把後台還沒算進去的補上
+    public var accountLog: [AccountEntry] = []
     /// 套用過的事件數（快照之後接著算）
     public var applied: Int = 0
     /// 看過最大的 Lamport 時鐘
@@ -74,8 +78,9 @@ public struct StoreState: Codable, Sendable, Hashable {
             guard tickets[o.ticketId] == nil else { return }
             tickets[o.ticketId] = Ticket(
                 id: o.ticketId, number: o.number, deviceId: e.deviceId, orderType: o.orderType, tableIds: o.tableIds,
-                guests: o.guests, serviceChargeBps: o.serviceChargeBps, openedAt: at, openedBy: staff,
-                businessDate: o.businessDate, splitFrom: o.splitFrom, customerName: o.customerName
+                guests: o.guests, serviceChargeBps: o.serviceChargeBps, member: o.member, openedAt: at, openedBy: staff,
+                businessDate: o.businessDate, splitFrom: o.splitFrom, customerName: o.customerName,
+                serviceMode: o.serviceMode, salespersonId: o.salespersonId, exchange: o.exchange, appointmentId: o.appointmentId
             )
             needsCleaning.subtract(o.tableIds)
 
@@ -100,6 +105,17 @@ public struct StoreState: Codable, Sendable, Hashable {
                 if let m = u.modifiers { l.modifiers = m }
                 if u.clearDiscount == true { l.discount = nil }
                 if let d = u.discount { l.discount = d }
+                if let s = u.staffId { l.staffId = s.isEmpty ? nil : s }
+                if let a = u.assistantId { l.assistantId = a.isEmpty ? nil : a }
+                if let c = u.commissionBps { l.commissionBps = c }
+                if u.clearRedeem == true { l.redeem = nil }
+                if let r = u.redeem { l.redeem = r }
+                if let p = u.passStartsAt { l.passStartsAt = p }
+                if let k = u.skuId {
+                    l.skuId = k
+                    l.variantName = u.variantName
+                    l.variantId = u.variantId
+                }
             }
 
         case .linesVoided(let v):
@@ -124,6 +140,7 @@ public struct StoreState: Codable, Sendable, Hashable {
             for id in k.lineIds {
                 updateLine(k.ticketId, id, allowClosed: true) { l in
                     l.kitchen = k.status
+                    l.kitchenAt = at
                     if l.sentAt == nil { l.sentAt = at }
                 }
             }
@@ -141,6 +158,7 @@ public struct StoreState: Codable, Sendable, Hashable {
             if u.clearMember == true { t.member = nil }
             if let m = u.member { t.member = m }
             if let c = u.customerName { t.customerName = c.isEmpty ? nil : c }
+            if let s = u.salespersonId { t.salespersonId = s.isEmpty ? nil : s }
             tickets[t.id] = t
 
         case .ticketMoved(let m):
@@ -170,8 +188,9 @@ public struct StoreState: Codable, Sendable, Hashable {
             var fresh = Ticket(
                 id: s.opened.ticketId, number: s.opened.number, deviceId: e.deviceId, orderType: s.opened.orderType,
                 tableIds: s.opened.tableIds, guests: s.opened.guests, serviceChargeBps: s.opened.serviceChargeBps,
-                openedAt: at, openedBy: staff, businessDate: s.opened.businessDate, splitFrom: source.id,
-                customerName: s.opened.customerName
+                member: s.opened.member ?? source.member, openedAt: at, openedBy: staff, businessDate: s.opened.businessDate,
+                splitFrom: source.id, customerName: s.opened.customerName, serviceMode: s.opened.serviceMode ?? source.serviceMode,
+                salespersonId: s.opened.salespersonId ?? source.salespersonId
             )
             fresh.invoiceBuyer = .paper
             for move in s.moves {
@@ -246,6 +265,7 @@ public struct StoreState: Codable, Sendable, Hashable {
             tickets[t.id] = t
             sales[t.id] = c.sale
             if t.orderType == .dineIn { needsCleaning.formUnion(t.tableIds) }
+            logAccount(e, AccountRules.moves(sale: c.sale))
 
         case .ticketVoided(let v):
             guard var t = tickets[v.ticketId], t.isOpen else { return }
@@ -260,6 +280,7 @@ public struct StoreState: Codable, Sendable, Hashable {
             t.refunds.append(r.refund)
             tickets[t.id] = t
             if let a = r.allowance { allowances.append(a) }
+            if let sale = sales[t.id] { logAccount(e, AccountRules.moves(refund: r.refund, sale: sale)) }
 
         case .tableCleaned(let c):
             needsCleaning.remove(c.tableId)
@@ -293,7 +314,38 @@ public struct StoreState: Codable, Sendable, Hashable {
 
         case .itemAvailability(let a):
             itemAvailability[a.itemId] = a.available
+
+        case .saleExchanged(let x):
+            guard var t = tickets[x.ticketId], t.status == .closed else { return }
+            var swaps = t.swaps ?? []
+            for sw in x.swaps where !swaps.contains(sw) { swaps.append(sw) }
+            t.swaps = swaps
+            tickets[t.id] = t
+
+        case .checkedIn(let c):
+            guard checkIns[c.checkIn.id] == nil else { return }
+            var ci = c.checkIn
+            ci.at = at
+            ci.by = staff
+            ci.voidedAt = nil
+            checkIns[ci.id] = ci
+            logAccount(e, AccountRules.moves(checkIn: ci))
+
+        case .checkInVoided(let v):
+            guard var ci = checkIns[v.checkInId], !ci.isVoided else { return }
+            ci.voidedAt = at
+            ci.note = ci.note.isEmpty ? v.reason : ci.note + "；" + v.reason
+            checkIns[ci.id] = ci
+            logAccount(e, AccountRules.moves(checkInVoided: ci, at: at))
+
+        case .unknown:
+            break
         }
+    }
+
+    private mutating func logAccount(_ e: POSEvent, _ moves: [AccountMove]) {
+        guard !moves.isEmpty, !accountLog.contains(where: { $0.eventId == e.id }) else { return }
+        accountLog.append(AccountEntry(eventId: e.id, moves: moves))
     }
 
     private mutating func updateLine(_ ticketId: String, _ lineId: String, allowClosed: Bool = false, _ change: (inout TicketLine) -> Void) {
@@ -353,19 +405,43 @@ public struct StoreState: Codable, Sendable, Hashable {
         return deviceCode + (next < 1000 ? String(format: "%03d", next) : String(next))
     }
 
-    /// 這一班錢櫃裡應該有多少現金：零用金＋現金收款−現金退款＋存入−取出
+    /// 這一班錢櫃裡應該有多少現金：零用金＋現金收款−找零退差額−現金退款＋存入−取出
     public func expectedCash(shiftId: String) -> Money {
         guard let s = shifts[shiftId] else { return .zero }
         var cash = s.openingCash + Money.sum(s.moves.map(\.signed))
         for t in tickets.values {
-            for p in t.payments where p.shiftId == shiftId && p.tender == .cash && p.status == .approved {
-                cash += p.amount
+            for p in t.payments where p.shiftId == shiftId {
+                cash += p.drawerDelta
             }
             for r in t.refunds where r.shiftId == shiftId && r.tender == .cash {
                 cash -= r.amount
             }
         }
         return cash
+    }
+
+    // MARK: 會員帳戶、報到
+
+    /// 這個會員在這台記了、但後台的餘額還沒算進去的帳戶變動（included：後台說它算過的事件 id）
+    public func pendingAccountMoves(memberId: String, excluding included: Set<String>) -> [AccountMove] {
+        accountLog.filter { !included.contains($0.eventId) }.flatMap { $0.moves.filter { $0.memberId == memberId } }
+    }
+
+    /// 現在的帳戶：後台查到的＋這台還沒算進去的
+    public func account(memberId: String, server: MemberAccount, included: Set<String>) -> MemberAccount {
+        server.applying(pendingAccountMoves(memberId: memberId, excluding: included))
+    }
+
+    /// 某個營業日的報到（取消的不算）
+    public func checkIns(businessDate: String, cutoffHour: Int = 4) -> [CheckIn] {
+        checkIns.values
+            .filter { !$0.isVoided && TaipeiTime.businessDate($0.at, cutoffHour: cutoffHour) == businessDate }
+            .sorted { $0.at > $1.at }
+    }
+
+    /// 這個會員今天報到過了沒（同一天第二次報到要提醒，不擋）
+    public func lastCheckIn(memberId: String) -> CheckIn? {
+        checkIns.values.filter { !$0.isVoided && $0.member.id == memberId }.max { $0.at < $1.at }
     }
 
     /// 已結帳的單（依結帳時間）
