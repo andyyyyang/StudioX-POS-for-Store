@@ -238,3 +238,34 @@ struct WireFormatTests {
         }
     }
 }
+
+struct StoreProfileDecodingTests {
+    @Test func missingFieldsUseDefaults() throws {
+        let p = try EventCoding.decoder().decode(StoreProfile.self, from: Data(#"{"name":"晨麥手作","serviceChargeBps":1000}"#.utf8))
+        #expect(p.name == "晨麥手作")
+        #expect(p.serviceChargeBps == 1000)
+        #expect(p.serviceModes == ServiceMode.allCases)
+        #expect(p.defaultServiceMode == .tableService)
+        #expect(p.businessDayCutoffHour == 4)
+    }
+
+    @Test func unknownModesAreSkippedAndDefaultMustBeEnabled() throws {
+        let json = #"{"name":"攤位","serviceModes":["retail","hologram"],"defaultServiceMode":"tableService"}"#
+        let p = try EventCoding.decoder().decode(StoreProfile.self, from: Data(json.utf8))
+        #expect(p.serviceModes == [.retail])
+        #expect(p.defaultServiceMode == .retail)
+        let back = try EventCoding.decoder().decode(StoreProfile.self, from: EventCoding.encoder().encode(p))
+        #expect(back == p)
+    }
+
+    @Test func modes() {
+        #expect(ServiceMode.counter.payFirst)
+        #expect(!ServiceMode.tableService.payFirst)
+        #expect(!ServiceMode.retail.usesKitchen)
+        #expect(ServiceMode.cafe.printsPickupNumber)
+        #expect(ServiceMode.counter.defaultOrderType == .takeout)
+        let f = try? EventCoding.decoder().decode(FeatureFlags.self, from: Data("{}".utf8))
+        #expect(f?.seating == true)
+        #expect(f?.invoice == false)
+    }
+}

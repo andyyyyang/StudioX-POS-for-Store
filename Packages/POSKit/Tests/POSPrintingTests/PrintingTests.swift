@@ -78,6 +78,16 @@ struct PrintingTests {
         #expect(bytes.first == 0x1B)
         #expect(bytes.contains(0x07))
 
+        let pickup = Templates.saleReceipt(sale, store: store, pickupNumber: Templates.pickupNumber("A007")).plainText(width: .mm58)
+        #expect(pickup.hasPrefix("            取餐號碼") || pickup.contains("取餐號碼"))
+        #expect(Templates.pickupNumber("B120") == "120")
+        // 58 mm 與 80 mm：每一行都放得進紙寬
+        for w in PaperWidth.allCases {
+            for line in Templates.saleReceipt(sale, store: store).plainText(width: w).split(separator: "\n") {
+                #expect(TextWidth.of(String(line)) <= w.columns, "\(w) \(line)")
+            }
+        }
+
         let bill = Templates.bill(t, store: store, floor: floor).plainText(width: .mm80)
         #expect(bill.contains("A1"))
         #expect(bill.contains("服務費 10%"))

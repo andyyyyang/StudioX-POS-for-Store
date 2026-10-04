@@ -178,8 +178,35 @@ struct SidebarRail: View {
                 .frame(width: 26, height: 26)
                 .foregroundStyle(Theme.ink)
                 .padding(.top, 18)
-                .padding(.bottom, 14)
+                .padding(.bottom, 8)
                 .accessibilityLabel("StudioX POS")
+
+            // 營業模式（後台開了兩種以上才能切）
+            if model.store.serviceModes.count > 1 && model.device.role != .kitchen {
+                Menu {
+                    ForEach(model.store.serviceModes, id: \.self) { m in
+                        Button {
+                            model.setMode(m)
+                        } label: {
+                            if m == model.mode {
+                                Label("\(m.label)・\(m.summary)", systemImage: "checkmark")
+                            } else {
+                                Text("\(m.label)・\(m.summary)")
+                            }
+                        }
+                    }
+                } label: {
+                    Text(model.mode.label)
+                        .font(.brand(10.5, .semibold))
+                        .foregroundStyle(Theme.accentText)
+                        .lineLimit(1)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Theme.accentSoft, in: .capsule)
+                }
+                .accessibilityLabel("營業模式：\(model.mode.label)")
+                .padding(.bottom, 10)
+            }
 
             ForEach(model.visibleSections) { s in
                 RailButton(section: s, selected: model.section == s, badge: badge(for: s)) {

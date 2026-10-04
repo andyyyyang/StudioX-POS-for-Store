@@ -71,7 +71,9 @@ struct TicketColumn: View {
             Spacer()
             VStack(alignment: .leading, spacing: 10) {
                 Headline("Nothing *yet*", role: .h3)
-                Text("點左邊的品項就會開一張\(model.store.defaultOrderType.label)單；要帶位到「桌位」點空桌。")
+                Text(model.mode.usesTables && model.features.seating
+                     ? "點左邊的品項就會開一張\(model.mode.defaultOrderType.label)單；要帶位到「桌位」點空桌。"
+                     : "點左邊的品項就會開一張\(model.mode.defaultOrderType.label)單（\(model.mode.label)：\(model.mode.summary)）")
                     .textRole(.small)
                     .foregroundStyle(Theme.muted)
             }
@@ -167,7 +169,22 @@ struct TicketColumn: View {
                 }
                 .buttonStyle(.brand(.ghost, size: .sm))
                 .disabled(model.checkoutTicketId != nil)
-                StatusBadge(t.orderType.label, tone: .neutral)
+                Menu {
+                    ForEach(OrderType.allCases, id: \.self) { type in
+                        Button(type.label) { model.setOrderType(type, for: t) }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(t.orderType.label)
+                        HeroIcon("chevron-down", size: 10)
+                    }
+                    .font(.brand(13, .medium))
+                    .padding(.horizontal, 10)
+                    .frame(height: 34)
+                    .overlay { RoundedRectangle(cornerRadius: Metric.radiusSm).strokeBorder(Theme.line) }
+                }
+                .foregroundStyle(Theme.ink)
+                .disabled(model.checkoutTicketId != nil)
                 if let m = t.member {
                     StatusBadge((m.name ?? m.maskedPhone) + (m.tierName.map { "・\($0)" } ?? ""), tone: .gold)
                 }
@@ -256,7 +273,8 @@ struct TicketColumn: View {
         } else {
             let unsent = t.unsentLines.filter { $0.course <= 1 }
             HStack(spacing: 10) {
-                if model.features.kitchen && !unsent.isEmpty {
+                // 餐廳：先送廚房、吃完再結帳；櫃台、咖啡：結帳時一起送（沒有「送單」鈕）
+                if model.features.kitchen && model.mode.usesKitchen && !model.mode.payFirst && !unsent.isEmpty {
                     Button {
                         model.send(t)
                     } label: {

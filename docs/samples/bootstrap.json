@@ -135,6 +135,7 @@
       100000
     ],
     "defaultOrderType" : "dineIn",
+    "defaultServiceMode" : "tableService",
     "discountLimitBps" : 1000,
     "discountPresetsBps" : [
       500,
@@ -149,6 +150,12 @@
     "serviceChargeBps" : 1000,
     "serviceChargeOn" : [
       "dineIn"
+    ],
+    "serviceModes" : [
+      "tableService",
+      "counter",
+      "retail",
+      "cafe"
     ],
     "tableTimeLimitMinutes" : 90,
     "taxId" : "04595257",

@@ -117,7 +117,8 @@ extension POSModel {
         guard let t = state.tickets[given.id], t.isOpen, t.totals.isPaidInFull, let me = currentStaff else { return }
         var bodies: [EventBody] = []
         let unsent = t.unsentLines
-        if !unsent.isEmpty && features.kitchen {
+        let toKitchen = features.kitchen && mode.usesKitchen
+        if !unsent.isEmpty && toKitchen {
             bodies.append(.linesSent(LinesSent(ticketId: t.id, lineIds: unsent.map(\.id))))
         }
 
@@ -145,19 +146,26 @@ extension POSModel {
         if let invoice, invoice.printed {
             printers.printInvoice(InvoiceProof(invoice: invoice, storeName: store.name, qrKey: invoiceSettings.qrKey), detail: sale, store: store)
         }
-        switch settings.receiptMode {
-        case "always": printers.print(Templates.saleReceipt(sale, store: store), role: .receipt)
-        case "ask": receiptOffer = sale
-        default: break
+        // 櫃台、咖啡：客人要拿取餐號碼等叫號，一定印（號碼印在最上面、很大）
+        let pickup = mode.printsPickupNumber && t.tableIds.isEmpty ? Templates.pickupNumber(t.number) : nil
+        if let pickup {
+            printers.print(Templates.saleReceipt(sale, store: store, pickupNumber: pickup), role: .receipt)
+        } else {
+            switch settings.receiptMode {
+            case "always": printers.print(Templates.saleReceipt(sale, store: store), role: .receipt)
+            case "ask": receiptOffer = sale
+            default: break
+            }
         }
-        if !unsent.isEmpty && features.kitchen && settings.printKitchenTickets {
+        if !unsent.isEmpty && toKitchen && settings.printKitchenTickets {
             printKitchen(t, lines: unsent, mode: t.lines.contains(where: \.isSent) ? .add : .new)
         }
         lastSale = sale
         checkoutTicketId = nil
         selectedTicketId = nil
         let change = lastChange.cents > 0 ? "・找零 \(lastChange.formatted)" : ""
-        show("已結帳 \(t.number) \(sale.total.formatted)\(change)")
+        let number = pickup.map { "取餐 \($0)・" } ?? ""
+        show("已結帳 \(number)\(t.number) \(sale.total.formatted)\(change)")
         Task { await topUpInvoiceRolls() }
     }
 

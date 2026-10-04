@@ -6,8 +6,14 @@ import POSInvoice
 public enum Templates {
     // MARK: 交易明細（收據）
 
-    public static func saleReceipt(_ sale: SaleRecord, store: StoreProfile, reprint: Bool = false) -> Receipt {
+    /// pickupNumber：櫃台、咖啡模式的取餐號碼（印在最上面、很大，客人拿著等叫號）
+    public static func saleReceipt(_ sale: SaleRecord, store: StoreProfile, reprint: Bool = false, pickupNumber: String? = nil) -> Receipt {
         var r = Receipt()
+        if let pickupNumber {
+            r.add(.text("取餐號碼", ReceiptStyle(align: .center, bold: true)))
+            r.add(.text(pickupNumber, ReceiptStyle(align: .center, bold: true, scale: 3)))
+            r.add(.doubleRule)
+        }
         r.add(.text(store.name, .title))
         if !store.address.isEmpty { r.add(.text(store.address, .center)) }
         if !store.phone.isEmpty { r.add(.text("電話 \(store.phone)", .center)) }
@@ -89,6 +95,12 @@ public enum Templates {
         /// 催菜（第 2、3 道開始做）
         case fire
         case reprint
+    }
+
+    /// 取餐號碼：單號的數字部分（A023 → 23）
+    public static func pickupNumber(_ ticketNumber: String) -> String {
+        let digits = ticketNumber.filter(\.isNumber)
+        return String(Int(digits) ?? 0)
     }
 
     public static func kitchenTicket(_ t: Ticket, lines: [TicketLine], station: String?, mode: KitchenMode, floor: FloorPlan, at: Date) -> Receipt {
