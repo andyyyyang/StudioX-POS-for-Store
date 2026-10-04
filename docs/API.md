@@ -154,6 +154,32 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 - `POST /members` `{ phone, name }` → `{ member }`（現場加入會員；已存在就回原本的）
 - `PATCH /members/:id` `{ name?, note?, birthday? }` → `{ member }`（美業的配方、偏好記在 note）
 
+## 掃碼（手機用相機、iPad 用條碼機或相機）
+
+手機不接條碼機：右下的「掃碼」用相機掃，iPad 的外接條碼機打進來的字也走同一條路。App 照內容判斷是什麼（`POSModel.handleScan`），一個鍵就好：
+
+| 掃到的 | 怎麼認 | 做什麼 |
+|---|---|---|
+| 手機條碼載具 | `/` 開頭 8 碼（`/ABC+123`） | 掛在這張單的發票上（結帳櫃台照用）；沒有單就先記著，下一張單用 |
+| 自然人憑證載具 | 2 個英文 + 14 個數字 | 同上 |
+| 會員 | 裡面有 `09` 開頭 10 碼的手機號碼（會員卡的條碼／QR 就是手機號碼；網址 `…?phone=0912…` 也行） | `GET /members?phone=` → 掛到這張單（沒有單：打開會員） |
+| 商品 | 品號、條碼、SKU（`Catalog.match`） | 加一份 |
+| 折價券 | 其他（大寫英數，例如 `YG-A3B2C1`） | `GET /coupons/:code` → 套用到這張單 |
+
+## 折價券（門市）
+
+和網路商店同一份折價券（後台「折價券」）。`channel` 是 `in_store` 或 `both` 的才能在門市用；`free_shipping` 不能用。
+
+- `GET /coupons/:code?subtotal=12000&memberId=…` → `{ "coupon": { code, name, description, type: "fixed"|"percentage", value, minimumOrder, expiresAt, usesLeft }, "problem": null }`
+  - `value`：`fixed` 是分（NT$100＝10000），`percentage` 是基點（9 折＝1000）
+  - `problem`：不能用的原因（給店員看的一句，`null`＝可以用）：「已經過期（10/1）」「已經用完了」「只能在網路商店用」「停用了」「未達最低消費 NT$500」「這張券是別的會員的」「免運券不能在門市用」
+  - 沒有這張券：`404 not_found`
+  - 斷線：App 不能確認，**不套用**（避免同一張券兩邊用）
+- 套用：整張單的折扣（`ticket.updated` 的 `discount`）帶上 `couponCode`：`{ kind: "amount"|"percent", value, reason: "折價券 新會員 100 元", couponCode: "YG-A3B2C1" }`。一張單一個整單折扣：套折價券會換掉原本的整單折扣
+- 結帳時：`ticket.closed` 的 `sale.discount.couponCode` → 後台記一筆使用（`coupon_usages`：`order_id` 空、`pos_sale_id`、有會員就 `user_id`），`usesLeft` 跟著少。
+  已經用完了（另一台同時用掉）也照樣收這筆帳（事件不能退），在後台把這筆單標成 `flagged`「折價券超用」
+- 退款（`sale.refunded` 全額退）：還回那一次使用
+
 ## 會員帳戶（儲值金、課程卡、會籍）
 
 帳戶的變動不另外傳：iPad 與後台照**同一套規則**從事件推出來（Swift 的 `AccountRules`，`Packages/POSKit/Sources/POSCore/Accounts.swift`）。只有 `sale.member.id` 有值的單才算。

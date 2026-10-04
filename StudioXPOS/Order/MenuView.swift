@@ -156,7 +156,15 @@ struct MenuView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 12)], spacing: 12) {
                     ForEach(list) { item in
-                        if item.hasVariants {
+                        if item.hasVariants && VariantPanel.isSimple(item) {
+                            // 小吃的兩種價錢：價錢就是卡上的鍵，點了直接加
+                            PriceGroupCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
+                                           available: model.isAvailable(item)) {
+                                decrement(item)
+                            } toggleAvailability: {
+                                model.toggleAvailability(item)
+                            }
+                        } else if item.hasVariants {
                             // 服飾：像選物店的目錄（照片或色票、幾色幾碼、價格、庫存）
                             BoutiqueItemCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
                                              inTicket: quantity(of: item), available: model.isAvailable(item)) {

@@ -212,7 +212,14 @@ struct PhoneOrderView: View {
     @ViewBuilder
     private func card(_ item: MenuItem) -> some View {
         let swatch = model.catalog.category(item.categoryId)?.swatch ?? .sand
-        if item.hasVariants {
+        if item.hasVariants && VariantPanel.isSimple(item) {
+            // 小吃的兩種價錢：價錢就是卡上的鍵，點了直接加
+            PriceGroupCard(item: item, swatch: swatch, available: model.isAvailable(item)) {
+                decrement(item)
+            } toggleAvailability: {
+                model.toggleAvailability(item)
+            }
+        } else if item.hasVariants {
             BoutiqueItemCard(item: item, swatch: swatch, inTicket: quantity(of: item), available: model.isAvailable(item)) {
                 Task { await model.tap(item) }
             } minus: {
