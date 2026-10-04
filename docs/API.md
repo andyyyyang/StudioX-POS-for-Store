@@ -50,16 +50,18 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
    - **店裡共用的裝置**（iPad 當收銀台、廚房螢幕、點餐機）：多帶 `"mode": "shared", "role": "register"|"handheld"|"reception"|"kitchen"|"expo", "name": "櫃台 iPad"`。
      只有負責人、管理者（console 的 `level`，和在後台產生配對碼的權限一樣）可以；其他人 `403 forbidden`「要店長才能新增店裡的裝置」。
      網站新增一台一般的裝置（`personal: false`、不綁人；和用配對碼配對的一模一樣），回應沒有 `staff`、`personal: false`；之後大家照樣用 PIN 登入。
-     通行證多帶 `mode`、`role`、`name`（console 簽進去，網站只信通行證裡的）。`mode` 沒給＝`personal`
+     通行證多帶 `mode`、`role`、`name`（console 簽進去，網站只信通行證裡的；共用時 `name` 是裝置的名字，不是人）。`mode` 沒給＝`personal`
    - App：手機預設「我自己的」；iPad 登入後先問「這台是…」：**店裡共用的**（選崗位、取名字）或 **我自己的**
 4. **網站的 `POST /pair/personal`**（`Authorization: Bearer <通行證>`；`mode: "shared"` 時照上面新增一般的裝置，以下是個人的）：
-   - 用 `email` 找網站的使用者 → 綁著那個使用者的門市人員（`pos_staff.user_id`）；沒有就新增一位（名字用 `name`，角色照 console 的 `level`：負責人→`owner`、管理者→`manager`、其他→`server`；PIN 隨機、他用不到）
+   - 用 `email` 找網站的使用者 → 綁著那個使用者的門市人員（`pos_staff.user_id`）；沒有就新增一位（名字用 `name`，角色照 console 的 `level`：負責人→`owner`、管理者→`manager`、其他→`cashier`（已經有的門市人員保留店家設的角色）；PIN 隨機、他用不到）
    - 新增一台 `role: "handheld"`、`personal: true`、`staff_id` 綁那個人的裝置（後台「裝置」頁顯示「王小美的手機（個人）」，可以停用）
    - 同一個人同一支手機（`device.name`＋`model`）再登入：停用舊的那台、發新的
    - 門市人員被停用（`is_active=false`）：`403 staff_inactive`
 5. **之後**：和一般的裝置一樣用網站發的 token（`GET /bootstrap` 的 `device` 多了 `personal`、`staffId`）。個人手機：
    - 開 App 直接登入 `staffId` 那位；鎖定畫面換成 Face ID／手機密碼
-   - 這位被停用、或裝置被停用（401）→ 回到配對畫面
+   - 裝置被停用（`401 revoked`）→ 回到配對畫面
+   - 這位門市人員被停用（`401 staff_inactive`）：**不清本機資料**（還沒送出的帳要留著），顯示「你在這家店的門市人員被停用了，請找店長」；店長重新啟用後照常
+   - 個人裝置送出別人（`staffId` 不是綁的那位）的事件：照收（不斷鏈）但不算進帳、通知店長
    - 設定 →「登出這支手機」：`POST /devices/self/revoke`（網站停用這台），清掉 console 的 token
 
 ## 開機資料
@@ -236,10 +238,13 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
   - `problem`：不能用的原因（給店員看的一句，`null`＝可以用）：「已經過期（10/1）」「已經用完了」「只能在網路商店用」「停用了」「未達最低消費 NT$500」「這張券是別的會員的」「免運券不能在門市用」
   - 沒有這張券：`404 not_found`
   - 斷線：App 不能確認，**不套用**（避免同一張券兩邊用）
-- 套用：整張單的折扣（`ticket.updated` 的 `discount`）帶上 `couponCode`：`{ kind: "amount"|"percent", value, reason: "折價券 新會員 100 元", couponCode: "YG-A3B2C1" }`。一張單一個整單折扣：套折價券會換掉原本的整單折扣
+- 套用：整張單的折扣（`ticket.updated` 的 `discount`）帶上 `couponCode`：`{ kind: "amount"|"percent", value, reason: "折價券 新會員 100 元", couponCode: "YG-A3B2C1", minimumOrder: 30000 }`。一張單一個整單折扣：套折價券會換掉原本的整單折扣（App 先問）
+  - `minimumOrder`（選填，分）：券的最低消費，抄在單子上，每一台都看得到——改了品項、小計（整單折扣前）低於它時單子上提醒，結帳前 App 拿掉這張券（`clearDiscount`）。後台不用管
 - 結帳時：`ticket.closed` 的 `sale.couponCode`（整單折扣的折價券；`sale.orderDiscount` 是整單折扣的金額，分）→ 後台記一筆使用（`coupon_usages`：`order_id` 空、`pos_sale_id`、有會員就 `user_id`；一筆單只記一次），`usesLeft` 跟著少。
   已經用完了（另一台同時用掉）也照樣收這筆帳（事件不能退），在後台把這筆單標成 `flagged`「折價券超用」
 - 退款（`sale.refunded` 全額退）：還回那一次使用
+
+範例：`samples/coupon-lookup.json`、`samples/event-ticket-updated-coupon.json`、`samples/event-ticket-closed-coupon.json`。
 
 ## 會員帳戶（儲值金、課程卡、會籍）
 
