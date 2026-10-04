@@ -6,89 +6,117 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 報表：今天（或這一班）的營業。
+/// 報表：一天（或這一班）的營業。
 ///
-///   ┌ Today's numbers ───────────────────────────── [今天][這一班] ┐
-///   │ ┌營業額（橘）┐ ┌單數┐ ┌客單價┐ ┌來客數┐                        │
-///   │ 折扣｜退款｜服務費｜作廢                                       │
-///   │ ┌每小時營業額（長條）────────────┐ ┌付款方式（甜甜圈）┐        │
-///   │ ┌熱賣品項────────┐ ┌分類──────────┐                          │
-///   │ ┌作廢・折扣・發票┐ ┌現在（開著的單）┐                          │
-///   └──────────────────────────────────────────────────────────────┘
+///   ┌ Today's numbers ─────────────────── ‹ 10月4日 › [今天][這一班] ┐
+///   │ ┌營業額（橘）┐ ┌單數┐ ┌客單價┐ ┌來客數┐                          │
+///   │ 折扣｜退款｜服務費｜作廢                                         │
+///   │ 實收｜儲值｜課程卡｜卡抵用｜報到（美業、課程、服飾才有）            │
+///   │ ┌每小時營業額（長條）────────────┐ ┌付款方式（甜甜圈）┐          │
+///   │ ┌設計師業績（每個人的長條、抽成、助理）──────────────────┐       │
+///   │ ┌熱賣品項────────┐ ┌分類──────────┐                            │
+///   │ ┌作廢・折扣・發票┐ ┌現在（開著的單）┐ ┌各營業模式┐               │
+///   └────────────────────────────────────────────────────────────────┘
 ///
-/// 只算這台 iPad 看得到的事件（自己記的＋已經同步進來的其他裝置），所以頁尾寫清楚；
-/// 離線的裝置補送之後數字會再變。
+/// 今天、昨天用這台的事件算（自己記的＋已經同步進來的其他裝置）；更早的跟後台要（model.history），
+/// 用同一套 SalesSummary 算，所以數字的意思一樣。
 struct DashboardView: View {
     @Environment(POSModel.self) private var model
     @State private var range: DashRange = .today
+    /// 看哪一天（nil＝今天：過了營業日的分界會自己換到新的一天）
+    @State private var day: String?
+    /// 跟後台要不到的日子（離線）：畫面上給「重試」
+    @State private var offlineDays: Set<String> = []
 
     var body: some View {
-        let shift = model.openShift
+        let date = day ?? model.businessDate
+        let isToday = date == model.businessDate
+        let shift = isToday ? model.openShift : nil
         let showingShift = range == .shift && shift != nil
-        let summary = makeSummary(for: showingShift ? shift : nil)
-        let compare = showingShift ? nil : yesterdaySameTime()
+        let summary = makeSummary(date: date, shift: showingShift ? shift : nil)
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                header(shift: shift, showingShift: showingShift)
-                DashHeadline(summary: summary, compare: compare)
-                if let compare {
-                    DashCompareNote(compare: compare)
+                header(date: date, shift: shift, showingShift: showingShift)
+                if let summary {
+                    DashReport(
+                        summary: summary,
+                        compare: isToday && !showingShift ? yesterdaySameTime() : nil,
+                        bars: hourBars(summary, live: isToday && !showingShift),
+                        liveHour: isToday && !showingShift ? currentHour : nil,
+                        isToday: isToday
+                    )
+                } else if offlineDays.contains(date) {
+                    DashRemoteState(loading: false, title: "連不到後台", message: "更早的報表存在後台；連上網路後再試一次",
+                                    retry: { Task { await loadIfNeeded(date) } })
+                } else {
+                    DashRemoteState(loading: true, title: "向後台拿這天的報表…", message: "這台 iPad 只留最近兩天；更早的在後台", retry: nil)
                 }
-                DashMinorRow(summary: summary)
-                HStack(alignment: .top, spacing: 20) {
-                    DashHourlyPanel(bars: hourBars(summary, live: !showingShift), liveHour: showingShift ? nil : currentHour)
-                    DashTenderPanel(summary: summary)
-                        .frame(width: 300)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                HStack(alignment: .top, spacing: 20) {
-                    DashTopItemsPanel(items: summary.topItems)
-                    DashCategoryPanel(categories: summary.byCategory)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                HStack(alignment: .top, spacing: 20) {
-                    DashControlsPanel(summary: summary)
-                    DashFloorNowPanel()
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                footnote
+                footnote(date: date)
             }
             .padding(.horizontal, 28)
             .padding(.top, 22)
             .padding(.bottom, 32)
         }
         .scrollIndicators(.hidden)
+        .task(id: date) { await loadIfNeeded(date) }
     }
 
     // MARK: - 上面
 
-    private func header(shift: Shift?, showingShift: Bool) -> some View {
-        HStack(alignment: .bottom, spacing: 20) {
-            PageTitle(title: showingShift ? "This *shift*" : "Today's *numbers*", subtitle: subtitle(shift: shift, showingShift: showingShift))
-            Spacer(minLength: 16)
-            DashRangePicker(selected: showingShift ? .shift : .today, shiftAvailable: shift != nil) { r in
-                withAnimation(Motion.fast) { range = r }
+    private func header(date: String, shift: Shift?, showingShift: Bool) -> some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            PageTitle(title: showingShift ? "This *shift*" : (date == model.businessDate ? "Today's *numbers*" : "Past *numbers*"),
+                      subtitle: subtitle(date: date, shift: shift, showingShift: showingShift))
+            Spacer(minLength: 12)
+            DashDayBar(title: DashDays.short(date, today: model.businessDate), isToday: date == model.businessDate,
+                       step: { stepDay(from: date, by: $0) }, today: { goToday() })
+            if date == model.businessDate {
+                DashRangePicker(selected: showingShift ? .shift : .today, shiftAvailable: shift != nil) { r in
+                    withAnimation(Motion.fast) { range = r }
+                }
             }
         }
     }
 
-    private func subtitle(shift: Shift?, showingShift: Bool) -> String {
+    private func subtitle(date: String, shift: Shift?, showingShift: Bool) -> String {
         if showingShift, let shift {
             return "報表・這一班 \(shift.openedAt.clockText) 開班・\(model.staffName(shift.openedBy))"
         }
-        if let day = noon(of: model.businessDate) {
-            return "報表・\(day.dayTitle)"
-        }
-        return "報表・\(model.businessDate)"
+        let title = DashDays.noon(date)?.dayTitle ?? date
+        return model.isLocal(date: date) ? "報表・\(title)" : "報表・\(title)・後台的資料"
+    }
+
+    private func stepDay(from date: String, by delta: Int) {
+        guard let next = DashDays.shift(date, by: delta) else { return }
+        // 不往未來走；回到今天就交給 nil（跟著營業日換日）
+        day = next >= model.businessDate ? nil : next
+        if day != nil { range = .today }
+        model.touch()
+    }
+
+    private func goToday() {
+        day = nil
     }
 
     // MARK: - 資料
 
-    private func makeSummary(for shift: Shift?) -> SalesSummary {
+    /// 這一班、這台還有的日子（今天、昨天）在這台算；更早的用後台那天的資料（還沒拿到是 nil）
+    private func makeSummary(date: String, shift: Shift?) -> SalesSummary? {
         if let shift {
             return ShiftReport(shift: shift, state: model.state, now: Date()).summary
         }
-        return model.state.dailySummary(businessDate: model.businessDate)
+        if model.isLocal(date: date) {
+            return model.state.dailySummary(businessDate: date)
+        }
+        return model.historyCache[date]?.summary
+    }
+
+    /// 更早的日子：跟後台要一次（model 會快取）；拿不到記下來，畫面上給「重試」
+    private func loadIfNeeded(_ date: String) async {
+        guard !model.isLocal(date: date), model.historyCache[date] == nil else { return }
+        offlineDays.remove(date)
+        let h = await model.history(date: date)
+        if h == nil { offlineDays.insert(date) }
     }
 
     private var currentHour: Int { TaipeiTime.components(Date()).hour ?? 0 }
@@ -99,27 +127,9 @@ struct DashboardView: View {
         return s.dashHours(cutoffHour: model.store.businessDayCutoffHour, through: through)
     }
 
-    /// 營業日（YYYY-MM-DD）那天的中午（台北）：拿來顯示日期、往前推一天
-    private func noon(of businessDate: String) -> Date? {
-        let parts = businessDate.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        var c = DateComponents()
-        c.year = parts[0]
-        c.month = parts[1]
-        c.day = parts[2]
-        c.hour = 12
-        return TaipeiTime.calendar.date(from: c)
-    }
-
-    private var yesterdayDate: String? {
-        guard let today = noon(of: model.businessDate),
-              let y = TaipeiTime.calendar.date(byAdding: .day, value: -1, to: today) else { return nil }
-        return TaipeiTime.dayString(y)
-    }
-
-    /// 昨天到「現在這個時間」為止：今天還沒打烊，跟昨天全天比不公平
+    /// 昨天到「現在這個時間」為止：今天還沒打烊，跟昨天全天比不公平（昨天一定還在這台）
     private func yesterdaySameTime() -> DashComparison? {
-        guard let y = yesterdayDate else { return nil }
+        guard let y = DashDays.shift(model.businessDate, by: -1) else { return nil }
         let all = model.state.closedSales(businessDate: y)
         guard !all.isEmpty else { return nil }
         let cutoff = Date().addingTimeInterval(-86_400)
@@ -130,14 +140,185 @@ struct DashboardView: View {
 
     // MARK: - 頁尾
 
-    private var footnote: some View {
+    private func footnote(date: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             HeroIcon("information-circle", size: 15)
-            Text("這台 iPad 看得到的所有裝置：自己記的，加上已經同步進來的其他 iPad；離線的裝置補送後數字會再變。營業日 \(model.businessDate)，凌晨 \(model.store.businessDayCutoffHour) 點前算前一天。")
+            Text(footnoteText(date: date))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .font(.brand(12.5, .regular))
         .foregroundStyle(Theme.muted)
+    }
+
+    private func footnoteText(date: String) -> String {
+        let source = model.isLocal(date: date)
+            ? "這台 iPad 看得到的所有裝置：自己記的，加上已經同步進來的其他 iPad；離線的裝置補送後數字會再變。"
+            : "後台存的那一天：所有門市裝置的結帳、退款與作廢。"
+        return "\(source)營業日 \(date)，凌晨 \(model.store.businessDayCutoffHour) 點前算前一天。"
+    }
+}
+
+/// 一天的報表內容（今天、昨天、後台的日子都用這一份）
+private struct DashReport: View {
+    @Environment(POSModel.self) private var model
+    let summary: SalesSummary
+    let compare: DashComparison?
+    let bars: [DashHourBar]
+    let liveHour: Int?
+    let isToday: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            DashHeadline(summary: summary, compare: compare)
+            if let compare {
+                DashCompareNote(compare: compare)
+            }
+            DashMinorRow(summary: summary)
+            DashAccountsRow(summary: summary)
+            if summary.prepaidSold.cents > 0 {
+                DashPrepaidNote(summary: summary)
+            }
+            HStack(alignment: .top, spacing: 20) {
+                DashHourlyPanel(bars: bars, liveHour: liveHour)
+                DashTenderPanel(summary: summary)
+                    .frame(width: 300)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            if showsStaff {
+                DashStaffPanel(staff: summary.byStaff, title: "\(model.mode.staffTitle)業績")
+            }
+            HStack(alignment: .top, spacing: 20) {
+                DashTopItemsPanel(items: summary.topItems)
+                DashCategoryPanel(categories: summary.byCategory)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 20) {
+                DashControlsPanel(summary: summary)
+                if isToday {
+                    DashFloorNowPanel()
+                }
+                if showsModes {
+                    DashModePanel(byMode: summary.byMode)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 有開業績抽成，或今天真的有抽成、卡抵、助理（美業、課程）
+    private var showsStaff: Bool {
+        if summary.byStaff.isEmpty { return false }
+        if model.features.commission { return true }
+        return summary.byStaff.contains(where: { $0.commission.cents > 0 || $0.redeemed.cents > 0 || $0.assists > 0 })
+    }
+
+    /// 一家店同一天有兩種以上的營業模式在賣（健身房的櫃台賣飲料）
+    private var showsModes: Bool {
+        summary.byMode.values.filter { $0.cents > 0 }.count >= 2
+    }
+}
+
+/// 營業日（YYYY-MM-DD）的換算
+private enum DashDays {
+    /// 那天中午（台北）：避開凌晨的營業日分界
+    static func noon(_ date: String) -> Date? {
+        let parts = date.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        var c = DateComponents()
+        c.year = parts[0]
+        c.month = parts[1]
+        c.day = parts[2]
+        c.hour = 12
+        return TaipeiTime.calendar.date(from: c)
+    }
+
+    static func shift(_ date: String, by days: Int) -> String? {
+        guard let d = noon(date), let moved = TaipeiTime.calendar.date(byAdding: .day, value: days, to: d) else { return nil }
+        return TaipeiTime.dayString(moved)
+    }
+
+    /// 「今天」「昨天」「10/1 週四」
+    static func short(_ date: String, today: String) -> String {
+        if date == today { return "今天" }
+        if shift(date, by: 1) == today { return "昨天" }
+        let parts = date.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return date }
+        return "\(parts[1])/\(parts[2])"
+    }
+}
+
+/// 「‹ 今天 ›」：一次看一天
+private struct DashDayBar: View {
+    let title: String
+    let isToday: Bool
+    let step: (Int) -> Void
+    let today: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button {
+                step(-1)
+            } label: {
+                HeroIcon("chevron-right", size: 14)
+                    .rotationEffect(.degrees(180))
+            }
+            .buttonStyle(SquareIconButtonStyle(size: 38))
+            .accessibilityLabel("前一天")
+
+            Text(title)
+                .font(.brand(14.5, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.ink)
+                .frame(minWidth: 54)
+
+            Button {
+                step(1)
+            } label: {
+                HeroIcon("chevron-right", size: 14)
+            }
+            .buttonStyle(SquareIconButtonStyle(size: 38))
+            .disabled(isToday)
+            .opacity(isToday ? 0.35 : 1)
+            .accessibilityLabel("後一天")
+
+            if !isToday {
+                Button("回今天", action: today)
+                    .buttonStyle(.brand(.quiet, size: .sm))
+            }
+        }
+    }
+}
+
+/// 向後台拿資料時的安靜狀態：小轉圈或「連不到」＋重試
+private struct DashRemoteState: View {
+    let loading: Bool
+    let title: String
+    let message: String
+    let retry: (() -> Void)?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if loading {
+                ProgressView()
+                    .controlSize(.regular)
+            } else {
+                HeroIcon("cloud", size: 28)
+                    .foregroundStyle(Theme.faint)
+            }
+            Text(title)
+                .textRole(.h4)
+                .foregroundStyle(Theme.ink2)
+            Text(message)
+                .textRole(.small)
+                .foregroundStyle(Theme.muted)
+                .multilineTextAlignment(.center)
+            if let retry {
+                Button("重試", action: retry)
+                    .buttonStyle(.brand(.ghost, size: .sm))
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 360)
+        .panel(padding: 24)
     }
 }
 
@@ -366,10 +547,11 @@ private struct DashMinorRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
-            DashSmallTile(title: "折扣", money: summary.discounts, tone: summary.discounts.cents > 0 ? Theme.accentText : Theme.ink)
-            DashSmallTile(title: "退款", money: summary.refunds, tone: summary.refunds.cents > 0 ? Theme.dangerFG : Theme.ink)
-            DashSmallTile(title: "服務費", money: summary.serviceCharge, tone: Theme.ink)
-            DashSmallTile(title: "作廢", money: summary.voidedAmount, tone: Theme.ink, note: "\(summary.voidedItems) 項・整張 \(summary.voidedTickets)")
+            DashSmallTile(title: "折扣", value: summary.discounts.formatted, tone: summary.discounts.cents > 0 ? Theme.accentText : Theme.ink)
+            DashSmallTile(title: "退款", value: summary.refunds.formatted, tone: summary.refunds.cents > 0 ? Theme.dangerFG : Theme.ink)
+            DashSmallTile(title: "服務費", value: summary.serviceCharge.formatted, tone: Theme.ink)
+            DashSmallTile(title: "作廢", value: summary.voidedAmount.formatted, tone: Theme.ink,
+                          note: "\(summary.voidedItems) 項・整張 \(summary.voidedTickets)")
         }
         .fixedSize(horizontal: false, vertical: true)
     }
@@ -377,7 +559,7 @@ private struct DashMinorRow: View {
 
 private struct DashSmallTile: View {
     let title: String
-    let money: Money
+    let value: String
     let tone: Color
     var note: String? = nil
 
@@ -386,7 +568,7 @@ private struct DashSmallTile: View {
             Text(title)
                 .font(.brand(13, .medium))
                 .foregroundStyle(Theme.muted)
-            Text(money.formatted)
+            Text(value)
                 .font(.brand(24, .medium))
                 .monospacedDigit()
                 .foregroundStyle(tone)
@@ -397,7 +579,8 @@ private struct DashSmallTile: View {
                     .font(.brand(12, .regular))
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 18)
@@ -408,6 +591,246 @@ private struct DashSmallTile: View {
                 .strokeBorder(Theme.line, lineWidth: 1)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - 實收、儲值、課程卡、卡抵用、報到
+
+/// 一格小數字（只在這一格有意義時出現）
+private struct DashFigure: Identifiable {
+    let id: String
+    let title: String
+    let value: String
+    let tone: Color
+    let note: String?
+}
+
+/// 美業、課程、服飾關心的數字：真的收到多少錢、預收了多少儲值、賣了多少課程卡、卡抵了多少、報到幾人次。
+/// 有數字、或這個營業模式本來就會有的才顯示（餐廳通常一格都不出現）
+private struct DashAccountsRow: View {
+    @Environment(POSModel.self) private var model
+    let summary: SalesSummary
+
+    var body: some View {
+        let figures = self.figures
+        if !figures.isEmpty {
+            HStack(alignment: .top, spacing: 16) {
+                ForEach(figures) { f in
+                    DashSmallTile(title: f.title, value: f.value, tone: f.tone, note: f.note)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var figures: [DashFigure] {
+        let mode = model.mode
+        // 美業、課程開了會員帳戶：儲值、課程卡、卡抵用一定會用到
+        let accounts = model.features.accounts && mode.wantsCustomer
+        var out: [DashFigure] = []
+        let internalUse = summary.prepaidUsed.cents > 0 || summary.exchangeCredit.cents > 0
+        if internalUse || summary.prepaidSold.cents > 0 || accounts || mode.usesExchanges {
+            out.append(DashFigure(id: "received", title: "實收", value: summary.received.formatted, tone: Theme.ink, note: receivedNote))
+        }
+        if summary.prepaidSold.cents > 0 || accounts {
+            let used = summary.prepaidUsed.cents > 0 ? "用掉 \(summary.prepaidUsed.formatted)" : "預收款"
+            out.append(DashFigure(id: "prepaid", title: "儲值", value: summary.prepaidSold.formatted, tone: Theme.ink, note: used))
+        }
+        if summary.passesSold.cents > 0 || accounts {
+            out.append(DashFigure(id: "passes", title: "課程卡", value: summary.passesSold.formatted, tone: Theme.ink, note: "課程卡、會籍"))
+        }
+        if summary.redeemedValue.cents > 0 || accounts {
+            out.append(DashFigure(id: "redeemed", title: "卡抵用", value: summary.redeemedValue.formatted, tone: Theme.accentText,
+                                  note: "課程卡抵的服務價值（沒收錢、算業績）"))
+        }
+        if summary.checkIns > 0 || mode.usesCheckIn {
+            out.append(DashFigure(id: "checkins", title: "報到", value: "\(summary.checkIns) 人次", tone: Theme.ink, note: "入場報到"))
+        }
+        return out
+    }
+
+    /// 「不含儲值金 NT$1,200、換貨抵 NT$890」
+    private var receivedNote: String {
+        var parts: [String] = []
+        if summary.prepaidUsed.cents > 0 { parts.append("儲值金 \(summary.prepaidUsed.formatted)") }
+        if summary.exchangeCredit.cents > 0 { parts.append("換貨抵 \(summary.exchangeCredit.formatted)") }
+        if parts.isEmpty { return "真的收到的錢（扣退款、含小費）" }
+        return "不含 " + parts.joined(separator: "、")
+    }
+}
+
+/// 有賣儲值時：營業額裡有一部分是預收款
+private struct DashPrepaidNote: View {
+    let summary: SalesSummary
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HeroIcon("information-circle", size: 14)
+            Text("儲值是預收款：營業額含儲值 \(summary.prepaidSold.formatted)，扣掉後的營收是 \(summary.revenue.formatted)。")
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.brand(12.5, .regular))
+        .monospacedDigit()
+        .foregroundStyle(Theme.muted)
+    }
+}
+
+// MARK: - 業績
+
+/// 每位服務人員的業績：服務／商品／卡抵、抽成、當助理的次數（照業績排）
+private struct DashStaffPanel: View {
+    let staff: [StaffTotal]
+    let title: String
+
+    var body: some View {
+        let rows = staff.filter { $0.performance.cents > 0 || $0.assists > 0 }
+        let top = rows.map(\.performance.cents).max() ?? 0
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Eyebrow(title)
+                Spacer(minLength: 8)
+                Text("業績＝實收＋課程卡抵的價值")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+            }
+            if rows.isEmpty {
+                Text("還沒有業績")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.faint)
+                    .padding(.vertical, 12)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { i, s in
+                        DashStaffRow(total: s, ratio: top > 0 ? Double(s.performance.cents) / Double(top) : 0,
+                                     color: i == 0 ? Theme.accent : Theme.chart[i % Theme.chart.count])
+                        if i < rows.count - 1 {
+                            Rule(color: Theme.hair)
+                        }
+                    }
+                }
+            }
+        }
+        .dashPanel()
+    }
+}
+
+private struct DashStaffRow: View {
+    @Environment(POSModel.self) private var model
+    let total: StaffTotal
+    let ratio: Double
+    let color: Color
+
+    var body: some View {
+        let member = model.staffMember(total.staffId)
+        HStack(alignment: .center, spacing: 14) {
+            StaffAvatar(name: member?.name ?? "?", swatch: member?.swatch ?? .sand, size: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(member?.name ?? "不在名單上的人")
+                    .font(.brand(15, .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                Text(member?.title ?? member?.role.label ?? "")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+            }
+            .frame(width: 140, alignment: .leading)
+            VStack(alignment: .leading, spacing: 6) {
+                DashShareBar(ratio: ratio, color: color)
+                Text(split)
+                    .font(.brand(12, .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(maxWidth: .infinity)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(total.performance.formatted)
+                    .font(.brand(16, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink)
+                Text(extra)
+                    .font(.brand(12, .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+            }
+            .frame(minWidth: 120, alignment: .trailing)
+        }
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 「服務 $3,200・商品 $480・卡抵 $1,500」
+    private var split: String {
+        var parts: [String] = []
+        if total.services.cents > 0 { parts.append("服務 \(total.services.short)") }
+        if total.goods.cents > 0 { parts.append("商品 \(total.goods.short)") }
+        if total.redeemed.cents > 0 { parts.append("卡抵 \(total.redeemed.short)") }
+        return parts.isEmpty ? "只當助理" : parts.joined(separator: "・")
+    }
+
+    /// 「抽成 $640・助理 3 次」
+    private var extra: String {
+        var parts: [String] = []
+        if total.commission.cents > 0 { parts.append("抽成 \(total.commission.short)") }
+        if total.assists > 0 { parts.append("助理 \(total.assists) 次") }
+        if parts.isEmpty { parts.append("\(total.items) 項") }
+        return parts.joined(separator: "・")
+    }
+}
+
+// MARK: - 各營業模式
+
+private struct DashModeRow: Identifiable {
+    let mode: ServiceMode
+    let amount: Money
+    var id: String { mode.rawValue }
+}
+
+/// 同一天有兩種以上的營業模式（健身房的課程＋櫃台飲料）：各賣了多少
+private struct DashModePanel: View {
+    let byMode: [String: Money]
+
+    var body: some View {
+        let rows = self.rows
+        let total = rows.reduce(0) { $0 + $1.amount.cents }
+        VStack(alignment: .leading, spacing: 14) {
+            Eyebrow("各營業模式")
+            ForEach(rows) { r in
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        HeroIcon(r.mode.icon, size: 15)
+                            .foregroundStyle(Theme.ink2)
+                        Text(r.mode.label)
+                            .font(.brand(14.5, .medium))
+                            .foregroundStyle(Theme.ink)
+                        Spacer(minLength: 8)
+                        Text(dashPercent(r.amount.cents, of: total))
+                            .font(.brand(12.5, .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.muted)
+                        Text(r.amount.formatted)
+                            .font(.brand(14.5, .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.ink)
+                    }
+                    DashShareBar(ratio: total > 0 ? Double(r.amount.cents) / Double(total) : 0, color: Theme.accent)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .dashPanel()
+    }
+
+    /// 認得的模式、有營業額的，照金額排
+    private var rows: [DashModeRow] {
+        var out: [DashModeRow] = []
+        for (key, amount) in byMode where amount.cents > 0 {
+            if let m = ServiceMode(rawValue: key) { out.append(DashModeRow(mode: m, amount: amount)) }
+        }
+        return out.sorted { $0.amount > $1.amount }
     }
 }
 
@@ -518,6 +941,8 @@ private struct DashSlice: Identifiable {
     let count: Int
     let amount: Money
     let color: Color
+    /// 儲值金、換貨抵用：不是真的收到錢，「實收」不算
+    let isInternal: Bool
 }
 
 private struct DashTenderPanel: View {
@@ -543,11 +968,21 @@ private struct DashTenderPanel: View {
                         legendRow(s, total: total)
                     }
                 }
-                if summary.refunds.cents > 0 {
-                    Text("已扣掉退款")
-                        .textRole(.xs)
-                        .foregroundStyle(Theme.muted)
+                Rule(color: Theme.hair)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("實收")
+                        .font(.brand(13.5, .medium))
+                        .foregroundStyle(Theme.ink2)
+                    Spacer(minLength: 8)
+                    Text(summary.received.formatted)
+                        .font(.brand(15, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink)
                 }
+                Text(tenderNote(slices))
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .dashPanel()
@@ -588,13 +1023,24 @@ private struct DashTenderPanel: View {
                     .monospacedDigit()
                     .foregroundStyle(Theme.ink)
             }
-            Text("\(s.count) 筆・\(dashPercent(s.amount.cents, of: total))")
+            Text("\(s.count) 筆・\(dashPercent(s.amount.cents, of: total))\(s.isInternal ? "・不算實收" : "")")
                 .font(.brand(12, .regular))
                 .monospacedDigit()
                 .foregroundStyle(Theme.muted)
                 .padding(.leading, 16)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension DashTenderPanel {
+    /// 實收的說明：扣了退款、不含儲值金與換貨抵用
+    fileprivate func tenderNote(_ slices: [DashSlice]) -> String {
+        var parts: [String] = []
+        if summary.refunds.cents > 0 { parts.append("已扣退款") }
+        if slices.contains(where: \.isInternal) { parts.append("不含儲值金、換貨抵用") }
+        parts.append("含小費")
+        return parts.joined(separator: "・")
     }
 }
 
@@ -832,7 +1278,7 @@ extension SalesSummary {
         let positive = byTender.filter { $0.amount.cents > 0 }
         return positive.enumerated().map { i, t in
             DashSlice(id: t.tender.rawValue, label: t.tender.label, count: t.count, amount: t.amount,
-                      color: Theme.chart[i % Theme.chart.count])
+                      color: t.tender.isInternal ? Theme.ink.opacity(0.3) : Theme.chart[i % Theme.chart.count], isInternal: t.tender.isInternal)
         }
     }
 }

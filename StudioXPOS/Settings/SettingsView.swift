@@ -117,7 +117,10 @@ struct SettingsView: View {
             if left == 0 { return ("剩 0", .danger) }
             if left < 10 { return ("剩 \(left)", .warning) }
             return nil
-        case .mode, .receipts, .appearance, .data, .advanced:
+        case .workstation:
+            // 換過崗位（不是後台配對時設的）：提醒一下
+            return model.role != model.device.role ? ("已改", .info) : nil
+        case .mode, .store, .receipts, .appearance, .data, .advanced:
             return nil
         }
     }
@@ -129,7 +132,9 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 24) {
                 switch group {
                 case .device: SettingsDeviceSection()
+                case .workstation: SettingsWorkstationSection()
                 case .mode: SettingsModeSection()
+                case .store: SettingsStoreSection()
                 case .printers: printersSection
                 case .receipts: SettingsReceiptsSection()
                 case .invoice: SettingsInvoiceSection()
@@ -207,14 +212,16 @@ struct SettingsView: View {
 // MARK: - 分類
 
 private enum SettingsGroup: String, CaseIterable, Identifiable {
-    case device, mode, printers, receipts, invoice, appearance, data, advanced
+    case device, workstation, mode, store, printers, receipts, invoice, appearance, data, advanced
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .device: "這台裝置"
+        case .workstation: "崗位"
         case .mode: "營業模式"
+        case .store: "門市設定"
         case .printers: "出單機"
         case .receipts: "收據與出單"
         case .invoice: "電子發票"
@@ -227,7 +234,9 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .device: "device-phone-mobile"
-        case .mode: "building-storefront"
+        case .workstation: "map-pin"
+        case .mode: "rectangle-stack"
+        case .store: "building-storefront"
         case .printers: "printer"
         case .receipts: "document-text"
         case .invoice: "qr-code"
@@ -364,10 +373,11 @@ extension View {
 private struct SettingsDeviceSection: View {
     @Environment(POSModel.self) private var model
     @State private var refreshing = false
+    @State private var syncing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            SettingsHeading(title: "這台裝置", detail: "名稱、代號、角色在後台「門市 POS → 裝置」設定。")
+            SettingsHeading(title: "這台裝置", detail: "名稱、代號、預設崗位在後台「門市 POS → 裝置」設定；崗位也可以在左邊的「崗位」裡改。")
             identityPanel
             syncPanel
             meshPanel
@@ -378,7 +388,7 @@ private struct SettingsDeviceSection: View {
         VStack(alignment: .leading, spacing: 12) {
             ValueRow(label: "名稱", value: model.device.name.isEmpty ? "—" : model.device.name, strong: true)
             ValueRow(label: "代號", value: "\(model.device.code)（單號開頭）")
-            ValueRow(label: "角色", value: model.device.role.label)
+            ValueRow(label: "崗位", value: roleText)
             ValueRow(label: "店家", value: model.store.name)
             ValueRow(label: "後台", value: cmsText)
             if let p = model.pairing {
@@ -391,6 +401,12 @@ private struct SettingsDeviceSection: View {
             }
         }
         .panel(padding: 22)
+    }
+
+    /// 「結帳櫃台」；在這台改過的話也寫後台設的是什麼
+    private var roleText: String {
+        if model.role == model.device.role { return model.role.label }
+        return "\(model.role.label)（後台設定：\(model.device.role.label)）"
     }
 
     private var cmsText: String {
@@ -417,25 +433,47 @@ private struct SettingsDeviceSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Rule(color: Theme.hair)
-            HStack(alignment: .center, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
+                Button {
+                    Task { await syncNow() }
+                } label: {
+                    Label {
+                        Text(syncing ? "同步中…" : "立即同步")
+                    } icon: {
+                        HeroIcon("arrow-path", size: 16)
+                    }
+                }
+                .buttonStyle(.brand(.primary, size: .md))
+                .disabled(syncing || model.isDemo)
                 Button {
                     Task { await refresh() }
                 } label: {
                     Label {
                         Text(refreshing ? "更新中…" : "重新抓設定")
                     } icon: {
-                        HeroIcon("arrow-path", size: 16)
+                        HeroIcon("arrow-down-tray", size: 16)
                     }
                 }
                 .buttonStyle(.brand(.ghost, size: .md))
                 .disabled(refreshing)
-                Text("單子每 15 秒自動同步，有新動作時馬上送；這個按鈕是重抓菜單、人員、桌位與發票號碼。")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
             }
+            Text("單子每 15 秒自動同步、有新動作時馬上送；「立即同步」現在就送出、拉回別台的。「重新抓設定」重抓菜單、人員、桌位與發票號碼。")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .panel(padding: 22)
+    }
+
+    private func syncNow() async {
+        syncing = true
+        let status = await model.syncNow()
+        syncing = false
+        guard let status else {
+            model.show("還沒連上後台", tone: .warning)
+            return
+        }
+        model.show("同步：\(status.label)", tone: status.health == .synced ? .active : .warning)
     }
 
     private func refresh() async {
@@ -535,11 +573,11 @@ private struct SettingsModeSection: View {
             SettingsHeading(title: "營業模式", detail: "同一套 POS 用在不同的店、不同的時段。每台 iPad 自己選；換了之後側欄、開單、結帳的順序跟著變。")
             VStack(spacing: 10) {
                 SettingsModeOption(title: "跟後台一樣", detail: "後台的預設：\(fallback.label)・\(fallback.summary)",
-                                   icon: "cloud", selected: explicit == nil) {
+                                   examples: "例如：\(fallback.examples)", icon: "cloud", selected: explicit == nil) {
                     if explicit != nil { model.setMode(nil) }
                 }
                 ForEach(model.store.serviceModes, id: \.self) { m in
-                    SettingsModeOption(title: m.label, detail: m.summary, icon: icon(m), selected: explicit == m) {
+                    SettingsModeOption(title: m.label, detail: m.summary, examples: "例如：\(m.examples)", icon: icon(m), selected: explicit == m) {
                         if explicit != m { model.setMode(m) }
                     }
                 }
@@ -559,9 +597,12 @@ private struct SettingsModeSection: View {
     private func icon(_ m: ServiceMode) -> String { m.icon }
 }
 
+/// 一張可以選的卡：圖示、名字（＋小標籤）、說明、例子、右邊的圓點
 private struct SettingsModeOption: View {
     let title: String
     let detail: String
+    var examples: String? = nil
+    var tags: [String] = []
     let icon: String
     let selected: Bool
     let action: () -> Void
@@ -574,14 +615,26 @@ private struct SettingsModeOption: View {
                     .frame(width: 42, height: 42)
                     .background(selected ? Theme.accentSoft : Theme.press, in: .rect(cornerRadius: Metric.radius, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(title)
-                        .font(.brand(16, .semibold))
-                        .foregroundStyle(Theme.ink)
+                    HStack(spacing: 8) {
+                        Text(title)
+                            .font(.brand(16, .semibold))
+                            .foregroundStyle(Theme.ink)
+                        ForEach(tags, id: \.self) { t in
+                            StatusBadge(t, tone: t == "現在" ? .gold : .neutral)
+                        }
+                    }
                     Text(detail)
                         .font(.brand(13, .regular))
                         .foregroundStyle(Theme.muted)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let examples {
+                        Text(examples)
+                            .font(.brand(12, .regular))
+                            .foregroundStyle(Theme.faint)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 8)
                 ZStack {
@@ -605,6 +658,191 @@ private struct SettingsModeOption: View {
         }
         .buttonStyle(.press)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - 崗位
+
+/// 這台放在店裡的哪個位置：決定側欄有哪些頁、先看哪一頁、能不能收錢開錢櫃（資料每台都一樣）
+private struct SettingsWorkstationSection: View {
+    @Environment(POSModel.self) private var model
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsHeading(title: "崗位", detail: "這台 iPad 放在店裡的哪個位置。崗位決定側欄有哪些頁、先看哪一頁、能不能收錢開錢櫃；每台看到的單都一樣。換崗位要店長授權。")
+            VStack(spacing: 10) {
+                ForEach(DeviceRole.allCases, id: \.self) { r in
+                    SettingsModeOption(title: r.label, detail: r.summary, examples: abilities(r), tags: tags(r),
+                                       icon: icon(r), selected: model.role == r) {
+                        choose(r)
+                    }
+                    .disabled(busy)
+                }
+            }
+            Text("後台配對時設的是「\(model.device.role.label)」；在這裡改只影響這台，心跳會回報給後台。")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func tags(_ r: DeviceRole) -> [String] {
+        var out: [String] = []
+        if r == model.device.role { out.append("後台設定") }
+        if r == model.role { out.append("現在") }
+        return out
+    }
+
+    /// 「收錢・錢櫃・開單」：一眼看出這個崗位能做什麼
+    private func abilities(_ r: DeviceRole) -> String {
+        var parts: [String] = []
+        if r.takesPayment { parts.append("收錢") }
+        if r.hasDrawer { parts.append("錢櫃與交班") }
+        if r.takesOrders { parts.append("開單") }
+        if r.isKitchen { parts.append("出單進度") }
+        return parts.isEmpty ? "只看" : parts.joined(separator: "・")
+    }
+
+    private func icon(_ r: DeviceRole) -> String {
+        switch r {
+        case .register: "banknotes"
+        case .handheld: "device-phone-mobile"
+        case .kitchen: "fire"
+        case .reception: "user-group"
+        case .expo: "bell-alert"
+        }
+    }
+
+    /// 選回後台設的那個＝nil（之後後台改了也跟著）；setRole 自己會請店長授權、跳到新崗位的首頁
+    private func choose(_ r: DeviceRole) {
+        guard r != model.role, !busy else { return }
+        busy = true
+        Task {
+            await model.setRole(r == model.device.role ? nil : r)
+            busy = false
+        }
+    }
+}
+
+// MARK: - 門市設定（後台的，只能看）
+
+private struct SettingsStoreSection: View {
+    @Environment(POSModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsHeading(title: "門市設定", detail: "在後台「門市 POS → 設定」改，改了這台會自動拿到；這裡只能看。")
+            rulesPanel
+            invoicingPanel
+            staffPanel
+        }
+    }
+
+    private var rulesPanel: some View {
+        let store = model.store
+        return VStack(alignment: .leading, spacing: 12) {
+            Eyebrow("規則")
+            ValueRow(label: "換貨期限", value: store.exchangeDays > 0 ? "結帳後 \(store.exchangeDays) 天內" : "不限")
+            ValueRow(label: "預約一格", value: "\(store.bookingSlotMinutes) 分鐘")
+            ValueRow(label: "營業日分界", value: "凌晨 \(store.businessDayCutoffHour) 點（之前算前一天）")
+            ValueRow(label: "不用授權的折扣上限", value: percentText(bps: store.discountLimitBps))
+            if store.serviceChargeBps > 0 {
+                ValueRow(label: "服務費", value: "\(percentText(bps: store.serviceChargeBps))（\(store.serviceChargeOn.map(\.label).joined(separator: "、"))）")
+            }
+        }
+        .panel(padding: 22)
+    }
+
+    /// 儲值金的發票什麼時候開：兩種都列出來、標出這家店用哪一種
+    private var invoicingPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Eyebrow("儲值金發票")
+            ForEach(PrepaidInvoicing.allCases, id: \.self) { p in
+                let current = p == model.store.prepaidInvoicing
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HeroIcon(current ? "check-circle" : "minus", size: 16)
+                        .foregroundStyle(current ? Theme.successFG : Theme.faint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(p.label)
+                            .font(.brand(15, current ? .semibold : .regular))
+                            .foregroundStyle(current ? Theme.ink : Theme.muted)
+                        Text(explain(p))
+                            .font(.brand(12.5, .regular))
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(current ? .isSelected : [])
+            }
+        }
+        .panel(padding: 22)
+    }
+
+    private func explain(_ p: PrepaidInvoicing) -> String {
+        switch p {
+        case .atTopUp: "客人儲值（收錢）時就開發票；之後用儲值金付的部分不再開"
+        case .atRedemption: "儲值時不開；客人用儲值金消費時才開（像現金禮券）"
+        }
+    }
+
+    private var staffPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Eyebrow("人員・\(model.staff.count) 位")
+            if model.staff.isEmpty {
+                Text("後台還沒有設定人員")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.faint)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(model.staff) { m in
+                        SettingsStaffRow(member: m)
+                        if m.id != model.staff.last?.id {
+                            Rule(color: Theme.hair)
+                        }
+                    }
+                }
+            }
+        }
+        .panel(padding: 22)
+    }
+}
+
+/// 一位人員：名字、職稱、權限、排不排預約、抽成
+private struct SettingsStaffRow: View {
+    let member: StaffMember
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            StaffAvatar(name: member.name, swatch: member.swatch, size: 34)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(member.name)
+                    .font(.brand(15, .semibold))
+                    .foregroundStyle(Theme.ink)
+                Text(subtitle)
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+            }
+            Spacer(minLength: 8)
+            if member.isBookable {
+                StatusBadge("排預約", tone: .info)
+            }
+            if let bps = member.commissionBps, bps > 0 {
+                Text("抽成 \(percentText(bps: bps))")
+                    .font(.brand(12.5, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink2)
+            }
+        }
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 「設計師・店長」；沒有職稱就只寫權限
+    private var subtitle: String {
+        if let t = member.title, !t.isEmpty { return "\(t)・\(member.role.label)" }
+        return member.role.label
     }
 }
 
@@ -1826,9 +2064,9 @@ private struct SettingsDataSection: View {
         }
     }
 
-    /// 沒有專門的「裝置管理」權限：用同樣要店長以上的「交班結帳」代替
+    /// 解除配對要「裝置設定」的權限（店長以上）
     private func askUnpair() async {
-        guard await model.authorize(.closeShift, detail: "解除配對") != nil else { return }
+        guard await model.authorize(.manageDevice, detail: "解除配對") != nil else { return }
         confirmUnpair = true
     }
 

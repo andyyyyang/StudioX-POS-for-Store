@@ -330,6 +330,10 @@ private struct ShiftDrawerCard: View {
             if report.cashRefunds.cents > 0 {
                 ValueRow(label: "現金退款", value: "−\(report.cashRefunds.formatted)", tone: Theme.dangerFG)
             }
+            // 換貨退回的比新買的多：差額從錢櫃退現金（應有現金已經扣掉了）
+            if report.cashBack.cents > 0 {
+                ValueRow(label: "換貨退差額", value: "−\(report.cashBack.formatted)", tone: Theme.dangerFG)
+            }
             if report.payIns.cents > 0 {
                 ValueRow(label: "存入", value: "+\(report.payIns.formatted)")
             }
@@ -642,13 +646,21 @@ private struct ShiftReportPreview: View {
     let closing: Bool
     let close: () -> Void
 
+    /// 「12 張・18 位」；沒有人數（服飾、美業）就只寫張數
+    private func guestLine(_ s: SalesSummary) -> String {
+        s.guests > 0 ? "\(s.tickets) 張・\(s.guests) 位" : "\(s.tickets) 張"
+    }
+
     var body: some View {
         let s = report.summary
         VStack(alignment: .leading, spacing: 14) {
             ShiftStepLabel(number: 3, title: "交班", detail: "存交班單、印 Z 帳、通知負責人")
             VStack(spacing: 8) {
                 ValueRow(label: "營業額", value: s.total.formatted, strong: true)
-                ValueRow(label: "單數", value: "\(s.tickets) 張・\(s.guests) 位")
+                ValueRow(label: "單數", value: guestLine(s))
+                if s.received != s.total {
+                    ValueRow(label: "實收", value: s.received.formatted)
+                }
                 ForEach(s.byTender, id: \.tender) { t in
                     ValueRow(label: "\(t.tender.label) \(t.count) 筆", value: t.amount.formatted)
                 }
@@ -657,6 +669,21 @@ private struct ShiftReportPreview: View {
                 }
                 if s.refunds.cents > 0 {
                     ValueRow(label: "退款", value: "−\(s.refunds.formatted)", tone: Theme.dangerFG)
+                }
+                if report.cashBack.cents > 0 {
+                    ValueRow(label: "換貨退差額（現金）", value: "−\(report.cashBack.formatted)", tone: Theme.dangerFG)
+                }
+                if s.prepaidSold.cents > 0 {
+                    ValueRow(label: "儲值（預收）", value: s.prepaidSold.formatted)
+                }
+                if s.passesSold.cents > 0 {
+                    ValueRow(label: "課程卡", value: s.passesSold.formatted)
+                }
+                if s.redeemedValue.cents > 0 {
+                    ValueRow(label: "卡抵用", value: s.redeemedValue.formatted, tone: Theme.accentText)
+                }
+                if s.checkIns > 0 {
+                    ValueRow(label: "報到", value: "\(s.checkIns) 人次")
                 }
                 ValueRow(label: "作廢", value: "\(s.voidedItems) 項・整張 \(s.voidedTickets)")
                 ValueRow(label: "發票", value: "開 \(s.invoicesIssued)・作廢 \(s.invoicesVoided)")
