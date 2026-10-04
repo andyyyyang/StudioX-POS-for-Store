@@ -76,7 +76,9 @@ jobs:
               print("IPHONE_NAME=" + phone["name"])
           PY
 
+      # 提交訊息有 [phone-only]：只拍 iPhone（查手機的問題時省時間）
       - name: 截圖
+        if: "!contains(github.event.head_commit.message, '[phone-only]')"
         timeout-minutes: 44
         continue-on-error: true
         run: |
@@ -178,7 +180,7 @@ jobs:
         run: |
           app="build/Build/Products/Debug-iphonesimulator/StudioXPOS.app"
           bundle=tw.studiox.pos
-          mkdir -p shots/phone
+          mkdir -p shots/phone shots/logs
           P="-demo cafe -autologin 1234"
           # 名稱|啟動參數|等幾秒（預設 7）
           phone=(
@@ -202,19 +204,31 @@ jobs:
             # 每張都重新安裝：示範模式的資料、這台的設定都從乾淨的開始
             limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
             limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
-            limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
+            # App 自己印的錯誤（Swift 的 Fatal error、SwiftUI 的檢查）收在 shots/logs/
+            log="shots/logs/$(basename "$name").log"
+            limit 60 xcrun simctl launch --stdout="$PWD/$log" --stderr="$PWD/$log" "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
             sleep "${wait:-7}"
             limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
+            # App 還在不在；不在的話系統記下的原因
+            if ! xcrun simctl spawn "$dev" launchctl list 2>/dev/null | grep -q "$bundle"; then
+              echo "   App 不在了"
+              limit 30 xcrun simctl spawn "$dev" log show --last 40s --style compact \
+                --predicate 'process == "StudioXPOS" OR eventMessage CONTAINS "tw.studiox.pos"' 2>/dev/null \
+                | grep -iE "terminat|crash|exit|kill|fatal|signal|jetsam|abort|exception|precondition" | tail -40 || true
+            fi
           done
           limit 60 xcrun simctl shutdown "$dev" || true
           ls shots/phone | wc -l
+          for f in shots/logs/*.log; do [ -s "$f" ] && { echo "== $f"; tail -60 "$f"; }; done || true
 
       # App 當掉的話：把模擬器的當機報告放進 artifact，並在這裡印出當掉的位置
       - name: 當機報告
         if: always()
         run: |
           mkdir -p shots/crashes
-          find ~/Library/Logs/DiagnosticReports -name "StudioXPOS*" -newer build.log -exec cp {} shots/crashes/ \; 2>/dev/null || true
+          # 這次執行之後產生的所有當機報告（名稱不一定是 StudioXPOS 開頭）
+          find ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports -newer build.log \( -name "*.ips" -o -name "*.crash" \) 2>/dev/null | tee shots/crashes/list.txt
+          grep -il "studioxpos\|tw.studiox.pos" $(cat shots/crashes/list.txt) 2>/dev/null | while read -r f; do cp "$f" shots/crashes/; done || true
           ls shots/crashes
           for f in shots/crashes/*.ips; do
             [ -f "$f" ] || continue
