@@ -109,6 +109,12 @@ jobs:
           limit 300 xcrun simctl bootstatus "$dev" -b || true
           limit 30 xcrun simctl status_bar "$dev" override --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 || true
           limit 30 xcrun simctl ui "$dev" appearance dark || true
+          # 收銀台是橫的：打開 Simulator 轉一次（⌘←）。這台 Mac 不給輔助使用權限時就照直的截
+          open -a Simulator --args -CurrentDeviceUDID "$dev" || true
+          sleep 20
+          limit 20 osascript -e 'tell application "Simulator" to activate' -e 'delay 1' \
+            -e 'tell application "System Events" to key code 123 using {command down}' || echo "   轉不了，照直的截"
+          sleep 4
           for scene in "${scenes[@]}"; do
             IFS='|' read -r name args wait <<< "$scene"
             echo "-- $name $(date +%T)"

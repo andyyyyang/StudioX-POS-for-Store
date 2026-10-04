@@ -3,42 +3,237 @@ import POSCore
 import POSInvoice
 import POSPrinting
 import POSSync
+import SwiftUI
 
-/// 示範模式：虛構的「晨麥手作」（台南的咖啡、早午餐、甜點、麵包），不用配對、資料只在這次開著的時候。
-/// 人員：Leslie K.（店長，PIN 1234）、Cameron W.（收銀，PIN 2580）、Jacob J.（領班，PIN 1111）、王小美（負責人，PIN 0000）
+/// 示範的店：配對畫面「先看看示範」選一家（或啟動參數 `-demo`、`-demo apparel|salon|fitness`）。
+enum DemoKind: String, CaseIterable, Identifiable, Hashable {
+    /// 餐廳咖啡「晨麥手作」：桌位、廚房出單、訂位候位
+    case cafe
+    /// 服飾「Lumi 選物」：顏色尺寸、掃吊牌、業績算給店員
+    case apparel
+    /// 美業「Mori Hair」：設計師的預約表、儲值金與次數卡
+    case salon
+    /// 健身「Pulse 健身」：入場報到、會籍與堂數、團課與私人教練
+    case fitness
+
+    var id: String { rawValue }
+
+    /// 行業（卡片上的小字）
+    var industry: String {
+        switch self {
+        case .cafe: "餐廳咖啡"
+        case .apparel: "服飾選物"
+        case .salon: "美髮沙龍"
+        case .fitness: "健身會館"
+        }
+    }
+
+    var storeName: String {
+        switch self {
+        case .cafe: "晨麥手作"
+        case .apparel: "Lumi 選物"
+        case .salon: "Mori Hair"
+        case .fitness: "Pulse 健身"
+        }
+    }
+
+    /// 一句話：這家示範看得到什麼
+    var summary: String {
+        switch self {
+        case .cafe: "三層樓的桌位、廚房出單、訂位與候位，今天已經有十幾張單"
+        case .apparel: "顏色尺寸、掃吊牌條碼、會員折扣，業績算給每位店員"
+        case .salon: "設計師的預約表、到店開單，儲值金與剪髮次數卡"
+        case .fitness: "入場報到、月卡與堂數、團課名單與私人教練"
+        }
+    }
+
+    /// 三個重點（卡片下面的小標籤）
+    var highlights: [String] {
+        switch self {
+        case .cafe: ["桌位", "廚房", "訂位"]
+        case .apparel: ["規格", "條碼", "業績"]
+        case .salon: ["預約", "儲值", "次數卡"]
+        case .fitness: ["報到", "會籍", "課表"]
+        }
+    }
+
+    /// 這家示範主要的營業模式（卡片上的「適合哪些店」）
+    var mode: ServiceMode {
+        switch self {
+        case .cafe: .cafe
+        case .apparel: .apparel
+        case .salon: .salon
+        case .fitness: .fitness
+        }
+    }
+
+    /// 圖示（和營業模式同一套）
+    var icon: String {
+        switch self {
+        case .cafe: "cake"
+        case .apparel: "swatch"
+        case .salon: "scissors"
+        case .fitness: "bolt"
+        }
+    }
+
+    var swatch: Swatch {
+        switch self {
+        case .cafe: .butter
+        case .apparel: .sky
+        case .salon: .rose
+        case .fitness: .mint
+        }
+    }
+
+    /// 啟動參數：沒有 `-demo` 是 nil；`-demo` 後面沒寫（或看不懂）是晨麥手作；`-demo salon` 開美業（也認 fashion、beauty、gym 這些說法）
+    static func fromLaunchArguments() -> DemoKind? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-demo") else { return nil }
+        guard i + 1 < args.count else { return .cafe }
+        return DemoKind(argument: args[i + 1]) ?? .cafe
+    }
+
+    init?(argument: String) {
+        switch argument.lowercased() {
+        case "cafe", "café", "restaurant", "food": self = .cafe
+        case "apparel", "fashion", "clothing", "retail": self = .apparel
+        case "salon", "beauty", "hair": self = .salon
+        case "fitness", "gym", "studio": self = .fitness
+        default: return nil
+        }
+    }
+}
+
+/// 示範模式：虛構的店，不用配對、資料只在這次開著的時候。四家（DemoKind）：
+///   - 餐廳咖啡「晨麥手作」（台南的咖啡、早午餐、甜點、麵包）：這個檔案
+///   - 服飾「Lumi 選物」、美業「Mori Hair」、健身「Pulse 健身」：DemoApparel、DemoSalon、DemoFitness
+/// 四家都有同樣的四個人、同樣的 PIN（README 寫的）：Leslie K.（店長，PIN 1234）、Cameron W.（收銀，PIN 2580）、
+/// Jacob J.（領班，PIN 1111）、王小美（負責人，PIN 0000）；職稱照各行各業（總監、設計師、銷售、教練…）。
+/// 美業、健身多幾位排進預約表的人（都是收銀權限）：Mia 陳（設計師，PIN 5678）；Kevin 吳（教練，PIN 5678）、Ivy 黃（教練，PIN 2468）。
+/// 人名、電話、統編、地址都是編的。
 struct DemoStore {
+    /// 這次開哪一家：配對畫面選的（POSModel.startDemo(kind:) 先設好），沒選就看啟動參數
+    static var kind: DemoKind = DemoKind.fromLaunchArguments() ?? .cafe
+
+    let kind: DemoKind
+    /// 這家示範打開的時間（預約、課表、今天的單都以這一刻為準）
+    let createdAt: Date
     let bootstrap: Bootstrap
     let api: DemoAPI
+    /// 開幕到昨天的「後台歷史」（DemoAPI.history 與昨天記進這台的單用同一份）
+    let past: DemoHistory
 
-    init() {
+    init() { self.init(kind: Self.kind) }
+
+    init(kind: DemoKind) {
         let now = Date()
+        self.kind = kind
+        createdAt = now
+        var reservations: [Reservation] = []
+        var classes: [ClassSession] = []
+        let members: [Member]
+        switch kind {
+        case .cafe:
+            bootstrap = Self.cafeBootstrap(now: now)
+            reservations = Self.reservations(now: now)
+            members = Self.cafeMembers(now: now)
+        case .apparel:
+            bootstrap = Self.apparelBootstrap(now: now)
+            members = Self.apparelMembers(now: now)
+        case .salon:
+            bootstrap = Self.salonBootstrap(now: now)
+            reservations = Self.salonReservations(now: now)
+            members = Self.salonMembers(now: now)
+        case .fitness:
+            bootstrap = Self.fitnessBootstrap(now: now)
+            classes = Self.fitnessClasses(now: now)
+            reservations = Self.fitnessReservations(now: now, classes: classes)
+            members = Self.fitnessMembers(now: now)
+        }
+        past = DemoHistory(base: bootstrap, regulars: DemoHistory.regulars(members, catalog: bootstrap.catalog))
+        api = DemoAPI(bootstrap: bootstrap, reservations: reservations, members: members, classes: classes, history: past)
+    }
+
+    /// 昨天的單（照後台歷史）＋今天已經發生的事（開班、打卡、結帳的單、正在服務的、報到）
+    func seed(into ledger: Ledger) throws {
+        let cutoff = bootstrap.store.businessDayCutoffHour
+        let yesterday = TaipeiTime.businessDate(createdAt.addingTimeInterval(-86_400), cutoffHour: cutoff)
+        if let day = past.day(yesterday) {
+            try DemoSeeder(ledger: ledger, bootstrap: bootstrap, now: createdAt).replay(day)
+        }
+        switch kind {
+        case .cafe: try seedCafe(into: ledger)
+        case .apparel: try seedApparel(into: ledger)
+        case .salon: try seedSalon(into: ledger)
+        case .fitness: try seedFitness(into: ledger)
+        }
+    }
+
+    /// 今天的訂位、候位、預約、課程報名（和 DemoAPI 手上的一樣）
+    func reservations() -> [Reservation] {
+        switch kind {
+        case .cafe: Self.reservations(now: Date())
+        case .apparel: []
+        case .salon: Self.salonReservations(now: createdAt)
+        case .fitness: Self.fitnessReservations(now: createdAt, classes: Self.fitnessClasses(now: createdAt))
+        }
+    }
+
+    /// 今天的團體課（健身）
+    func classes() -> [ClassSession] {
+        kind == .fitness ? Self.fitnessClasses(now: createdAt) : []
+    }
+
+    // MARK: - 晨麥手作（餐廳咖啡）
+
+    static func cafeBootstrap(now: Date) -> Bootstrap {
         let period = InvoicePeriod(date: now)
         let invoice = InvoiceSettings(
             enabled: true, sellerTaxId: "04595257", sellerName: "晨麥手作有限公司", sellerAddress: "台南市中西區民族路二段1號",
             qrKey: "6E8B2A1C4D5F70819A2B3C4D5E6F7081",
             rolls: [
-                // 示範的單往回 6 個多小時：剛換期的時候會落在上一期，所以上一期也給一段
-                InvoiceRoll(id: "demo-roll-0", period: period.previous.code, track: "XC", start: 2345600, end: 2345649),
-                InvoiceRoll(id: "demo-roll-1", period: period.code, track: "XD", start: 12345600, end: 12345699),
+                // 示範的單往回 6 個多小時（還有昨天的單）：剛換期的時候會落在上一期，所以上一期也給一段
+                InvoiceRoll(id: "demo-roll-0", period: period.previous.code, track: "XC", start: 2345600, end: 2345799),
+                InvoiceRoll(id: "demo-roll-1", period: period.code, track: "XD", start: 12345600, end: 12345899),
                 InvoiceRoll(id: "demo-roll-2", period: period.next.code, track: "XF", start: 22345600, end: 22345649),
             ]
         )
-        bootstrap = Bootstrap(
+        return Bootstrap(
             version: "demo", serverTime: now,
             device: DeviceProfile(id: "demo-register", name: "櫃台 1", code: "A", role: .register, stations: []),
             store: StoreProfile(
                 name: "晨麥手作", legalName: "晨麥手作有限公司", taxId: "04595257", address: "台南市中西區民族路二段1號", phone: "06-222-0000",
                 receiptFooter: "謝謝光臨・Wi-Fi：chenmai / 22200000", serviceChargeBps: 1000, serviceChargeOn: [.dineIn], tipsEnabled: false,
-                defaultOrderType: .dineIn, tableTimeLimitMinutes: 90, businessDayCutoffHour: 4, discountLimitBps: 1000
+                defaultOrderType: .dineIn, tableTimeLimitMinutes: 90, businessDayCutoffHour: 4, discountLimitBps: 1000,
+                serviceModes: [.tableService, .counter, .cafe], defaultServiceMode: .tableService
             ),
-            features: FeatureFlags(seating: true, kitchen: true, reservations: true, invoice: true, members: true, waitlistSMS: true),
+            // 餐飲：沒有預約表、儲值與課程卡、抽成（會員只查電話、累積消費）
+            features: FeatureFlags(seating: true, kitchen: true, reservations: true, invoice: true, members: true, waitlistSMS: true,
+                                   appointments: false, accounts: false, commission: false),
             catalog: Self.catalog,
             floor: Self.floor,
             staff: Self.staff,
             invoice: invoice,
             mesh: MeshConfig(key: String(repeating: "5d", count: 32), enabled: false)
         )
-        api = DemoAPI(bootstrap: bootstrap, reservations: Self.reservations(now: now))
+    }
+
+    static func cafeMembers(now: Date) -> [Member] {
+        [
+            Member(id: "demo-m1", phone: "0912345678", name: "林小涵", tierName: "金卡會員", lifetimeSpend: Money(dollars: 18_640), visits: 23,
+                   lastVisitAt: now.addingTimeInterval(-6 * 86_400), note: "不吃香菜",
+                   recentVisits: [
+                       visit("m1-a", "A027", daysAgo: 6, now: now, total: 642, items: ["拿鐵 ×2", "酥皮鬆餅"], staff: ["Cameron W."]),
+                       visit("m1-b", "A013", daysAgo: 19, now: now, total: 1_210, items: ["炙燒鮭魚貝果 ×2", "卡布奇諾 ×2", "巴斯克乳酪蛋糕"],
+                             staff: ["Jacob J."], note: "四位，靠窗"),
+                       visit("m1-c", "A031", daysAgo: 33, now: now, total: 286, items: ["小白咖啡", "檸檬塔"], staff: ["Cameron W."]),
+                   ],
+                   birthday: birthdayThisMonth(12, now: now)),
+            Member(id: "demo-m2", phone: "0922111333", name: "陳柏宇", tierName: "一般會員", lifetimeSpend: Money(dollars: 2_380), visits: 4,
+                   lastVisitAt: now.addingTimeInterval(-20 * 86_400), note: nil,
+                   recentVisits: [visit("m2-a", "A008", daysAgo: 20, now: now, total: 495, items: ["歐姆蛋盤", "美式咖啡"], staff: ["Leslie K."])]),
+        ]
     }
 
     // MARK: 菜單
@@ -163,7 +358,7 @@ struct DemoStore {
     // MARK: 今天已經發生的事
 
     /// 早上開班、十幾張已經結帳的單、幾桌正在吃、一桌待清
-    func seed(into ledger: Ledger) throws {
+    func seedCafe(into ledger: Ledger) throws {
         let now = Date()
         let cat = Self.catalog
         let staff = Self.staff
@@ -270,8 +465,6 @@ struct DemoStore {
                           station: cat.station(for: item), taxKind: item.taxKind, addedAt: at, addedBy: by)
     }
 
-    func reservations() -> [Reservation] { Self.reservations(now: Date()) }
-
     static func reservations(now: Date) -> [Reservation] {
         func r(_ id: String, _ kind: ReservationKind, _ name: String, _ phone: String, _ size: Int, _ minutes: Double, tables: [String] = [], status: ReservationStatus = .booked, note: String = "", queue: Int? = nil, source: String = "web") -> Reservation {
             Reservation(id: id, kind: kind, name: name, phone: phone, partySize: size, startsAt: now.addingTimeInterval(minutes * 60), tableIds: tables,
@@ -287,19 +480,30 @@ struct DemoStore {
     }
 }
 
-/// 示範的「後台」：收什麼都說好，會員、訂位放在記憶體
+/// 示範的「後台」：收什麼都說好；會員、訂位與預約、課表放在記憶體（這次開著的時候）
 actor DemoAPI: POSAPI {
     let base: Bootstrap
     private var reservations: [String: Reservation] = [:]
     private var rollCounter = 0
-    private var members: [String: Member] = [
-        "0912345678": Member(id: "demo-m1", phone: "0912345678", name: "林小涵", tierName: "金卡會員", lifetimeSpend: Money(dollars: 18_640), visits: 23, lastVisitAt: Date().addingTimeInterval(-6 * 86_400), note: "不吃香菜"),
-        "0922111333": Member(id: "demo-m2", phone: "0922111333", name: "陳柏宇", tierName: "一般會員", lifetimeSpend: Money(dollars: 2_380), visits: 4, lastVisitAt: Date().addingTimeInterval(-20 * 86_400), note: nil),
-    ]
+    /// 會員（用手機號碼查）
+    private var members: [String: Member] = [:]
+    /// 今天的團體課；別天照同一張課表排
+    private let timetable: [ClassSession]
+    /// 課表的「今天」（營業日）
+    private let today: String
+    /// 每一堂後來在 iPad 上多報名（＋）、取消（−）的人數
+    private var bookingDelta: [String: Int] = [:]
+    /// 開幕到昨天的歷史（要哪天才產生，產生過的記著）
+    private let past: DemoHistory?
+    private var pastDays: [String: DayHistory] = [:]
 
-    init(bootstrap: Bootstrap, reservations: [Reservation]) {
+    init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil) {
         base = bootstrap
-        self.reservations = Dictionary(uniqueKeysWithValues: reservations.map { ($0.id, $0) })
+        self.reservations = Dictionary(reservations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        self.members = Dictionary(members.map { ($0.phone, $0) }, uniquingKeysWith: { first, _ in first })
+        timetable = classes
+        today = TaipeiTime.businessDate(bootstrap.serverTime, cutoffHour: bootstrap.store.businessDayCutoffHour)
+        past = history
     }
 
     func bootstrap(ifNoneMatch version: String?) async throws -> Bootstrap {
@@ -321,22 +525,56 @@ actor DemoAPI: POSAPI {
 
     func heartbeat(_ h: Heartbeat) async throws -> HeartbeatResponse { HeartbeatResponse(serverTime: Date(), configVersion: base.version, serverSeq: 0) }
 
-    func member(phone: String) async throws -> Member? { members[phone] }
+    // MARK: 會員
+
+    /// 示範的後台記的是開店時的餘額（accountEventIds 是空的）：今天在這台記的儲值、扣卡、報到由 iPad 自己補上
+    func member(phone: String) async throws -> Member? { members[phone.filter(\.isNumber)] }
 
     func createMember(_ m: MemberCreate) async throws -> Member {
-        let new = Member(id: "demo-m-\(m.phone)", phone: m.phone, name: m.name, tierName: "一般會員", lifetimeSpend: .zero, visits: 0, lastVisitAt: nil, note: nil)
+        if let existing = members[m.phone] { return existing }
+        let accounts = base.features.accounts
+        let new = Member(id: "demo-m-\(m.phone)", phone: m.phone, name: m.name, tierName: "一般會員", lifetimeSpend: .zero, visits: 0, lastVisitAt: nil, note: nil,
+                         wallet: accounts ? .zero : nil, passes: accounts ? [] : nil, accountEventIds: [], recentVisits: [])
         members[m.phone] = new
         return new
     }
 
-    func reservations(date: String) async throws -> [Reservation] { Array(reservations.values) }
+    func updateMember(id: String, _ update: MemberUpdate) async throws -> Member {
+        guard var m = members.values.first(where: { $0.id == id }) else {
+            throw APIError.http(status: 404, code: "not_found", message: "找不到這位會員")
+        }
+        if let v = update.name { m.name = v.isEmpty ? nil : v }
+        if let v = update.note { m.note = v.isEmpty ? nil : v }
+        if let v = update.birthday { m.birthday = v.isEmpty ? nil : v }
+        members[m.phone] = m
+        return m
+    }
+
+    // MARK: 訂位、預約、課程報名
+
+    func reservations(date: String) async throws -> [Reservation] {
+        let cutoff = base.store.businessDayCutoffHour
+        return reservations.values
+            .filter { TaipeiTime.businessDate($0.startsAt, cutoffHour: cutoff) == date }
+            .sorted { $0.startsAt < $1.startsAt }
+    }
 
     func createReservation(_ input: ReservationInput) async throws -> Reservation {
-        let queue = input.kind == .waitlist ? (reservations.values.compactMap(\.queueNumber).max() ?? 13) + 1 : nil
-        let r = Reservation(id: UUID().uuidString.lowercased(), kind: input.kind ?? .reservation, name: input.name ?? "", phone: input.phone ?? "",
-                            partySize: input.partySize ?? 2, startsAt: input.startsAt ?? Date(), durationMinutes: input.durationMinutes ?? 90,
+        let kind = input.kind ?? .reservation
+        if kind == .classBooking, let sid = input.sessionId, let s = timetable.first(where: { $0.id == sid }),
+           s.capacity > 0, s.booked + (bookingDelta[sid] ?? 0) >= s.capacity {
+            throw APIError.http(status: 409, code: "class_full", message: "\(s.name) 額滿了")
+        }
+        let queue = kind == .waitlist ? (reservations.values.compactMap(\.queueNumber).max() ?? 13) + 1 : nil
+        let serviceMinutes = (input.services ?? []).reduce(0) { $0 + $1.durationMinutes }
+        let single = kind == .appointment || kind == .classBooking
+        let r = Reservation(id: UUID().uuidString.lowercased(), kind: kind, name: input.name ?? "", phone: input.phone ?? "",
+                            partySize: input.partySize ?? (single ? 1 : 2), startsAt: input.startsAt ?? Date(),
+                            durationMinutes: input.durationMinutes ?? (serviceMinutes > 0 ? serviceMinutes : 90),
                             tableIds: input.tableIds ?? [], status: input.status ?? .booked, note: input.note ?? "", source: "pos",
-                            queueNumber: queue, createdAt: Date())
+                            queueNumber: queue, createdAt: Date(), staffId: input.staffId, services: input.services, memberId: input.memberId,
+                            sessionId: input.sessionId, ticketId: input.ticketId)
+        if r.kind == .classBooking, let sid = r.sessionId, r.status != .cancelled { bookingDelta[sid, default: 0] += 1 }
         reservations[r.id] = r
         return r
     }
@@ -344,6 +582,8 @@ actor DemoAPI: POSAPI {
     func updateReservation(id: String, _ input: ReservationInput) async throws -> Reservation {
         var r = reservations[id] ?? Reservation(id: id, kind: input.kind ?? .reservation, name: input.name ?? "", phone: input.phone ?? "",
                                                  partySize: input.partySize ?? 2, startsAt: input.startsAt ?? Date(), createdAt: Date())
+        let heldSeat = r.status != .cancelled
+        if let v = input.kind { r.kind = v }
         if let v = input.name { r.name = v }
         if let v = input.phone { r.phone = v }
         if let v = input.partySize { r.partySize = v }
@@ -352,6 +592,15 @@ actor DemoAPI: POSAPI {
         if let v = input.tableIds { r.tableIds = v }
         if let v = input.status { r.status = v }
         if let v = input.note { r.note = v }
+        if let v = input.staffId { r.staffId = v.isEmpty ? nil : v }
+        if let v = input.services { r.services = v }
+        if let v = input.memberId { r.memberId = v.isEmpty ? nil : v }
+        if let v = input.sessionId { r.sessionId = v.isEmpty ? nil : v }
+        if let v = input.ticketId { r.ticketId = v.isEmpty ? nil : v }
+        // 課程報名：取消就空出一個名額（報到、未到都還算報名過）
+        if r.kind == .classBooking, let sid = r.sessionId, heldSeat != (r.status != .cancelled) {
+            bookingDelta[sid, default: 0] += heldSeat ? -1 : 1
+        }
         reservations[id] = r
         return r
     }
@@ -359,14 +608,73 @@ actor DemoAPI: POSAPI {
     func notifyReservation(id: String) async throws {}
 
     func saveFloor(_ update: FloorUpdate) async throws -> FloorResponse { FloorResponse(floor: FloorPlan(areas: update.areas), version: "demo") }
+
+    // MARK: 歷史
+
+    /// 某個營業日的結帳、退款、作廢、報到（開幕前、今天以後是空的；同一天每次都一樣）
+    func history(date: String) async throws -> DayHistory {
+        if let cached = pastDays[date] { return cached }
+        let day = past?.history(date) ?? DayHistory(businessDate: date)
+        pastDays[date] = day
+        return day
+    }
+
+    // MARK: 課表
+
+    /// 今天的課表；別天照同一張表（以前的照原本的人數，之後的越後面報名的人越少）
+    func classes(date: String) async throws -> [ClassSession] {
+        guard !timetable.isEmpty, let days = dayOffset(to: date) else { return [] }
+        return timetable.map { template in
+            var s = template
+            if days != 0 {
+                s.id = "\(template.id)@\(date)"
+                s.startsAt = template.startsAt.addingTimeInterval(TimeInterval(days * 86_400))
+                s.booked = days < 0 ? template.booked : max(template.booked - days * 3, 0)
+            }
+            s.booked = max(s.booked + (bookingDelta[s.id] ?? 0), 0)
+            return s
+        }
+    }
+
+    /// 從課表的「今天」到 date 差幾天（yyyy-MM-dd；看不懂是 nil）
+    private func dayOffset(to date: String) -> Int? {
+        guard let from = day(today), let to = day(date) else { return nil }
+        return TaipeiTime.calendar.dateComponents([.day], from: from, to: to).day
+    }
+
+    private func day(_ s: String) -> Date? {
+        let parts = s.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return TaipeiTime.calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: 12))
+    }
 }
 
-/// 示範資料用的亂數（每次開都一樣）
-struct SeededRandom {
+/// 示範資料用的亂數（同一個種子每次都一樣；後台歷史在 DemoAPI 裡產生，所以不綁主執行緒）
+nonisolated struct SeededRandom: Sendable {
     private var state: UInt64
     init(seed: UInt64) { state = seed }
     mutating func next(_ upper: Int) -> Int {
         state = state &* 6364136223846793005 &+ 1442695040888963407
         return Int((state >> 33) % UInt64(max(upper, 1)))
+    }
+
+    /// 0–99 小於 percent 的機率
+    mutating func chance(_ percent: Int) -> Bool { next(100) < percent }
+
+    mutating func pick<T>(_ list: [T]) -> T? {
+        list.isEmpty ? nil : list[next(list.count)]
+    }
+
+    /// 照權重挑一個
+    mutating func weighted<T>(_ list: [(T, Int)]) -> T? {
+        let total = list.reduce(0) { $0 + max($1.1, 0) }
+        guard total > 0 else { return list.first?.0 }
+        var r = next(total)
+        for (value, weight) in list {
+            let w = max(weight, 0)
+            if r < w { return value }
+            r -= w
+        }
+        return list.last?.0
     }
 }

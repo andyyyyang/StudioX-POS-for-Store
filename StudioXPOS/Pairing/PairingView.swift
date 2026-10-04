@@ -1,3 +1,4 @@
+import Foundation
 import POSCore
 import POSInvoice
 import POSPrinting
@@ -7,7 +8,8 @@ import SwiftUI
 /// 第一次打開：和店家的後台配對。
 ///
 /// 右側鍵盤打後台「門市 POS → 裝置」產生的 8 位數配對碼（接 StudioX 的店家不用打網址：console 知道是哪一家），
-/// 或用相機掃那裡的 QR Code；自己架後台的店家在「進階」填網址。也可以先看示範。
+/// 或用相機掃那裡的 QR Code；自己架後台的店家在「進階」填網址。
+/// 也可以先看示範：四家虛構的店（餐廳咖啡、服飾、美髮、健身），在這頁直接展開四張卡片選一家（不用 sheet，右邊的鍵盤一直在）。
 struct PairingView: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -16,6 +18,8 @@ struct PairingView: View {
     @State private var scanning = false
     @State private var working = false
     @State private var attempt = 0
+    @State private var showDemos = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
@@ -41,7 +45,7 @@ struct PairingView: View {
 
                     VStack(alignment: .leading, spacing: 18) {
                         Eyebrow("開始使用")
-                        step(1, "到網站後台", "「門市 POS → 裝置」按「新增裝置」，選這台的用途（收銀機、點餐機、廚房螢幕）")
+                        step(1, "到網站後台", "「門市 POS → 裝置」按「新增裝置」，選這台的崗位（結帳櫃台、前場點餐、報到接待、後廚、出餐口）")
                         step(2, "輸入配對碼", "在右邊的鍵盤打畫面上的 8 位數，或按下面掃 QR Code")
                         step(3, "輸入 PIN", "店員用自己的 PIN 登入，就可以開始點餐")
                     }
@@ -54,13 +58,17 @@ struct PairingView: View {
                             Label { Text("掃描 QR Code") } icon: { HeroIcon("qr-code", size: 18) }
                         }
                         .buttonStyle(.brand(.primary, size: .lg))
-                        Button("先看看示範") {
-                            keypad.cancel()
-                            model.startDemo()
+                        Button(showDemos ? "收起示範" : "先看看示範") {
+                            withAnimation(reduceMotion ? nil : Motion.ease) { showDemos.toggle() }
                         }
-                        .buttonStyle(.brand(.ghost, size: .lg, arrow: true))
+                        .buttonStyle(.brand(.ghost, size: .lg, arrow: !showDemos))
                     }
                     .reveal(3)
+
+                    if showDemos {
+                        demoPicker
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
 
                     VStack(alignment: .leading, spacing: 10) {
                         Button {
@@ -116,6 +124,33 @@ struct PairingView: View {
         }
     }
 
+    // MARK: 示範
+
+    /// 四家示範的店：一家一張卡（行業的圖示與色塊、店名、看得到什麼、適合哪些店）
+    private var demoPicker: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Eyebrow("選一家示範的店")
+                Text("資料都是虛構的，只在這次開著的時候")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+            }
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], alignment: .leading, spacing: 14) {
+                ForEach(Array(DemoKind.allCases.enumerated()), id: \.element) { i, kind in
+                    DemoStoreCard(kind: kind) {
+                        keypad.cancel()
+                        model.startDemo(kind: kind)
+                    }
+                    .reveal(i, .rise)
+                }
+            }
+            Text("登入的 PIN：Leslie 1234（店長）・Cameron 2580（收銀）・Jacob 1111（領班）・王小美 0000（負責人）")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+        }
+        .frame(maxWidth: 680, alignment: .leading)
+    }
+
     private func step(_ n: Int, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 14) {
             Text("0\(n)")
@@ -151,5 +186,88 @@ struct PairingView: View {
                 problem = "配對失敗：\(error.localizedDescription)"
             }
         }
+    }
+}
+
+/// 一家示範的店：行業的色塊與圖示、店名、一句話、三個重點、適合哪些店
+private struct DemoStoreCard: View {
+    let kind: DemoKind
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                            .fill(Theme.swatch(kind.swatch))
+                        HeroIcon(kind.icon, size: 24)
+                            .foregroundStyle(Theme.tileInk)
+                    }
+                    .frame(width: 52, height: 52)
+                    Spacer(minLength: 8)
+                    Text(kind.industry)
+                        .font(.brand(12.5, .medium))
+                        .foregroundStyle(Theme.muted)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(kind.storeName)
+                            .textRole(.h3)
+                            .foregroundStyle(Theme.ink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Text("→")
+                            .font(.brand(18, .medium))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    Text(kind.summary)
+                        .textRole(.small)
+                        .foregroundStyle(Theme.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 6) {
+                    ForEach(kind.highlights, id: \.self) { h in
+                        Text(h)
+                            .font(.brand(12, .medium))
+                            .foregroundStyle(Theme.ink2)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Theme.press, in: .rect(cornerRadius: Metric.chip))
+                    }
+                }
+                Text("適合：\(kind.mode.examples)")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                Theme.surface
+                    .overlay(alignment: .topTrailing) {
+                        Circle()
+                            .fill(Theme.swatch(kind.swatch).opacity(0.55))
+                            .frame(width: 200, height: 200)
+                            .blur(radius: 60)
+                            .offset(x: 70, y: -90)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                    .strokeBorder(Theme.line, lineWidth: 1)
+            }
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(Theme.swatch(kind.swatch))
+                    .frame(width: 3)
+                    .padding(.vertical, 22)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressScale(scale: 0.97))
+        .accessibilityLabel("示範：\(kind.industry)「\(kind.storeName)」")
     }
 }

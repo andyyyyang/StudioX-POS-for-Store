@@ -151,8 +151,9 @@ final class POSModel {
         // 收銀台不睡覺；電量給後台「裝置」頁看
         UIApplication.shared.isIdleTimerDisabled = true
         UIDevice.current.isBatteryMonitoringEnabled = true
-        if ProcessInfo.processInfo.arguments.contains("-demo") {
-            startDemo()
+        // 啟動參數 -demo（或 -demo apparel|salon|fitness）：直接開示範店
+        if let kind = DemoKind.fromLaunchArguments() {
+            startDemo(kind: kind)
             return
         }
         guard let p = DeviceStore.loadPairing(), let token = DeviceStore.token else {
@@ -332,6 +333,11 @@ final class POSModel {
         checkoutTicketId = nil
         pairing = nil
         isDemo = false
+        // 上一家店（或上一個示範店）的會員、歷史、課表、訂位不要帶到下一家
+        members = [:]
+        historyCache = [:]
+        classes = []
+        reservations = []
         phase = .pairing
     }
 
