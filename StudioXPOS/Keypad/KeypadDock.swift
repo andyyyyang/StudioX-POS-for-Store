@@ -44,7 +44,7 @@ struct KeypadDock: View {
         }
         .padding(20)
         .frame(maxHeight: .infinity)
-        .background(Theme.dock)
+        .background(Theme.dock.ignoresSafeArea())
         .overlay(alignment: .leading) { Rule(vertical: true) }
         .sensoryFeedback(.selection, trigger: keypad.keyTick)
         .sensoryFeedback(.error, trigger: keypad.errorTick)

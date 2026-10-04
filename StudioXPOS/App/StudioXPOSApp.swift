@@ -22,6 +22,8 @@ struct StudioXPOSApp: App {
                 .environment(\.locale, Locale(identifier: "zh_Hant_TW"))
                 .tint(Theme.primary)
                 .preferredColorScheme(model.settings.colorScheme)
+                // 收銀台滿版：不要系統的時間列（時間在側欄、鎖定畫面）；iPadOS 的視窗模式下系統還是會顯示，畫面的底色照樣延伸到最上緣
+                .statusBarHidden(true)
                 .onOpenURL { model.handle($0) }
         }
         .commands {

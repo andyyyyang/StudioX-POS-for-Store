@@ -284,6 +284,9 @@ struct SidebarRail: View {
             }
             .padding(.bottom, 8)
 
+            RailClock()
+                .padding(.bottom, 8)
+
             SyncDot(status: model.syncStatus, demo: model.isDemo)
                 .padding(.bottom, 6)
 
@@ -305,8 +308,8 @@ struct SidebarRail: View {
         }
         .frame(width: Metric.rail)
         .frame(maxHeight: .infinity)
-        .background(Theme.pageAlt.opacity(0.6))
-        .overlay(alignment: .trailing) { Rule(vertical: true) }
+        .background(Theme.pageAlt.opacity(0.6).ignoresSafeArea())
+        .overlay(alignment: .trailing) { Rule(vertical: true).ignoresSafeArea() }
     }
 
     private func badge(for s: AppSection) -> Int {
@@ -318,6 +321,32 @@ struct SidebarRail: View {
             model.reservations.filter { $0.kind == .appointment && $0.status == .arrived }.count
         default: 0
         }
+    }
+}
+
+/// 側欄的時鐘（系統的時間列藏起來了）：時間、星期
+struct RailClock: View {
+    var body: some View {
+        TimelineView(.everyMinute) { context in
+            VStack(spacing: 1) {
+                Text(TaipeiTime.clock(context.date))
+                    .font(.brand(15, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink)
+                Text(Self.weekday(context.date))
+                    .font(.brand(10.5, .medium))
+                    .foregroundStyle(Theme.faint)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("現在 \(TaipeiTime.clock(context.date))")
+        }
+    }
+
+    static func weekday(_ d: Date) -> String {
+        let c = TaipeiTime.components(d)
+        let names = ["日", "一", "二", "三", "四", "五", "六"]
+        let w = ((c.weekday ?? 1) - 1 + 7) % 7
+        return "\(c.month ?? 0)/\(c.day ?? 0) 週\(names[w])"
     }
 }
 
