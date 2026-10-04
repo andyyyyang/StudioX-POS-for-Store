@@ -38,7 +38,7 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 - `deviceCode`：這家店還沒被使用中的裝置用掉的第一個字母（A–Z）。單號 = 字母＋當天流水號（A001）。
 - 錯 5 次鎖這個 IP 10 分鐘。
 
-### 個人手機：用 StudioX 帳號登入（不用配對碼、不用 PIN）
+### 用 StudioX 帳號登入（手機、iPad：個人的，或店裡共用的）
 
 店員用自己的手機點餐：在配對畫面按「用 StudioX 帳號登入」，和 StudioX App 同一個帳號（Apple、Email、邀請）。登入的人就是這支手機的門市人員，之後打開 App 直接是他（離開一陣子回來用 Face ID／手機密碼解鎖），不用打 PIN、不能換人。
 
@@ -47,7 +47,12 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 3. **配對**：`POST {CONSOLE_URL}/api/pos/personal-pair`（Bearer）`{ "siteId", "device": { name, model, systemVersion, appVersion } }`
    → console 簽一張給那個網站的一次性通行證（ES256、`typ: "pos-personal"`、`sub`＝console 的使用者、`email`、`name`、`level`，60 秒），代轉到網站的 `POST /pair/personal`
    ← 和 `POST /pair` 一樣的回應，另外多 `cmsUrl`、`siteName`、`personal: true`、`staff: { id, name, role }`
-4. **網站的 `POST /pair/personal`**（`Authorization: Bearer <通行證>`）：
+   - **店裡共用的裝置**（iPad 當收銀台、廚房螢幕、點餐機）：多帶 `"mode": "shared", "role": "register"|"handheld"|"reception"|"kitchen"|"expo", "name": "櫃台 iPad"`。
+     只有負責人、管理者（console 的 `level`，和在後台產生配對碼的權限一樣）可以；其他人 `403 forbidden`「要店長才能新增店裡的裝置」。
+     網站新增一台一般的裝置（`personal: false`、不綁人；和用配對碼配對的一模一樣），回應沒有 `staff`、`personal: false`；之後大家照樣用 PIN 登入。
+     通行證多帶 `mode`、`role`、`name`（console 簽進去，網站只信通行證裡的）。`mode` 沒給＝`personal`
+   - App：手機預設「我自己的」；iPad 登入後先問「這台是…」：**店裡共用的**（選崗位、取名字）或 **我自己的**
+4. **網站的 `POST /pair/personal`**（`Authorization: Bearer <通行證>`；`mode: "shared"` 時照上面新增一般的裝置，以下是個人的）：
    - 用 `email` 找網站的使用者 → 綁著那個使用者的門市人員（`pos_staff.user_id`）；沒有就新增一位（名字用 `name`，角色照 console 的 `level`：負責人→`owner`、管理者→`manager`、其他→`server`；PIN 隨機、他用不到）
    - 新增一台 `role: "handheld"`、`personal: true`、`staff_id` 綁那個人的裝置（後台「裝置」頁顯示「王小美的手機（個人）」，可以停用）
    - 同一個人同一支手機（`device.name`＋`model`）再登入：停用舊的那台、發新的
