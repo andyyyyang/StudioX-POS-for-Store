@@ -15,13 +15,14 @@ import SwiftUI
 ///   │ │ 2  鮭魚貝果   製作中 │ │ 1  拿鐵        待做 │                           │
 ///   │ │    半熟・換沙拉       │ │    冰・燕麥奶       │                           │
 ///   │ │ 1  酥皮鬆餅   可出餐 │ │                    │                           │
-///   │ │ [全部好了] [已上菜]  │ │ [全部好了] [已上菜] │                           │
 ///   └──────────────────────────────────────────────────────────────────────────┘
 ///
-/// 點一行＝下一個狀態（待做 → 製作中 → 可出餐 → 待做）；「已上菜」整張收掉。
-/// 收掉的 10 分鐘內留在上面那條「剛出餐」，按錯可以復原（改回可出餐）。
+/// 左邊選、右邊做：卡片上沒有按鈕。點一行＝那一行換下一個狀態（待做 → 製作中 → 可出餐 → 待做）；
+/// 點卡片上方的桌號＝選起來，這張單的動作都在右欄：大鍵「好了」（整張好了）或「已上菜」，
+/// 動作鍵有全部開始做、退回製作中、叫號、重印廚房單。
+/// 收掉的 10 分鐘內留在上面那條「剛出餐」，點一張選起來，右欄可以復原（改回可出餐）。
 ///
-/// 出餐口（崗位）：看所有出單站；整張都好了的單浮到最上面，大大的取餐號碼＋「叫號」（唸出來）＋「已出餐」。
+/// 出餐口（崗位）：看所有出單站；整張都好了的單浮到最上面，大大的取餐號碼；選起來後大鍵是「叫號」（唸出來），叫過是「已出餐」。
 struct KitchenView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -33,6 +34,8 @@ struct KitchenView: View {
     /// 出餐口叫過號的單（什麼時候叫的）
     @State private var called: [String: Date] = [:]
     @State private var speaker = AVSpeechSynthesizer()
+    /// 選起來的單（動作在右欄）
+    @State private var selected: KitchenPick?
 
     var body: some View {
         // 每 15 秒重畫：等了幾分鐘、顏色變不變
@@ -42,7 +45,11 @@ struct KitchenView: View {
         .padding(.horizontal, 28)
         .padding(.top, 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { applyDefaultStations() }
+        .onAppear {
+            applyDefaultStations()
+            // 截圖：先選最久的那張
+            if LaunchArguments.preselect, let c = makeCards(relevantTickets(now: Date()), hasStations: !allStations.isEmpty).first { selected = .card(c.id) }
+        }
     }
 
     private var anim: Animation? { reduceMotion ? nil : Motion.ease }
@@ -82,7 +89,8 @@ struct KitchenView: View {
                                 spacing: 16
                             ) {
                                 ForEach(working) { c in
-                                    KitchenTicketCard(card: c, now: now, showsStation: hasStations && stations.count != 1)
+                                    KitchenTicketCard(card: c, now: now, showsStation: hasStations && stations.count != 1,
+                                                      selected: selected == .card(c.id), onSelect: { toggle(.card(c.id)) })
                                         .transition(.opacity.combined(with: .scale(scale: 0.97)))
                                 }
                             }
@@ -93,6 +101,7 @@ struct KitchenView: View {
                 .scrollIndicators(.hidden)
             }
         }
+        .dockSelection(dockItem(cards: cards, bumps: bumps, now: now))
     }
 
     // MARK: - 出餐口
@@ -101,7 +110,7 @@ struct KitchenView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Eyebrow("可以出餐", color: Theme.successFG)
-                Text("\(ready.count) 張・叫號後客人來拿，按「已出餐」收掉")
+                Text("\(ready.count) 張・選起來，右邊叫號；客人拿走按「已出餐」")
                     .font(.brand(13, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
@@ -118,8 +127,8 @@ struct KitchenView: View {
                         title: c.ticket.title(floor: model.floor),
                         now: now,
                         calledAt: called[c.ticket.id],
-                        onCall: { call(c) },
-                        onServed: { served(c) }
+                        selected: selected == .card(c.id),
+                        onSelect: { toggle(.card(c.id)) }
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.97)))
                 }
@@ -148,6 +157,108 @@ struct KitchenView: View {
         withAnimation(anim) {
             model.kitchen(.served, lines: c.lines, in: c.ticket)
             called[c.ticket.id] = nil
+            if selected == .card(c.id) { selected = nil }
+        }
+    }
+
+    // MARK: - 右欄：選起來的單
+
+    private func toggle(_ p: KitchenPick) {
+        model.touch()
+        withAnimation(reduceMotion ? nil : Motion.fast) { selected = selected == p ? nil : p }
+    }
+
+    private func dockItem(cards: [KitchenCardModel], bumps: [KitchenBump], now: Date) -> DockSelection? {
+        guard let selected else { return nil }
+        switch selected {
+        case .card(let id):
+            guard let c = cards.first(where: { $0.id == id }) else { return nil }
+            return cardDock(c, now: now)
+        case .bump(let id):
+            guard let b = bumps.first(where: { $0.id == id }) else { return nil }
+            let minutes = max(0, Int(now.timeIntervalSince(b.at) / 60))
+            return DockSelection(
+                id: "kitchen-bump-\(b.id)", kind: "剛出餐", title: b.ticket.title(floor: model.floor),
+                detail: b.lines.map { "\($0.name) ×\($0.quantity)" }.joined(separator: "、") + "・" + (minutes == 0 ? "剛剛" : "\(minutes) 分鐘前"),
+                badge: DockBadge("已上菜", tone: .neutral),
+                primary: POSAction("復原（改回可出餐）", icon: "arrow-uturn-left") { undoBump(b) },
+                accent: false,
+                clear: { toggle(.bump(b.id)) }
+            )
+        }
+    }
+
+    /// 大鍵：還沒全好 →「好了」；全好了 →「已上菜」（出餐口：還沒叫 →「叫號」、叫過 →「已出餐」）
+    private func cardDock(_ c: KitchenCardModel, now: Date) -> DockSelection {
+        let title = c.ticket.title(floor: model.floor)
+        let isExpo = model.role == .expo
+        let calledAt = called[c.ticket.id]
+        let pickup = pickupLabel(c.ticket)
+        let count = c.lines.reduce(0) { $0 + $1.quantity }
+        let readyCount = c.lines.filter { $0.kitchen == .ready }.reduce(0) { $0 + $1.quantity }
+        let minutes = c.minutes(at: now)
+        let servedAction = POSAction(isExpo ? "已出餐" : "已上菜", icon: "check-circle") { served(c) }
+        let callAction = POSAction(calledAt == nil ? "叫號" : "再叫一次", icon: "speaker-wave") { call(c) }
+        let waiting = c.lines.filter { $0.kitchen == .sent }
+        let readyLines = c.lines.filter { $0.kitchen == .ready }
+
+        let primary: POSAction
+        var actions: [POSAction] = []
+        if !c.allReady {
+            primary = POSAction("好了", icon: "check") { setAll(.ready, c) }
+            actions.append(servedAction)
+        } else if isExpo && calledAt == nil {
+            primary = callAction
+            actions.append(servedAction)
+        } else {
+            primary = servedAction
+        }
+        // 叫號：出餐口、或有取餐號碼的外帶單（大鍵已經是叫號就不重複）
+        if (isExpo || pickup != nil) && !(isExpo && c.allReady && calledAt == nil) {
+            actions.append(callAction)
+        }
+        actions.append(POSAction("全部開始做", icon: "fire", enabled: !waiting.isEmpty) { setLines(.preparing, waiting, c) })
+        actions.append(POSAction("退回製作中", icon: "arrow-uturn-left", enabled: !readyLines.isEmpty) { setLines(.preparing, readyLines, c) })
+        actions.append(POSAction("重印廚房單", icon: "printer") { reprint(c) })
+
+        var parts = ["\(count) 份", "好了 \(readyCount)", "等了 \(minutes) 分"]
+        if let pickup { parts.insert("取餐 \(pickup) 號", at: 0) }
+        if let calledAt { parts.append("\(calledAt.clockText) 叫過") }
+        let badge: DockBadge
+        if c.allReady {
+            badge = DockBadge("可出餐", tone: .active)
+        } else {
+            switch KitchenUrgency(minutes: minutes) {
+            case .hot: badge = DockBadge("超過 20 分", tone: .danger)
+            case .warm: badge = DockBadge("超過 10 分", tone: .warning)
+            case .calm: badge = DockBadge("製作中", tone: .neutral)
+            }
+        }
+        return DockSelection(id: "kitchen-\(c.id)", kind: isExpo && c.allReady ? "出餐" : "廚房", title: title,
+                             detail: parts.joined(separator: "・"), badge: badge,
+                             primary: primary, actions: actions, clear: { toggle(.card(c.id)) })
+    }
+
+    private func setAll(_ status: KitchenStatus, _ c: KitchenCardModel) {
+        setLines(status, c.lines.filter { $0.kitchen != status }, c)
+    }
+
+    private func setLines(_ status: KitchenStatus, _ lines: [TicketLine], _ c: KitchenCardModel) {
+        guard !lines.isEmpty else { return }
+        withAnimation(anim) {
+            model.kitchen(status, lines: lines, in: c.ticket)
+        }
+    }
+
+    private func reprint(_ c: KitchenCardModel) {
+        model.printKitchen(c.ticket, lines: c.lines, mode: .reprint)
+        model.show("已重印 \(c.ticket.title(floor: model.floor)) 的廚房單")
+    }
+
+    private func undoBump(_ b: KitchenBump) {
+        withAnimation(anim) {
+            model.kitchen(.ready, lines: b.lines, in: b.ticket)
+            selected = nil
         }
     }
 
@@ -342,10 +453,23 @@ struct KitchenView: View {
         }
     }
 
+    /// 一張剛出餐的：點一下選起來，右欄可以復原
     private func bumpChip(_ b: KitchenBump, now: Date) -> some View {
         let minutes = max(0, Int(now.timeIntervalSince(b.at) / 60))
         let summary = b.lines.map { "\($0.name) ×\($0.quantity)" }.joined(separator: "、")
-        return HStack(spacing: 14) {
+        let isSelected = selected == .bump(b.id)
+        return Button {
+            toggle(.bump(b.id))
+        } label: {
+            bumpChipBody(b, summary: summary, minutes: minutes, selected: isSelected)
+        }
+        .buttonStyle(PressScale(scale: 0.97))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityHint("點一下選起來，右邊可以復原")
+    }
+
+    private func bumpChipBody(_ b: KitchenBump, summary: String, minutes: Int, selected: Bool) -> some View {
+        HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(b.ticket.title(floor: model.floor))
                     .font(.brand(16, .semibold))
@@ -363,23 +487,14 @@ struct KitchenView: View {
                     .foregroundStyle(Theme.muted)
             }
             .frame(maxWidth: 220, alignment: .leading)
-            Button {
-                withAnimation(anim) { model.kitchen(.ready, lines: b.lines, in: b.ticket) }
-            } label: {
-                Label {
-                    Text("復原")
-                } icon: {
-                    HeroIcon("arrow-uturn-left", size: 14)
-                }
-            }
-            .buttonStyle(.brand(.ghost, size: .sm))
         }
         .padding(12)
-        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
+        .background(selected ? Theme.accentSoft : Theme.surface, in: .rect(cornerRadius: Metric.radius))
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                .strokeBorder(Theme.line, lineWidth: 1)
+                .strokeBorder(selected ? Theme.accent : Theme.line, lineWidth: selected ? 2 : 1)
         }
+        .contentShape(.rect)
     }
 }
 
@@ -398,6 +513,12 @@ private struct KitchenCardModel: Identifiable {
 
     /// 這張（篩過出單站的）全部做好了
     var allReady: Bool { lines.allSatisfy { $0.kitchen == .ready } }
+}
+
+/// 選起來的是哪一張：做的單、或剛出餐的
+private enum KitchenPick: Equatable {
+    case card(String)
+    case bump(String)
 }
 
 private struct KitchenBump: Identifiable {
@@ -448,11 +569,21 @@ private struct KitchenTicketCard: View {
     let now: Date
     /// 看「全部」或好幾個出單站時，每一行標出單站
     let showsStation: Bool
+    /// 選起來了（動作在右欄）
+    let selected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
         VStack(spacing: 0) {
-            header
+            // 點上面（桌號、分鐘）＝選起來；點一行＝那一行換狀態
+            Button(action: onSelect) {
+                header
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityHint("點一下選起來，動作在右邊")
             Rule()
             if !card.ticket.note.isEmpty {
                 Text("※ 整張單：\(card.ticket.note)")
@@ -472,12 +603,11 @@ private struct KitchenTicketCard: View {
                     }
                 }
             }
-            footer
         }
         .background(Theme.surface)
         .clipShape(shape)
         .overlay {
-            shape.strokeBorder(borderColor, lineWidth: allReady || urgency == .hot ? 2 : 1)
+            shape.strokeBorder(borderColor, lineWidth: selected ? 3 : (allReady || urgency == .hot ? 2 : 1))
         }
     }
 
@@ -502,6 +632,7 @@ private struct KitchenTicketCard: View {
     private var allReady: Bool { card.lines.allSatisfy { $0.kitchen == .ready } }
 
     private var borderColor: Color {
+        if selected { return Theme.accent }
         if allReady { return Theme.successFG }
         switch urgency {
         case .hot: return Theme.dangerFG.opacity(0.7)
@@ -621,42 +752,6 @@ private struct KitchenTicketCard: View {
         return parts.isEmpty ? nil : parts.joined(separator: "・")
     }
 
-    // MARK: 下面
-
-    /// 一張單只露一個主要動作，看狀況換：還沒全好 →「全部好了」；全好了 →「已上菜」。其他收進「⋯」
-    private var footer: some View {
-        ActionBar(
-            primary: allReady ? servedAction : allReadyAction,
-            more: moreActions,
-            size: .lg
-        )
-        .padding(12)
-    }
-
-    private var allReadyAction: POSAction {
-        POSAction("全部好了", icon: "check") { setAll(.ready) }
-    }
-
-    private var servedAction: POSAction {
-        POSAction("已上菜", icon: "check-circle") { serveAll() }
-    }
-
-    private var moreActions: [POSAction] {
-        var list: [POSAction] = []
-        // 還沒全好也可能先上了（客人催、分批上），留在「⋯」裡
-        if !allReady { list.append(servedAction) }
-        let waiting = card.lines.filter { $0.kitchen == .sent }
-        list.append(POSAction("全部開始做", icon: "fire", enabled: !waiting.isEmpty) { startAll(waiting) })
-        list.append(POSAction("重印廚房單", icon: "printer") { reprint() })
-        return list
-    }
-
-    private func serveAll() {
-        withAnimation(reduceMotion ? nil : Motion.ease) {
-            model.kitchen(.served, lines: card.lines, in: card.ticket)
-        }
-    }
-
     // MARK: 動作
 
     /// 待做 → 製作中 → 可出餐 → 待做（按錯再點下去就回來了）
@@ -677,26 +772,6 @@ private struct KitchenTicketCard: View {
         }
     }
 
-    private func setAll(_ status: KitchenStatus) {
-        let lines = card.lines.filter { $0.kitchen != status }
-        guard !lines.isEmpty else { return }
-        withAnimation(anim) {
-            model.kitchen(status, lines: lines, in: card.ticket)
-        }
-    }
-
-    /// 只把還沒開始的推到製作中，已經好了的不要被打回去
-    private func startAll(_ lines: [TicketLine]) {
-        guard !lines.isEmpty else { return }
-        withAnimation(anim) {
-            model.kitchen(.preparing, lines: lines, in: card.ticket)
-        }
-    }
-
-    private func reprint() {
-        model.printKitchen(card.ticket, lines: card.lines, mode: .reprint)
-        model.show("已重印 \(title) 的廚房單")
-    }
 }
 
 /// 一行的狀態：顏色＋字（待做／製作中／可出餐）
@@ -775,12 +850,23 @@ private struct KitchenExpoCard: View {
     let title: String
     let now: Date
     let calledAt: Date?
-    let onCall: () -> Void
-    let onServed: () -> Void
+    let selected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
+        Button(action: onSelect) {
+            cardBody
+        }
+        .buttonStyle(PressScale(scale: 0.98))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(pickup.map { "\($0) 號" } ?? title)，可以出餐")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("點一下選起來，右邊叫號、出餐")
+    }
+
+    private var cardBody: some View {
         let shape = RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
-        VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text(pickup ?? title)
                     .font(.brand(pickup == nil ? 34 : 56, .semibold))
@@ -812,26 +898,12 @@ private struct KitchenExpoCard: View {
                 .font(.brand(16, .regular))
                 .foregroundStyle(Theme.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-            // 一張只露一個主要動作：還沒叫 →「叫號」；叫過了 →「已出餐」。另一個收進「⋯」
-            ActionBar(
-                primary: calledAt == nil ? callAction : servedAction,
-                more: calledAt == nil ? [servedAction] : [callAction],
-                size: .lg
-            )
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
         .background(Theme.successFG.opacity(0.07), in: shape)
         .background(Theme.surface, in: shape)
-        .overlay { shape.strokeBorder(Theme.successFG, lineWidth: 2) }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(pickup.map { "\($0) 號" } ?? title)，可以出餐")
-    }
-
-    private var callAction: POSAction {
-        POSAction(calledAt == nil ? "叫號" : "再叫一次", icon: "speaker-wave") { onCall() }
-    }
-
-    private var servedAction: POSAction {
-        POSAction("已出餐", icon: "check-circle") { onServed() }
+        .overlay { shape.strokeBorder(selected ? Theme.accent : Theme.successFG, lineWidth: selected ? 3 : 2) }
+        .contentShape(shape)
     }
 }

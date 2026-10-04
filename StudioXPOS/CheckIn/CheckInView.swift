@@ -15,12 +15,14 @@ import SwiftUI
 ///   │ │  ◟◞ 剩 23 天   0912-***-678・來過 41 次    │ │ (王) 王大明 8 分前│
 ///   │ │ ┌ ✓ 可以入場 ─────────────────────────┐   │ │ …               │
 ///   │ │ │ 月卡・會籍到 11/3（還有 23 天）・不扣次數│   │ │                 │
-///   │ │ [            入場 →            ] [續約／買卡]│ │                 │
 ///   │ └──────────────────────────────────────────┘ │                 │
 ///   └────────────────────────────────────────────────────────────────┘
 ///
-/// 右側鍵盤一直等著「會員」：打手機號碼或掃會員卡（掃描器打進鍵盤、按 Enter）就查，查到馬上換下一位。
-/// 課表：今天的團體課（名額圈、教練、教室），名單是一顆顆頭像：點＝簽到（扣能抵這堂課的卡），沒卡的收單堂。
+/// 左邊選、右邊做：右側鍵盤等著「會員」（打手機號碼或掃會員卡）；查到的人放在左邊大大的，
+/// 他的動作都在右欄：大鍵「入場」（不能進就是「續約／買卡」），其他（改用別張卡、破例入場）是動作鍵；
+/// 續約／買卡、改用哪張卡是蓋住右欄的面板。入場或按 × 之後鍵盤再等下一位。
+/// 今天報到的動態：點一筆選起來，右欄可以取消報到（要店長 PIN）。
+/// 課表：今天的團體課（名額圈、教練、教室），名單是一顆顆頭像：點＝選起來，右欄大鍵「簽到」，沒卡的收單堂。
 struct CheckInView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -47,10 +49,13 @@ struct CheckInView: View {
         .padding(.top, 22)
         .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .dockSelection(desk.tab == .entry ? messageDock : nil)
         .task(id: listenKey) { await listen() }
         .onAppear {
             desk.forgetIfStale()
             if !model.mode.usesClasses { desk.tab = .entry }
+            // 截圖：先帶出一位能入場的會員
+            if LaunchArguments.preselect, desk.tab == .entry, desk.result == nil, let m = model.members.values.sorted(by: { $0.id < $1.id }).first(where: { model.checkInPlan(for: $0).pass != nil }) { desk.result = .member(id: m.id, offline: false) }
         }
         .onDisappear { stopListening() }
     }
@@ -98,6 +103,11 @@ struct CheckInView: View {
     private func listen() async {
         guard desk.tab == .entry else { return }
         while !Task.isCancelled {
+            // 右欄正在顯示某一位（或選了一筆報到）：先不問下一位，右欄才看得到他的動作；入場、按 × 之後再問
+            if desk.result != nil || desk.searching || desk.feedId != nil {
+                try? await Task.sleep(for: .milliseconds(300))
+                continue
+            }
             if let entry = await model.keypad.ask(KeypadSpec.memberCode) {
                 await lookUp(entry.digits)
                 continue
@@ -175,44 +185,42 @@ struct CheckInView: View {
                 CheckInMemberPanel(member: m, offline: offline, onDone: { clear() })
                     .id(id)
             } else {
-                CheckInMessage(icon: "exclamation-circle", title: "找不到這位會員的資料", detail: "請再查一次", tone: .warning) {
-                    Button("重新輸入") { clear() }
-                        .buttonStyle(.brand(.ghost, size: .lg))
-                }
+                CheckInMessage(icon: "exclamation-circle", title: "找不到這位會員的資料", detail: "請再查一次", tone: .warning)
             }
         case .notFound(let code):
-            CheckInMessage(icon: "user", title: "查不到 \(CheckInText.masked(code))", detail: "還不是會員，或號碼打錯了", tone: .warning) {
-                if CheckInText.isPhone(code) {
-                    Button {
-                        join(code)
-                    } label: {
-                        Text("用這支電話加入會員")
-                    }
-                    .buttonStyle(.brand(.primary, size: .lg, arrow: true))
-                }
-                Button("重新輸入") { clear() }
-                    .buttonStyle(.brand(.ghost, size: .lg))
-            }
+            CheckInMessage(icon: "user", title: "查不到 \(CheckInText.masked(code))", detail: "還不是會員，或號碼打錯了", tone: .warning)
         case .offline(let code):
-            CheckInMessage(icon: "wifi", title: "離線，查不到 \(CheckInText.masked(code))", detail: "這台沒查過這位會員。可以先記下號碼讓他進去，連上網路後到後台核對。", tone: .warning) {
-                Button {
-                    offlineEntry(code)
-                } label: {
-                    Text("先讓他入場（記下號碼）")
-                }
-                .buttonStyle(.brand(.primary, size: .lg))
-                Button("重新輸入") { clear() }
-                    .buttonStyle(.brand(.ghost, size: .lg))
-            }
+            CheckInMessage(icon: "wifi", title: "離線，查不到 \(CheckInText.masked(code))", detail: "這台沒查過這位會員。可以先記下號碼讓他進去，連上網路後到後台核對。", tone: .warning)
+        case .failed(_, let message):
+            CheckInMessage(icon: "exclamation-triangle", title: "查不到", detail: message, tone: .danger)
+        }
+    }
+
+    /// 查不到、離線、出錯：動作在右欄（查到的會員由會員卡片自己交給右欄）
+    private var messageDock: DockSelection? {
+        guard let result = desk.result else { return nil }
+        let again = POSAction("重新輸入", icon: "arrow-path") { clear() }
+        switch result {
+        case .member(let id, _):
+            guard model.members[id] == nil else { return nil }
+            return DockSelection(id: "checkin-missing-\(id)", kind: "查詢", title: "找不到這位會員的資料", detail: "請再查一次",
+                                 badge: DockBadge("查不到", tone: .warning), primary: again, accent: false, clear: { clear() })
+        case .notFound(let code):
+            let canJoin = CheckInText.isPhone(code)
+            return DockSelection(id: "checkin-notfound-\(code)", kind: "查詢", title: "查不到 \(CheckInText.masked(code))",
+                                 detail: "還不是會員，或號碼打錯了", badge: DockBadge("不是會員", tone: .warning),
+                                 primary: canJoin ? POSAction("用這支電話加入會員", icon: "user") { join(code) } : again,
+                                 accent: false, actions: canJoin ? [again] : [], clear: { clear() })
+        case .offline(let code):
+            return DockSelection(id: "checkin-offline-\(code)", kind: "查詢", title: "離線，查不到 \(CheckInText.masked(code))",
+                                 detail: "先記下號碼讓他進去，連上網路後到後台核對", badge: DockBadge("離線", tone: .warning),
+                                 primary: POSAction("先讓他入場（記下號碼）", icon: "check") { offlineEntry(code) },
+                                 actions: [again], clear: { clear() })
         case .failed(let code, let message):
-            CheckInMessage(icon: "exclamation-triangle", title: "查不到", detail: message, tone: .danger) {
-                Button("再試一次") {
-                    Task { await lookUp(code) }
-                }
-                .buttonStyle(.brand(.primary, size: .lg))
-                Button("重新輸入") { clear() }
-                    .buttonStyle(.brand(.ghost, size: .lg))
-            }
+            return DockSelection(id: "checkin-failed-\(code)", kind: "查詢", title: "查不到", detail: message,
+                                 badge: DockBadge("出錯了", tone: .danger),
+                                 primary: POSAction("再試一次", icon: "arrow-path") { Task { await lookUp(code) } },
+                                 accent: false, actions: [again], clear: { clear() })
         }
     }
 
@@ -270,6 +278,8 @@ private final class CheckInDesk {
     var showShop = false
     /// 課表選到的那一堂
     var sessionId: String?
+    /// 今天報到的動態裡選起來的那一筆（右欄可以取消報到）
+    var feedId: String?
     /// 改了就重新開始問會員號碼
     var listenToken = 0
     private var updatedAt = Date()
@@ -283,6 +293,7 @@ private final class CheckInDesk {
         passId = nil
         entered = nil
         showShop = false
+        feedId = nil
         touch()
     }
 
@@ -419,21 +430,12 @@ private struct CheckInSearching: View {
     }
 }
 
-/// 查不到、離線、出錯：一句話＋動作
-private struct CheckInMessage<Actions: View>: View {
+/// 查不到、離線、出錯：一句話（動作在右欄）
+private struct CheckInMessage: View {
     let icon: String
     let title: String
     let detail: String
     let tone: Tone
-    let actions: Actions
-
-    init(icon: String, title: String, detail: String, tone: Tone, @ViewBuilder actions: () -> Actions) {
-        self.icon = icon
-        self.title = title
-        self.detail = detail
-        self.tone = tone
-        self.actions = actions()
-    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -451,10 +453,10 @@ private struct CheckInMessage<Actions: View>: View {
                 .textRole(.body)
                 .foregroundStyle(Theme.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                actions
-            }
-            .padding(.top, 6)
+            Text("動作在右邊")
+                .textRole(.small)
+                .foregroundStyle(Theme.muted)
+                .padding(.top, 6)
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: 520)
@@ -474,6 +476,9 @@ private struct CheckInMemberPanel: View {
 
     private var desk: CheckInDesk { CheckInDesk.shared }
 
+    /// 改用哪張卡的面板（蓋住右欄）
+    @State private var pickingPass = false
+
     var body: some View {
         let now = Date()
         let plan = model.checkInPlan(for: member, at: now)
@@ -484,12 +489,24 @@ private struct CheckInMemberPanel: View {
             }
             identity(plan: plan, pass: pass, now: now)
             verdict(plan, pass: pass, now: now)
-            actions(plan, pass: pass)
-            if desk.showShop {
-                CheckInShop(member: member)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
             passList(now: now)
+        }
+        // 入場（大鍵）、續約／買卡、改用別張卡、破例入場都在右欄
+        .dockSelection(dock(plan, pass: pass))
+        .dockPanel(isPresented: Binding(get: { desk.showShop }, set: { desk.showShop = $0 }),
+                   title: "續約／買卡", subtitle: member.name ?? member.ref.maskedPhone) {
+            CheckInShop(member: member)
+        }
+        .dockPanel(isPresented: $pickingPass, title: "改用哪張卡", subtitle: member.name ?? member.ref.maskedPhone) {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(plan.choices) { p in
+                    DockChoice(title: p.name, detail: CheckInText.passEffect(p, at: now), trailing: p.statusText(at: now),
+                               selected: pass?.id == p.id) {
+                        withAnimation(anim) { desk.passId = p.id }
+                        pickingPass = false
+                    }
+                }
+            }
         }
         .padding(26)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg))
@@ -562,11 +579,6 @@ private struct CheckInMemberPanel: View {
                 }
             }
             Spacer(minLength: 0)
-            Button(action: onDone) {
-                HeroIcon("x-mark", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 40))
-            .accessibilityLabel("清除，換下一位")
         }
     }
 
@@ -587,18 +599,9 @@ private struct CheckInMemberPanel: View {
                 CheckInVerdict(ok: false, title: problemTitle(plan.problem), detail: problemDetail(plan.problem))
             }
             if plan.choices.count > 1 {
-                HStack(spacing: 8) {
-                    Text("改用")
-                        .textRole(.xs)
-                        .foregroundStyle(Theme.muted)
-                    FlowLayout(spacing: 6, rowSpacing: 6) {
-                        ForEach(plan.choices) { p in
-                            OptionChip(title: p.name, detail: p.statusText(at: now), selected: pass?.id == p.id) {
-                                withAnimation(anim) { desk.passId = p.id }
-                            }
-                        }
-                    }
-                }
+                Text("還有 \(plan.choices.count - 1) 張卡可以用：右邊「改用別張卡」")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
             }
             if let today = todayCheckIn {
                 HStack(spacing: 8) {
@@ -645,42 +648,46 @@ private struct CheckInMemberPanel: View {
 
     // MARK: 動作
 
-    /// 「⋯｜次要｜主要」：能進 → 主要「入場」、次要「續約／買卡」；
-    /// 不能進 → 主要「續約／買卡」，「破例入場」（要主管）收進「⋯」
-    private func actions(_ plan: CheckInPlan, pass: MemberPass?) -> some View {
-        HStack(spacing: 12) {
-            if pass == nil {
-                MoreMenu(actions: [
-                    POSAction("破例入場（主管授權）", icon: "exclamation-triangle") { graceEntry() },
-                ], size: .lg)
-            }
-            Button {
-                withAnimation(reduceMotion ? nil : Motion.spring) { desk.showShop.toggle() }
-            } label: {
-                Text(desk.showShop ? "收起" : "續約／買卡")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(pass == nil ? .primary : .ghost, size: .lg, fullWidth: true, arrow: pass == nil && !desk.showShop))
-            .frame(maxWidth: pass == nil ? .infinity : 200)
-            if let pass {
-                Button {
-                    enter(pass)
-                } label: {
-                    HStack(spacing: 10) {
-                        Text("入場")
-                            .font(.brand(22, .semibold))
-                        Text("→")
-                            .font(.brand(22, .medium))
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 64)
-                    .foregroundStyle(Theme.onAccent)
-                    .background(Theme.accent, in: .rect(cornerRadius: Metric.radius))
-                    .contentShape(.rect)
-                }
-                .buttonStyle(PressScale(scale: 0.98))
-                .accessibilityLabel("入場，用 \(pass.name)")
-            }
+    // MARK: 右欄
+
+    /// 能進 → 大鍵「入場」（品牌橘）；不能進 → 大鍵「續約／買卡」，「破例入場」（要主管）是動作鍵。剛入場 → 「下一位」
+    private func dock(_ plan: CheckInPlan, pass: MemberPass?) -> DockSelection {
+        let name = member.name ?? member.ref.maskedPhone
+        var detail = "\(member.ref.maskedPhone)・來過 \(member.visits) 次"
+        if let pass { detail += "・用 \(pass.name)" }
+        if let today = todayCheckIn { detail += "・\(alreadyText(today))" }
+        let shop = POSAction(desk.showShop ? "收起續約／買卡" : "續約／買卡", icon: "credit-card") {
+            withAnimation(reduceMotion ? nil : Motion.spring) { desk.showShop.toggle() }
         }
+        if let entered = desk.entered, entered.member.id == member.id {
+            return DockSelection(id: "checkin-\(member.id)-in", kind: "會員", title: name, detail: "\(entered.at.clockText) 入場",
+                                 badge: DockBadge("已入場", tone: .active),
+                                 primary: POSAction("下一位", icon: "arrow-path") { onDone() }, accent: false,
+                                 clear: { onDone() })
+        }
+        var actions: [POSAction] = []
+        let primary: POSAction
+        if let pass {
+            primary = POSAction("入場", icon: "check") { enter(pass) }
+            actions.append(shop)
+            if plan.choices.count > 1 {
+                actions.append(POSAction("改用別張卡", icon: "arrows-right-left") { pickingPass = true })
+            }
+        } else {
+            primary = shop
+            actions.append(POSAction("破例入場（主管授權）", icon: "exclamation-triangle") { graceEntry() })
+        }
+        return DockSelection(
+            id: "checkin-\(member.id)",
+            kind: "會員",
+            title: name,
+            detail: detail,
+            badge: pass != nil ? DockBadge("可以入場", tone: .active) : DockBadge(problemTitle(plan.problem), tone: .danger),
+            primary: primary,
+            accent: pass != nil,
+            actions: actions,
+            clear: { onDone() }
+        )
     }
 
     private func enter(_ pass: MemberPass) {
@@ -1051,50 +1058,22 @@ private struct CheckInShop: View {
 
     var body: some View {
         let items = model.catalog.items.filter { ($0.itemKind == .pass || $0.itemKind == .storedValue) && model.isAvailable($0) }
-        VStack(alignment: .leading, spacing: 12) {
-            Eyebrow("續約／買卡")
+        VStack(alignment: .leading, spacing: 8) {
             if items.isEmpty {
                 Text("菜單上還沒有會籍、課程卡或儲值（到後台菜單把品項種類設成「課程卡／會籍」）")
                     .textRole(.small)
                     .foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 10)], alignment: .leading, spacing: 10) {
-                    ForEach(items) { item in
-                        Button {
-                            Task { await model.sell(item, to: member.ref) }
-                        } label: {
-                            shopTile(item)
-                        }
-                        .buttonStyle(PressScale(scale: 0.96))
+                ForEach(items) { item in
+                    DockChoice(title: item.name,
+                               detail: item.pass?.summary ?? item.itemKind.label,
+                               trailing: item.openPrice ? "自訂金額" : item.price.formatted) {
+                        Task { await model.sell(item, to: member.ref) }
                     }
                 }
             }
         }
-    }
-
-    private func shopTile(_ item: MenuItem) -> some View {
-        let swatch = model.catalog.category(item.categoryId)?.swatch ?? .mint
-        return VStack(alignment: .leading, spacing: 4) {
-            Text(item.pass?.summary ?? item.itemKind.label)
-                .font(.brand(12, .semibold))
-                .foregroundStyle(Theme.tileInkMuted)
-                .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(item.name)
-                .font(.brand(17, .semibold))
-                .foregroundStyle(Theme.tileInk)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-            Text(item.openPrice ? "自訂金額" : item.price.formatted)
-                .font(.brand(14, .medium))
-                .monospacedDigit()
-                .foregroundStyle(Theme.tileInkMuted)
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
-        .background(Theme.swatch(swatch), in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
-        .contentShape(.rect)
     }
 }
 
@@ -1107,6 +1086,8 @@ private struct CheckInFeed: View {
     let onVoided: () -> Void
 
     @State private var confirming: CheckIn?
+
+    private var desk: CheckInDesk { CheckInDesk.shared }
 
     var body: some View {
         let list = model.state.checkIns(businessDate: model.businessDate, cutoffHour: model.store.businessDayCutoffHour)
@@ -1168,8 +1149,11 @@ private struct CheckInFeed: View {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                 .strokeBorder(Theme.line, lineWidth: 1)
         }
+        // 選起來的那一筆：右欄可以取消報到（要確認、要店長 PIN）
+        .dockSelection(feedDock(list))
         .alert("取消這筆報到？", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }), presenting: confirming) { c in
             Button("取消報到", role: .destructive) {
+                desk.feedId = nil
                 Task {
                     _ = await model.voidCheckIn(c, reason: "櫃台取消")
                     onVoided()
@@ -1187,7 +1171,42 @@ private struct CheckInFeed: View {
         return "\(who) \(c.at.clockText)\(back)。要店長輸入 PIN。"
     }
 
+    private func feedDock(_ list: [CheckIn]) -> DockSelection? {
+        guard let id = desk.feedId, let c = list.first(where: { $0.id == id }) else { return nil }
+        var info = "\(c.at.clockText) 入場・\(detail(c))"
+        if c.uses > 0 { info += "・扣了 \(c.uses) 次" }
+        return DockSelection(
+            id: "checkin-feed-\(c.id)",
+            kind: "報到紀錄",
+            title: c.member.name ?? c.member.maskedPhone,
+            detail: info,
+            badge: DockBadge("已入場", tone: .active),
+            actions: [POSAction("取消報到", icon: "arrow-uturn-left", destructive: true) { confirming = c }],
+            clear: { select(nil) }
+        )
+    }
+
+    /// 選一筆：鍵盤先不等下一位（右欄才看得到它的動作）；再點一次取消
+    private func select(_ c: CheckIn?) {
+        let next = c?.id == desk.feedId ? nil : c?.id
+        if next != nil, model.keypad.request?.spec == KeypadSpec.memberCode { model.keypad.cancel() }
+        withAnimation(reduceMotion ? nil : Motion.fast) { desk.feedId = next }
+    }
+
     private func row(_ c: CheckIn) -> some View {
+        let selected = desk.feedId == c.id
+        return Button {
+            select(c)
+        } label: {
+            rowBody(c, selected: selected)
+        }
+        .buttonStyle(.press)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("點一下選起來，右邊可以取消報到")
+    }
+
+    private func rowBody(_ c: CheckIn, selected: Bool) -> some View {
         let name = c.member.name ?? c.member.maskedPhone
         return HStack(spacing: 12) {
             CheckInAvatar(name: name, size: 38)
@@ -1217,16 +1236,13 @@ private struct CheckInFeed: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 6)
-        .contentShape(.rect)
-        .contextMenu {
-            Button(role: .destructive) {
-                confirming = c
-            } label: {
-                Label("取消報到", systemImage: "arrow.uturn.backward")
+        .background(selected ? Theme.accentSoft : Color.clear, in: .rect(cornerRadius: Metric.radius))
+        .overlay {
+            if selected {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous).strokeBorder(Theme.accent, lineWidth: 1.5)
             }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityAction(named: "取消報到") { confirming = c }
+        .contentShape(.rect)
     }
 
     private func detail(_ c: CheckIn) -> String {
@@ -1490,6 +1506,8 @@ private struct CheckInRoster: View {
     @State private var noPassId: String?
     @State private var busyId: String?
     @State private var confirming: CheckInRosterAction?
+    /// 選起來的那一位（動作在右欄：大鍵「簽到」）
+    @State private var selectedId: String?
 
     var body: some View {
         let roster = model.roster(of: session)
@@ -1497,10 +1515,6 @@ private struct CheckInRoster: View {
             header(roster)
             if let phone = pendingPhone {
                 pendingRow(phone)
-            }
-            if let id = noPassId, let r = roster.first(where: { $0.id == id }) {
-                noPassRow(r)
-                    .transition(.move(edge: .top).combined(with: .opacity))
             }
             if roster.isEmpty {
                 VStack(spacing: 12) {
@@ -1516,7 +1530,7 @@ private struct CheckInRoster: View {
                     Text("還沒有人報名")
                         .textRole(.h4)
                         .foregroundStyle(Theme.ink2)
-                    Text("按「報名」用電話幫客人報名；沒報名的按「現場單堂」。")
+                    Text("右邊「報名」用電話幫客人報名；沒報名的按「現場單堂」。")
                         .textRole(.small)
                         .foregroundStyle(Theme.muted)
                 }
@@ -1539,6 +1553,11 @@ private struct CheckInRoster: View {
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                 .strokeBorder(Theme.line, lineWidth: 1)
+        }
+        .dockSelection(dock(roster))
+        .onAppear {
+            // 截圖：先選名單上的第一位
+            if LaunchArguments.preselect, selectedId == nil { selectedId = roster.first(where: { $0.status.isActive })?.id ?? roster.first?.id }
         }
         .alert(confirmTitle, isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }), presenting: confirming) { c in
             Button(c.status == .cancelled ? "取消報名" : "標示未到", role: .destructive) {
@@ -1586,27 +1605,89 @@ private struct CheckInRoster: View {
                         Text("※ \(note)")
                             .textRole(.xs)
                             .foregroundStyle(Theme.warningFG)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
             Spacer(minLength: 8)
-            Button {
-                Task { await walkInDropIn() }
-            } label: {
-                Text("現場單堂")
-            }
-            .buttonStyle(.brand(.ghost, size: .md))
-            Button {
-                Task { await book() }
-            } label: {
-                Label {
-                    Text("報名")
-                } icon: {
-                    HeroIcon("plus", size: 15)
+        }
+    }
+
+    // MARK: 右欄
+
+    /// 選了一位：大鍵「簽到」（沒卡＝收單堂）；沒選：這一堂的動作（報名、現場單堂）
+    private func dock(_ roster: [Reservation]) -> DockSelection? {
+        if let phone = pendingPhone {
+            return DockSelection(
+                id: "roster-join-\(phone)", kind: "報名", title: MemberRef(phone: phone).maskedPhone,
+                detail: "還不是會員：左邊填名字，加入會員並報名 \(session.name)",
+                primary: POSAction("加入並報名", icon: "user") { Task { await joinAndBook(phone) } },
+                actions: [POSAction("不報了", icon: "x-mark", destructive: true) { cancelPending() }],
+                clear: { cancelPending() }
+            )
+        }
+        guard let id = selectedId, let r = roster.first(where: { $0.id == id }) else {
+            return DockSelection.page("roster-\(session.id)",
+                         primary: POSAction("報名", icon: "plus") { Task { await book() } },
+                         actions: [POSAction("現場單堂", icon: "user") { Task { await walkInDropIn() } }])
+        }
+        let member = r.memberId.flatMap { model.members[$0] }
+        let account = member.flatMap { model.account(for: $0.ref) }
+        let pass = account.flatMap { model.classPass(for: $0, session: session, at: now) }
+        let busy = busyId == r.id
+        var detail = "\(session.name) \(session.startsAt.clockText)・\(chipDetail(r, account: account, pass: pass))"
+        var primary: POSAction?
+        var actions: [POSAction] = []
+        if r.status.isActive {
+            if noPassId == r.id {
+                // 沒有能抵這堂課的卡：收單堂、或請客人買卡
+                detail = "\(session.name) \(session.startsAt.clockText)・沒有能抵這堂課的卡"
+                primary = POSAction(session.dropInPrice.map { "收單堂 \($0.formatted)" } ?? "收單堂", icon: "credit-card") {
+                    withAnimation(anim) { noPassId = nil }
+                    Task { await model.dropIn(r, session: session, member: member) }
                 }
+                if let member {
+                    actions.append(POSAction("買卡", icon: "credit-card") { openShop(member) })
+                }
+                actions.append(POSAction("再查一次卡", icon: "arrow-path", enabled: !busy) { Task { await signIn(r) } })
+            } else {
+                primary = POSAction(busy ? "簽到中…" : "簽到", icon: "check", enabled: !busy) { Task { await signIn(r) } }
             }
-            .buttonStyle(.brand(.primary, size: .md))
+            actions.append(POSAction("未到", icon: "no-symbol", destructive: true) {
+                confirming = CheckInRosterAction(reservation: r, status: .noShow)
+            })
+            actions.append(POSAction("取消報名", icon: "x-circle", destructive: true) {
+                confirming = CheckInRosterAction(reservation: r, status: .cancelled)
+            })
+        } else if r.status == .noShow {
+            actions.append(POSAction("改回已報名", icon: "arrow-uturn-left") { Task { await model.setStatus(.booked, for: r) } })
+        }
+        let tone: Tone
+        switch r.status {
+        case .booked, .notified: tone = .info
+        case .arrived, .seated: tone = .active
+        case .noShow: tone = .danger
+        case .cancelled: tone = .neutral
+        }
+        return DockSelection(
+            id: "roster-\(r.id)", kind: "上課", title: r.name, detail: detail,
+            badge: DockBadge(r.status.label(for: .classBooking), tone: tone),
+            primary: primary, actions: actions,
+            clear: { select(nil) }
+        )
+    }
+
+    private func select(_ r: Reservation?) {
+        withAnimation(anim) {
+            selectedId = r?.id == selectedId ? nil : r?.id
+            noPassId = nil
+        }
+    }
+
+    private func cancelPending() {
+        withAnimation(anim) {
+            pendingPhone = nil
+            pendingName = ""
         }
     }
 
@@ -1626,41 +1707,15 @@ private struct CheckInRoster: View {
         let member = r.memberId.flatMap { model.members[$0] }
         let account = member.flatMap { model.account(for: $0.ref) }
         let pass = account.flatMap { model.classPass(for: $0, session: session, at: now) }
+        let selected = selectedId == r.id
         return Button {
-            guard r.status.isActive else { return }
-            Task { await signIn(r) }
+            select(r)
         } label: {
-            CheckInRosterChip(reservation: r, passText: chipDetail(r, account: account, pass: pass), busy: busyId == r.id)
+            CheckInRosterChip(reservation: r, passText: chipDetail(r, account: account, pass: pass), busy: busyId == r.id, selected: selected)
         }
         .buttonStyle(PressScale(scale: 0.95))
-        .disabled(busyId != nil)
-        .contextMenu {
-            if r.status.isActive {
-                Button {
-                    Task { await signIn(r) }
-                } label: {
-                    Label("簽到", systemImage: "checkmark.circle")
-                }
-                Button {
-                    confirming = CheckInRosterAction(reservation: r, status: .noShow)
-                } label: {
-                    Label("未到", systemImage: "person.fill.xmark")
-                }
-                Button(role: .destructive) {
-                    confirming = CheckInRosterAction(reservation: r, status: .cancelled)
-                } label: {
-                    Label("取消報名", systemImage: "xmark.circle")
-                }
-            }
-            if r.status == .noShow {
-                Button {
-                    Task { await model.setStatus(.booked, for: r) }
-                } label: {
-                    Label("改回已報名", systemImage: "arrow.uturn.backward")
-                }
-            }
-        }
-        .accessibilityHint(r.status.isActive ? "點一下簽到；長按看更多" : "長按看更多")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("點一下選起來，右邊簽到")
     }
 
     private func chipDetail(_ r: Reservation, account: MemberAccount?, pass: MemberPass?) -> String {
@@ -1673,48 +1728,12 @@ private struct CheckInRoster: View {
             return "會籍"
         }
         if account != nil { return "沒有卡" }
-        return r.memberId == nil ? "非會員" : "點一下簽到"
+        return r.memberId == nil ? "非會員" : "點一下選起來"
     }
 
     /// 這筆報名的簽到（這台最近兩天記得的）
     private func signedIn(_ r: Reservation) -> CheckIn? {
         model.state.checkIns.values.first { $0.reservationId == r.id && !$0.isVoided }
-    }
-
-    private func noPassRow(_ r: Reservation) -> some View {
-        let member = r.memberId.flatMap { model.members[$0] }
-        return HStack(spacing: 12) {
-            CheckInAvatar(name: r.name, size: 34)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(r.name) 沒有能抵這堂課的卡")
-                    .font(.brand(15, .semibold))
-                    .foregroundStyle(Theme.ink)
-                Text("收單堂、或請客人買卡")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
-            }
-            Spacer(minLength: 6)
-            Button {
-                withAnimation(anim) { noPassId = nil }
-                Task { await model.dropIn(r, session: session, member: member) }
-            } label: {
-                Text(session.dropInPrice.map { "單堂 \($0.formatted)" } ?? "單堂收費")
-            }
-            .buttonStyle(.brand(.primary, size: .sm))
-            if let member {
-                Button("買卡") { openShop(member) }
-                    .buttonStyle(.brand(.ghost, size: .sm))
-            }
-            Button {
-                withAnimation(anim) { noPassId = nil }
-            } label: {
-                HeroIcon("x-mark", size: 13)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 30))
-            .accessibilityLabel("關閉")
-        }
-        .padding(12)
-        .background(Tone.warning.background, in: .rect(cornerRadius: Metric.radius))
     }
 
     // MARK: 報名中、查不到會員
@@ -1724,26 +1743,14 @@ private struct CheckInRoster: View {
             Text("\(MemberRef(phone: phone).maskedPhone) 還不是會員：填名字，加入會員並報名")
                 .textRole(.small)
                 .foregroundStyle(Theme.ink2)
-            HStack(spacing: 10) {
-                TextField("名字", text: $pendingName)
-                    .font(.brand(17, .medium))
-                    .autocorrectionDisabled()
-                    .padding(.horizontal, 14)
-                    .frame(height: 46)
-                    .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-                    .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-                Button("加入並報名") {
-                    Task { await joinAndBook(phone) }
-                }
-                .buttonStyle(.brand(.primary, size: .md))
-                Button("取消") {
-                    withAnimation(anim) {
-                        pendingPhone = nil
-                        pendingName = ""
-                    }
-                }
-                .buttonStyle(.brand(.ghost, size: .md))
-            }
+            // 名字在這裡打；「加入並報名」是右欄的大鍵
+            TextField("名字", text: $pendingName)
+                .font(.brand(17, .medium))
+                .autocorrectionDisabled()
+                .padding(.horizontal, 14)
+                .frame(height: 46)
+                .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
+                .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
         }
         .padding(14)
         .background(Theme.accentSoft, in: .rect(cornerRadius: Metric.radius))
@@ -1797,7 +1804,11 @@ private struct CheckInRoster: View {
         }
         let pass = member.flatMap { model.account(for: $0.ref) }.flatMap { model.classPass(for: $0, session: session) }
         guard let pass else {
-            withAnimation(anim) { noPassId = r.id }
+            // 右欄換成「收單堂／買卡」
+            withAnimation(anim) {
+                selectedId = r.id
+                noPassId = r.id
+            }
             return
         }
         withAnimation(anim) { noPassId = nil }
@@ -1845,6 +1856,7 @@ private struct CheckInRosterChip: View {
     let reservation: Reservation
     let passText: String
     let busy: Bool
+    var selected = false
 
     var body: some View {
         let r = reservation
@@ -1885,6 +1897,12 @@ private struct CheckInRosterChip: View {
         }
         .frame(width: 88)
         .padding(.vertical, 6)
+        .background(selected ? Theme.accentSoft : Color.clear, in: .rect(cornerRadius: Metric.radius))
+        .overlay {
+            if selected {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous).strokeBorder(Theme.accent, lineWidth: 2)
+            }
+        }
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(r.name)，\(r.status.label(for: .classBooking))，\(passText)")

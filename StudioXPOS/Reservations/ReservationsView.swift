@@ -7,17 +7,19 @@ import SwiftUI
 
 /// 訂位與候位：左邊是今天的訂位（照時間、一小時一組），右邊是現場候位（號碼牌）。
 ///
-///   ┌ Guest book ──────────────────────────────────── ⟳ 14:05  [＋ 新增 ▾] ┐
-///   │ ■ 今天的訂位  3 組待到・14 位      │ ■ 現場候位  2 組等待中            │
-///   │ 18:00 ┃18:30 林小涵                │  12  張家豪                [入座] │
-///   │       ┃4 位・已預約・0912-***-678  │      3 位・等了 18 分             │
-///   ├────────────────────────────────────────────────────────────────────────┤
-///   │ 選起來的那一筆：林小涵 4 位・已預約     [⋯] [已到]  [入座 ────────]  ✕ │
-///   └────────────────────────────────────────────────────────────────────────┘
+///   ┌ Guest book ─────────────────── 14:05 更新 ┐ 右欄 ─────────────┐
+///   │ ■ 今天的訂位  3 組待到・14 位 │ ■ 現場候位   │ 訂位          ×   │
+///   │ 18:00 ┃18:30 林小涵           │  12  張家豪  │ 林小涵・4 位       │
+///   │       ┃4 位・已預約・0912…    │      3 位…   │ [已到]  [編輯]     │
+///   │                               │              │ [未到]  [取消]     │
+///   │                               │              │ [     入座     ]   │
+///   └───────────────────────────────┴──────────────┴────────────────────┘
 ///
-/// 卡片上不放按鈕列：點一下選起來，動作都在下面固定的動作列（候位卡片只留一個「入座」快捷）。
+/// 左邊選、右邊做：卡片上沒有按鈕，點一下選起來，動作都在右欄（.dockSelection）。
+/// 大鍵「入座」打開蓋住右欄的選桌面板（.dockPanel）：空桌一張一列，坐得下的排前面，點一張就入座。
+/// 沒選東西時右欄是這一頁的動作：新增訂位、新增候位、重新整理。
 /// 資料在後台（網站、電話訂的也在這裡）：進來先抓一次、之後每分鐘更新。
-/// 新增、編輯、選桌入座是從右邊滑出來的面板（不是系統的 sheet：人數、電話要用右側鍵盤打，sheet 會擋住鍵盤）。
+/// 新增、編輯是從右邊滑出來的表單（人數、電話用右側鍵盤打；儲存是右欄的大鍵）。
 struct ReservationsView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -38,21 +40,9 @@ struct ReservationsView: View {
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
                 columns(now: ctx.date)
             }
-            if let r = selected {
-                ResvSelectionBar(
-                    reservation: r,
-                    tables: model.floor.tableNames(r.tableIds),
-                    primary: primaryAction(r),
-                    secondary: secondaryActions(r),
-                    more: moreActions(r),
-                    onClose: { select(nil) }
-                )
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
         .padding(.horizontal, 28)
         .padding(.top, 22)
-        .padding(.bottom, selected == nil ? 0 : 16)
         // 選起來的那一筆剛入座：事情做完了，動作列跟著收起來（點已入座的那筆不算）
         .onChange(of: ResvSelectionKey(id: selectedId, status: selected?.status)) { old, new in
             if old.id == new.id && old.status != .seated && new.status == .seated { select(nil) }
@@ -69,6 +59,10 @@ struct ReservationsView: View {
             }
         }
         .overlay(alignment: .trailing) { panel }
+        .dockSelection(dockItem)
+        .dockPanel(item: $seating, title: { _ in "入座" }, subtitle: { r in seatSubtitle(r) }) { r in
+            ResvSeatChoices(reservation: r, onDone: { closePanels() })
+        }
         .task { await refreshLoop() }
         .alert(confirmTitle, isPresented: confirmBinding, presenting: confirming) { req in
             Button(confirmButton(req), role: .destructive) {
@@ -84,7 +78,8 @@ struct ReservationsView: View {
 
     private var anim: Animation? { reduceMotion ? nil : Motion.ease }
 
-    private var panelOpen: Bool { form != nil || seating != nil }
+    /// 表單蓋住工作區右半邊（選桌是蓋住右欄的面板，不用把工作區調暗）
+    private var panelOpen: Bool { form != nil }
 
     /// 今天（營業日）的訂位，照時間
     private var todaysBookings: [Reservation] {
@@ -96,9 +91,12 @@ struct ReservationsView: View {
     }
 
     private func refreshLoop() async {
+        await reload()
+        // 截圖：先選下一筆訂位
+        if LaunchArguments.preselect { selectedId = (todaysBookings.first { $0.status.isActive && $0.startsAt > Date().addingTimeInterval(-30 * 60) } ?? todaysBookings.first)?.id }
         while !Task.isCancelled {
-            await reload()
             try? await Task.sleep(for: .seconds(60))
+            await reload()
         }
     }
 
@@ -171,49 +169,82 @@ struct ReservationsView: View {
         Task { await model.setStatus(status, for: r) }
     }
 
-    // MARK: 選起來那一筆的動作（主要「入座」、次要最多兩個、其他收進「⋯」；取消、未到要確認）
+    // MARK: - 右欄
 
-    private func primaryAction(_ r: Reservation) -> POSAction? {
-        guard r.status.isActive else { return nil }
-        return POSAction("入座", icon: "users") { openSeating(r) }
+    /// 選起來的一筆 → 它的卡片與動作；沒選 → 這一頁的動作（表單打開時由表單交它自己的）
+    private var dockItem: DockSelection? {
+        if form != nil { return nil }
+        guard let r = selected else { return pageDock }
+        return itemDock(r)
     }
 
-    private func secondaryActions(_ r: Reservation) -> [POSAction] {
-        var list: [POSAction] = []
+    private var pageDock: DockSelection {
+        DockSelection.page("reservations", actions: [
+            POSAction("新增訂位", icon: "calendar-days") { openForm(.reservation) },
+            POSAction("新增候位", icon: "user-group") { openForm(.waitlist) },
+            POSAction(loading ? "更新中…" : "重新整理", icon: "arrow-path", enabled: !loading) { Task { await reload() } },
+        ])
+    }
+
+    /// 大鍵「入座」（打開選桌面板）；其他動作鍵：已到、通知／叫號了、編輯、未到、取消（危險的排最後、要確認）
+    private func itemDock(_ r: Reservation) -> DockSelection {
+        let queued = r.kind == .waitlist
+        var actions: [POSAction] = []
         if r.status.isActive {
-            if r.kind == .waitlist {
+            if queued {
                 if model.features.waitlistSMS {
                     // 有簡訊：傳「您的位子好了」
-                    list.append(POSAction(r.status == .notified ? "再通知" : "通知", icon: "bell-alert") {
+                    actions.append(POSAction(r.status == .notified ? "再通知" : "通知", icon: "bell-alert") {
                         Task { await model.notify(r) }
                     })
                 } else if r.status == .booked {
                     // 沒有簡訊：喊號之後記一下，免得重複叫
-                    list.append(POSAction("叫號了", icon: "speaker-wave") { setStatus(.notified, r) })
+                    actions.append(POSAction("叫號了", icon: "speaker-wave") { setStatus(.notified, r) })
                 }
-            } else if r.status != .arrived {
-                list.append(POSAction("已到", icon: "check") { setStatus(.arrived, r) })
             }
+            if r.status != .arrived {
+                actions.append(POSAction("已到", icon: "check") { setStatus(.arrived, r) })
+            }
+            actions.append(POSAction(queued ? "編輯" : "改時間・編輯", icon: "pencil-square") { openForm(r.kind, editing: r) })
+            actions.append(POSAction(queued ? "沒等到（離開了）" : "未到", icon: "no-symbol", destructive: true) { confirm(.noShow, r) })
+            actions.append(POSAction(queued ? "取消候位" : "取消訂位", icon: "x-circle", destructive: true) { confirm(.cancelled, r) })
         } else if r.status == .cancelled || r.status == .noShow {
             // 按錯了：改回來
-            list.append(POSAction(r.kind == .waitlist ? "改回候位" : "改回已預約", icon: "arrow-uturn-left") {
-                setStatus(.booked, r)
-            })
+            actions.append(POSAction(queued ? "改回候位" : "改回已預約", icon: "arrow-uturn-left") { setStatus(.booked, r) })
         }
-        return list
+        return DockSelection(
+            id: "resv-\(r.id)",
+            kind: queued ? "候位" : "訂位",
+            title: "\(r.name)・\(r.partySize) 位",
+            detail: dockDetail(r),
+            badge: DockBadge(r.status.label, tone: resvTone(r.status)),
+            primary: r.status.isActive ? POSAction("入座", icon: "users") { openSeating(r) } : nil,
+            actions: actions,
+            clear: { select(nil) }
+        )
     }
 
-    private func moreActions(_ r: Reservation) -> [POSAction] {
-        guard r.status.isActive else { return [] }
-        let queued = r.kind == .waitlist
-        var list: [POSAction] = []
-        if queued && r.status != .arrived {
-            list.append(POSAction("已到", icon: "check") { setStatus(.arrived, r) })
+    /// 訂位：18:30・0912-***-678・A4・※ 備註；候位：12 號・等了 18 分・電話
+    private func dockDetail(_ r: Reservation) -> String {
+        var parts: [String] = []
+        if r.kind == .waitlist {
+            if let n = r.queueNumber { parts.append("\(n) 號") }
+            parts.append("等了 \(max(0, Int(Date().timeIntervalSince(r.startsAt) / 60))) 分")
+        } else {
+            parts.append(r.startsAt.clockText)
         }
-        list.append(POSAction("編輯", icon: "pencil-square") { openForm(r.kind, editing: r) })
-        list.append(POSAction(queued ? "沒等到（離開了）" : "未到", icon: "no-symbol", destructive: true) { confirm(.noShow, r) })
-        list.append(POSAction(queued ? "取消候位" : "取消訂位", icon: "x-circle", destructive: true) { confirm(.cancelled, r) })
-        return list
+        parts.append(resvMaskedPhone(r.phone))
+        let tables = model.floor.tableNames(r.tableIds)
+        if !tables.isEmpty { parts.append(tables) }
+        if !r.note.isEmpty { parts.append("※ \(r.note)") }
+        return parts.joined(separator: "・")
+    }
+
+    private func seatSubtitle(_ r: Reservation) -> String {
+        if r.kind == .waitlist {
+            return "\(r.name)・\(r.partySize) 位・候位 \(r.queueNumber.map { String($0) } ?? "—") 號"
+        }
+        return "\(r.name)・\(r.partySize) 位・\(r.startsAt.clockText) 訂位"
     }
 
     private var confirmTitle: String {
@@ -242,48 +273,19 @@ struct ReservationsView: View {
         HStack(alignment: .bottom, spacing: 12) {
             PageTitle(title: "Guest *book*", subtitle: "訂位與候位・\(Date().dayTitle)")
             Spacer(minLength: 12)
-            Button {
-                Task { await reload() }
-            } label: {
+            // 頁首只放標題；新增、重新整理在右欄（沒選東西時）
+            if let loadedAt {
                 HStack(spacing: 6) {
-                    HeroIcon("arrow-path", size: 15)
+                    HeroIcon("arrow-path", size: 13)
                         .rotationEffect(.degrees(loading ? 180 : 0))
                         .animation(reduceMotion ? nil : Motion.ease, value: loading)
-                    if let loadedAt {
-                        Text(loadedAt.clockText)
-                            .font(.brand(12.5, .medium))
-                            .monospacedDigit()
-                    }
+                    Text("\(loadedAt.clockText) 更新")
+                        .font(.brand(12.5, .medium))
+                        .monospacedDigit()
                 }
                 .foregroundStyle(Theme.muted)
-                .padding(.horizontal, 10)
                 .frame(height: 44)
-                .contentShape(.rect)
             }
-            .buttonStyle(.press)
-            .accessibilityLabel("重新整理")
-            // 同一類的新增合成一個：點了選訂位或候位
-            Menu {
-                Button {
-                    openForm(.reservation)
-                } label: {
-                    Label { Text("訂位") } icon: { Image("hi-calendar-days").renderingMode(.template) }
-                }
-                Button {
-                    openForm(.waitlist)
-                } label: {
-                    Label { Text("候位（抽號碼）") } icon: { Image("hi-user-group").renderingMode(.template) }
-                }
-            } label: {
-                Label {
-                    Text("新增")
-                } icon: {
-                    HeroIcon("plus", size: 15)
-                }
-            }
-            .menuStyle(.button)
-            .menuOrder(.fixed)
-            .buttonStyle(.brand(.primary, size: .md))
         }
     }
 
@@ -327,7 +329,7 @@ struct ReservationsView: View {
                 EmptyState(
                     icon: "calendar-days",
                     title: all.isEmpty ? "今天還沒有訂位" : "訂位都處理完了",
-                    message: all.isEmpty ? "網站、電話的訂位會自動出現在這裡；也可以按右上角「＋ 新增」。" : "已入座、取消、未到的按「顯示已結束」看。"
+                    message: all.isEmpty ? "網站、電話的訂位會自動出現在這裡；也可以按右邊的「新增訂位」。" : "已入座、取消、未到的按「顯示已結束」看。"
                 )
             } else {
                 ScrollView {
@@ -387,7 +389,7 @@ struct ReservationsView: View {
                 Spacer(minLength: 0)
             }
             if waiting.isEmpty && done.isEmpty {
-                EmptyState(icon: "user-group", title: "沒有人在候位", message: "客人到了沒位子，按右上角「＋ 新增」→「候位」抽號碼。")
+                EmptyState(icon: "user-group", title: "沒有人在候位", message: "客人到了沒位子，按右邊的「新增候位」抽號碼。")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -402,8 +404,7 @@ struct ReservationsView: View {
                                 reservation: r,
                                 now: now,
                                 selected: r.id == selectedId,
-                                onSelect: { toggle(r) },
-                                onSeat: { openSeating(r) }
+                                onSelect: { toggle(r) }
                             )
                         }
                         if !done.isEmpty {
@@ -439,11 +440,6 @@ struct ReservationsView: View {
         if let f = form {
             ResvFormPanel(request: f, onClose: { closePanels() })
                 .id(f.id)
-                .modifier(ResvPanelChrome())
-                .transition(.move(edge: .trailing))
-        } else if let r = seating {
-            ResvSeatPanel(reservation: r, onClose: { closePanels() })
-                .id(r.id)
                 .modifier(ResvPanelChrome())
                 .transition(.move(edge: .trailing))
         }
@@ -511,7 +507,7 @@ private func resvGroupedPhone(_ d: String) -> String {
 
 // MARK: - 一筆訂位
 
-/// 卡片的外框：選起來是墨色粗框
+/// 卡片的外框：選起來是品牌橘粗框（右欄就是在對應這一張）
 private struct ResvCardChrome: ViewModifier {
     let selected: Bool
     let highlight: Bool
@@ -521,7 +517,7 @@ private struct ResvCardChrome: ViewModifier {
             .background(highlight ? Theme.accentSoft : Theme.surface, in: .rect(cornerRadius: Metric.radius))
             .overlay {
                 RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                    .strokeBorder(selected ? Theme.ink : (highlight ? Theme.accent.opacity(0.45) : Theme.line), lineWidth: selected ? 2 : 1)
+                    .strokeBorder(selected ? Theme.accent : (highlight ? Theme.accent.opacity(0.45) : Theme.line), lineWidth: selected ? 2 : 1)
             }
     }
 }
@@ -562,7 +558,7 @@ private struct ResvBookingRow: View {
         .buttonStyle(.press)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint("點一下選起來，動作在下面")
+        .accessibilityHint("點一下選起來，動作在右邊")
     }
 
     /// 前後 15～30 分鐘內要到的
@@ -625,13 +621,12 @@ private struct ResvBookingRow: View {
 
 // MARK: - 一組候位
 
-/// 一組候位：整張可以點（選起來）；只留一個「入座」快捷（最常用的那一步）
+/// 一組候位：整張可以點（選起來），動作在右欄
 private struct ResvWaitCard: View {
     let reservation: Reservation
     let now: Date
     let selected: Bool
     let onSelect: () -> Void
-    let onSeat: () -> Void
 
     var body: some View {
         let r = reservation
@@ -681,19 +676,7 @@ private struct ResvWaitCard: View {
             .buttonStyle(.press)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityHint("點一下選起來，其他動作在下面")
-            if r.status.isActive {
-                // 唯一的快捷：有位子了直接帶進去
-                Button(action: onSeat) {
-                    Label {
-                        Text("入座")
-                    } icon: {
-                        HeroIcon("users", size: 14)
-                    }
-                }
-                .buttonStyle(.brand(.ghost, size: .sm))
-                .fixedSize()
-            }
+            .accessibilityHint("點一下選起來，動作在右邊")
         }
         .padding(14)
         .modifier(ResvCardChrome(selected: selected, highlight: false))
@@ -708,7 +691,7 @@ private struct ResvWaitCard: View {
     private var waited: Int { max(0, Int(now.timeIntervalSince(reservation.startsAt) / 60)) }
 }
 
-/// 叫過的候位（入座、取消、離開）：一行，點了選起來（按錯可以在下面改回來）
+/// 叫過的候位（入座、取消、離開）：一行，點了選起來（按錯可以在右欄改回來）
 private struct ResvDoneRow: View {
     let reservation: Reservation
     let selected: Bool
@@ -738,78 +721,16 @@ private struct ResvDoneRow: View {
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 8)
-            .background(selected ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radiusSm))
+            .background(selected ? Theme.accentSoft : Color.clear, in: .rect(cornerRadius: Metric.radiusSm))
+            .overlay {
+                if selected {
+                    RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous).strokeBorder(Theme.accent, lineWidth: 1.5)
+                }
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.press)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-// MARK: - 選起來那一筆的動作列（固定在下面）
-
-private struct ResvSelectionBar: View {
-    let reservation: Reservation
-    let tables: String
-    let primary: POSAction?
-    let secondary: [POSAction]
-    let more: [POSAction]
-    let onClose: () -> Void
-
-    var body: some View {
-        let r = reservation
-        HStack(alignment: .center, spacing: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(r.name)
-                    .font(.brand(20, .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
-                FlowLayout(spacing: 10, rowSpacing: 4) {
-                    Text(summary)
-                        .font(.brand(14, .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.ink2)
-                    StatusBadge(r.status.label, tone: resvTone(r.status))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if primary != nil || !secondary.isEmpty || !more.isEmpty {
-                ActionBar(primary: primary, secondary: secondary, more: more, size: .lg, fillPrimary: false)
-                    .fixedSize()
-            } else {
-                Text(r.status == .seated ? "已入座" : "沒有可以做的動作")
-                    .textRole(.small)
-                    .foregroundStyle(Theme.muted)
-            }
-            Button(action: onClose) {
-                HeroIcon("x-mark", size: 15)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 40))
-            .accessibilityLabel("取消選取")
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
-        .background(Theme.dock, in: .rect(cornerRadius: Metric.radiusLg))
-        .overlay {
-            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
-                .strokeBorder(Theme.line, lineWidth: 1)
-        }
-        .shadow(color: .black.opacity(0.12), radius: 18, y: -4)
-    }
-
-    /// 訂位：18:30・4 位・A4；候位：12 號・3 位
-    private var summary: String {
-        let r = reservation
-        var parts: [String] = []
-        if r.kind == .waitlist {
-            if let n = r.queueNumber { parts.append("\(n) 號") }
-        } else {
-            parts.append(r.startsAt.clockText)
-        }
-        parts.append("\(r.partySize) 位")
-        if !tables.isEmpty { parts.append(tables) }
-        return parts.joined(separator: "・")
     }
 }
 
@@ -858,12 +779,11 @@ private struct ResvPanelChrome: ViewModifier {
     }
 }
 
-/// 面板上方：小標＋大標＋關閉
+/// 表單上方：小標＋大標（關掉、儲存在右欄）
 private struct ResvPanelHeader: View {
     let eyebrow: String
     let title: String
     var detail: String? = nil
-    let onClose: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -880,11 +800,6 @@ private struct ResvPanelHeader: View {
                 }
             }
             Spacer(minLength: 8)
-            Button(action: onClose) {
-                HeroIcon("x-mark", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 38))
-            .accessibilityLabel("關閉")
         }
         .padding(.horizontal, 22)
         .padding(.top, 22)
@@ -918,6 +833,8 @@ private struct ResvFormPanel: View {
     @State private var asking: ResvField? = nil
     @State private var saving = false
     @State private var problem: String? = nil
+    /// 選桌子的面板（蓋住右欄）
+    @State private var pickingTables = false
     @FocusState private var nameFocused: Bool
 
     init(request: ResvFormRequest, onClose: @escaping () -> Void) {
@@ -957,7 +874,7 @@ private struct ResvFormPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ResvPanelHeader(eyebrow: eyebrow, title: headline, onClose: onClose)
+            ResvPanelHeader(eyebrow: eyebrow, title: headline)
             Rule()
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
@@ -986,8 +903,29 @@ private struct ResvFormPanel: View {
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
-            Rule()
-            bottomBar
+            if let problem {
+                Rule()
+                Text(problem)
+                    .textRole(.small)
+                    .foregroundStyle(Theme.dangerFG)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 14)
+            }
+        }
+        // 儲存是右欄的大鍵；不存了、× 都是關掉
+        .dockSelection(DockSelection(
+            id: "resv-form-\(request.id)",
+            kind: isNew ? (kind == .waitlist ? "新增候位" : "新增訂位") : (kind == .waitlist ? "編輯候位" : "編輯訂位"),
+            title: name.trimmingCharacters(in: .whitespaces).isEmpty ? "還沒填稱呼" : name,
+            detail: formSummary,
+            primary: POSAction(saving ? "儲存中…" : saveTitle, icon: "check", enabled: !saving) { save() },
+            actions: [POSAction("不存了", icon: "x-mark", destructive: true) { onClose() }],
+            clear: { onClose() }
+        ))
+        .dockPanel(isPresented: $pickingTables, title: "排桌", subtitle: "\(partySize) 位・可以選好幾張併在一起") {
+            ResvTablePicker(selected: $tables, partySize: partySize)
         }
         .task {
             // 新的一筆：直接從稱呼開始打（打完按 return 接著問人數、電話）
@@ -1096,26 +1034,36 @@ private struct ResvFormPanel: View {
         }
     }
 
+    /// 桌位：選的是蓋住右欄的面板（一張一列）；這裡只顯示選了哪些
     private var tableField: some View {
-        ResvFormRow(label: tables.isEmpty ? "桌位（可以先不排）" : "桌位・\(model.floor.tableNames(orderedTables))") {
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(model.floor.areas) { area in
-                    if !area.tables.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(area.name)
-                                .textRole(.xs)
-                                .foregroundStyle(Theme.muted)
-                            FlowLayout(spacing: 8, rowSpacing: 8) {
-                                ForEach(area.tables) { t in
-                                    OptionChip(title: t.name, detail: "\(t.seats)人", selected: tables.contains(t.id)) {
-                                        toggleTable(t.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
+        ResvFormRow(label: "桌位") {
+            Button {
+                model.keypad.cancel()
+                nameFocused = false
+                pickingTables = true
+            } label: {
+                HStack(spacing: 10) {
+                    Text(tables.isEmpty ? "可以先不排" : model.floor.tableNames(orderedTables))
+                        .font(.brand(tables.isEmpty ? 15 : 18, .medium))
+                        .foregroundStyle(tables.isEmpty ? Theme.muted : Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Text(pickingTables ? "在右邊選" : "選桌子")
+                        .font(.brand(13, .medium))
+                        .foregroundStyle(pickingTables ? Theme.accentText : Theme.ink2)
+                    HeroIcon("chevron-right", size: 13)
+                        .foregroundStyle(Theme.muted)
                 }
+                .padding(.horizontal, 14)
+                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                .background(pickingTables ? Theme.accentSoft : Theme.surface, in: .rect(cornerRadius: Metric.radius))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                        .strokeBorder(pickingTables ? Theme.accent : Theme.line, lineWidth: pickingTables ? 1.5 : 1)
+                }
+                .contentShape(.rect)
             }
+            .buttonStyle(PressScale(scale: 0.98))
         }
     }
 
@@ -1131,35 +1079,18 @@ private struct ResvFormPanel: View {
         }
     }
 
-    private func toggleTable(_ id: String) {
-        tables.formSymmetricDifference([id])
-    }
-
     private var orderedTables: [String] {
         model.floor.allTables.map(\.id).filter { tables.contains($0) }
     }
 
-    private var bottomBar: some View {
-        HStack(spacing: 12) {
-            if let problem {
-                Text(problem)
-                    .textRole(.small)
-                    .foregroundStyle(Theme.dangerFG)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Button("取消") { onClose() }
-                .buttonStyle(.brand(.ghost, size: .lg))
-            Button {
-                save()
-            } label: {
-                Text(saving ? "儲存中…" : saveTitle)
-            }
-            .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-            .disabled(saving)
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 16)
+    /// 右欄卡片上的一行：18:30・4 位・0912 345 678・A4
+    private var formSummary: String {
+        var parts: [String] = []
+        if kind == .reservation { parts.append("\(Calendar.taipei.isDateInToday(day) ? "今天" : day.dayTitle) \(clockString)") }
+        parts.append("\(partySize) 位")
+        if !phone.isEmpty { parts.append(resvGroupedPhone(phone)) }
+        if kind == .reservation && !tables.isEmpty { parts.append(model.floor.tableNames(orderedTables)) }
+        return parts.joined(separator: "・")
     }
 
     private var saveTitle: String {
@@ -1322,93 +1253,70 @@ private struct ResvKeypadField: View {
     }
 }
 
-// MARK: - 入座：選桌
+// MARK: - 入座：選桌（蓋住右欄的面板）
 
-private struct ResvSeatPanel: View {
+/// 一張空桌一列：坐得下的排前面（座位少的先，免得大桌被小團佔走）；點一張就入座。
+/// 人多要併桌：切到「併好幾張」，勾好再按最下面的「入座」。
+private struct ResvSeatChoices: View {
     @Environment(POSModel.self) private var model
     let reservation: Reservation
-    let onClose: () -> Void
+    let onDone: () -> Void
 
-    @State private var selected: Set<String> = []
+    @State private var combining = false
+    @State private var picked: Set<String> = []
 
     var body: some View {
         let r = reservation
-        VStack(spacing: 0) {
-            ResvPanelHeader(eyebrow: "入座", title: r.name, detail: detail, onClose: onClose)
-            Rule()
+        VStack(alignment: .leading, spacing: 8) {
             if model.floor.allTables.isEmpty {
-                EmptyState(icon: "table-cells", title: "沒有桌位圖", message: "直接開一張內用單，帶 \(r.partySize) 位、稱呼 \(r.name)。")
-            } else if freeTables.isEmpty {
+                DockChoice(title: "直接開單", detail: "沒有桌位圖：開一張內用單，\(r.partySize) 位、稱呼 \(r.name)") { seat([]) }
+            } else if free.isEmpty {
                 EmptyState(icon: "table-cells", title: "現在沒有空桌", message: "先清桌，或請客人稍等一下。")
             } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        ForEach(model.floor.areas) { area in
-                            let free = area.tables.filter { isFree($0) }
-                            if !free.isEmpty {
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Text(area.name)
-                                        .textRole(.xs)
-                                        .foregroundStyle(Theme.muted)
-                                    FlowLayout(spacing: 8, rowSpacing: 8) {
-                                        ForEach(free) { t in
-                                            OptionChip(title: t.name, detail: chipDetail(t), selected: selected.contains(t.id)) {
-                                                toggle(t.id)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Text("只列出空桌（和這筆訂位排好的桌子）。人多可以選好幾張併在一起。")
-                            .textRole(.xs)
-                            .foregroundStyle(Theme.muted)
-                    }
-                    .padding(22)
+                if !combining, booked.count > 1 {
+                    // 這筆訂位排了好幾張：一起帶
+                    DockChoice(title: "訂的桌：\(model.floor.tableNames(booked.map(\.id)))",
+                               detail: "\(seats(booked)) 個座位", trailing: "一起入座") { seat(booked.map(\.id)) }
                 }
-                .scrollIndicators(.hidden)
+                DockChoice(title: combining ? "改回一張桌" : "併好幾張桌",
+                           detail: combining ? "點一張就入座" : "人多：勾好幾張，再按最下面的「入座」",
+                           selected: combining) {
+                    combining.toggle()
+                    picked = []
+                }
+                Eyebrow(combining ? "勾要併的桌子" : "坐得下的", color: Theme.muted)
+                    .padding(.top, 10)
+                ForEach(fits) { t in choice(t) }
+                if !tight.isEmpty {
+                    Eyebrow("比較擠", color: Theme.muted)
+                        .padding(.top, 10)
+                    ForEach(tight) { t in choice(t) }
+                }
+                if combining {
+                    DockChoice(title: picked.isEmpty ? "入座" : "入座：\(model.floor.tableNames(orderedPicked))",
+                               detail: picked.isEmpty ? "先勾桌子" : "\(seats(free.filter { picked.contains($0.id) })) 個座位・\(r.partySize) 位",
+                               selected: !picked.isEmpty, enabled: !picked.isEmpty) { seat(orderedPicked) }
+                        .padding(.top, 10)
+                }
             }
-            Rule()
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(selectedNames)
-                        .font(.brand(16, .semibold))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.7)
-                    Text(seatsNote)
-                        .textRole(.xs)
-                        .monospacedDigit()
-                        .foregroundStyle(seatsShort ? Theme.warningFG : Theme.muted)
-                }
-                Spacer(minLength: 8)
-                Button {
-                    seat()
-                } label: {
-                    Text("入座、開單")
-                }
-                .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-                .disabled(!canSeat)
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 16)
-        }
-        .onAppear {
-            // 訂位排好的桌子如果空著，先幫忙選起來
-            selected = Set(reservation.tableIds.filter { id in
-                guard let t = model.floor.table(id) else { return false }
-                return isFree(t)
-            })
         }
     }
 
-    private var detail: String {
-        let r = reservation
-        if r.kind == .waitlist {
-            let number = r.queueNumber.map { String($0) } ?? "—"
-            return "\(r.partySize) 位・候位 \(number) 號"
+    private func choice(_ t: DiningTable) -> some View {
+        let mine = reservation.tableIds.contains(t.id)
+        let area = model.floor.areas.first { a in a.tables.contains { $0.id == t.id } }?.name ?? ""
+        return DockChoice(
+            title: t.name,
+            detail: [area, mine ? "這筆訂位排的" : nil].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "・"),
+            trailing: "\(t.seats) 人",
+            selected: combining ? picked.contains(t.id) : mine
+        ) {
+            if combining {
+                picked.formSymmetricDifference([t.id])
+            } else {
+                seat([t.id])
+            }
         }
-        return "\(r.partySize) 位・\(r.startsAt.clockText) 訂位"
     }
 
     /// 空桌；或這筆訂位自己排的桌（它被標成「已預約」）
@@ -1417,42 +1325,60 @@ private struct ResvSeatPanel: View {
         return s == .available || (s == .reserved && reservation.tableIds.contains(t.id))
     }
 
-    private var freeTables: [DiningTable] { model.floor.allTables.filter { isFree($0) } }
+    private var free: [DiningTable] { model.floor.allTables.filter { isFree($0) } }
 
-    private func chipDetail(_ t: DiningTable) -> String {
-        reservation.tableIds.contains(t.id) ? "\(t.seats)人・訂的" : "\(t.seats)人"
+    private var booked: [DiningTable] { free.filter { reservation.tableIds.contains($0.id) } }
+
+    /// 坐得下的：訂好的桌排最前，再來座位少的
+    private var fits: [DiningTable] {
+        free.filter { $0.seats >= reservation.partySize }.sorted { a, b in
+            let am = reservation.tableIds.contains(a.id)
+            let bm = reservation.tableIds.contains(b.id)
+            if am != bm { return am }
+            return a.seats < b.seats
+        }
     }
 
-    private func toggle(_ id: String) {
-        selected.formSymmetricDifference([id])
+    private var tight: [DiningTable] {
+        free.filter { $0.seats < reservation.partySize }.sorted { $0.seats > $1.seats }
     }
 
-    private var orderedSelection: [String] {
-        model.floor.allTables.map(\.id).filter { selected.contains($0) }
+    private var orderedPicked: [String] {
+        model.floor.allTables.map(\.id).filter { picked.contains($0) }
     }
 
-    private var seatsTotal: Int {
-        model.floor.allTables.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.seats }
-    }
+    private func seats(_ list: [DiningTable]) -> Int { list.reduce(0) { $0 + $1.seats } }
 
-    private var seatsShort: Bool { !selected.isEmpty && seatsTotal < reservation.partySize }
-
-    private var selectedNames: String {
-        if model.floor.allTables.isEmpty { return "不排桌" }
-        return selected.isEmpty ? "選一張桌子" : model.floor.tableNames(orderedSelection)
-    }
-
-    private var seatsNote: String {
-        if selected.isEmpty { return "\(reservation.partySize) 位" }
-        return seatsShort ? "\(seatsTotal) 個座位，坐 \(reservation.partySize) 位會擠" : "\(seatsTotal) 個座位・\(reservation.partySize) 位"
-    }
-
-    private var canSeat: Bool { model.floor.allTables.isEmpty || !selected.isEmpty }
-
-    private func seat() {
+    private func seat(_ ids: [String]) {
         let r = reservation
-        let ids = orderedSelection
-        onClose()
+        onDone()
         Task { await model.seat(r, at: ids) }
+    }
+}
+
+/// 表單的「排桌」：蓋住右欄的面板，一張一列、可以勾好幾張
+private struct ResvTablePicker: View {
+    @Environment(POSModel.self) private var model
+    @Binding var selected: Set<String>
+    let partySize: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DockChoice(title: "先不排", detail: "到了再選桌", selected: selected.isEmpty) { selected = [] }
+            ForEach(model.floor.areas) { area in
+                if !area.tables.isEmpty {
+                    Eyebrow(area.name.isEmpty ? "未命名" : area.name, color: Theme.muted)
+                        .padding(.top, 10)
+                    ForEach(area.tables) { t in
+                        DockChoice(title: t.name,
+                                   detail: t.seats < partySize ? "坐 \(partySize) 位會擠" : nil,
+                                   trailing: "\(t.seats) 人",
+                                   selected: selected.contains(t.id)) {
+                            selected.formSymmetricDifference([t.id])
+                        }
+                    }
+                }
+            }
+        }
     }
 }

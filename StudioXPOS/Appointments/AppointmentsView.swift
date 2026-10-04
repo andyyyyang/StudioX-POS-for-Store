@@ -7,7 +7,7 @@ import SwiftUI
 
 /// 預約表（美業的設計師、私人教練）：一位一欄、每人一個顏色，一格是後台設的分鐘數，現在的時間是一條紅線。
 ///
-///   ┌ Day book ─────────────────────────── ‹ 今天 10月4日 › [現場客] [新預約] ┐
+///   ┌ Day book ──────────────────────────────────────── ‹ 今天 10月4日 › ┐
 ///   │ 預約 8・已到 1・服務中 2                                 顯示取消、未到 │
 ///   │        │ (L) Leslie 總監 ▇▇▇▁ 62% │ (J) Jacob ▇▁▁ 30% │ (?) 不指定      │
 ///   │ 10:00  │ ▌10:00–11:30   已到店    │                   │                 │
@@ -16,8 +16,12 @@ import SwiftUI
 ///   │ 11:00 ●━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 現在                               │
 ///   └──────────────────────────────────────────────────────────────────────────┘
 ///
-/// 點空格＝標出那一格、再點「新預約」；長按空格＝直接新預約（右邊滑出面板：電話、時間用右側鍵盤打，所以不是 sheet）。
-/// 點預約＝旁邊跳出卡片（到店、開始服務、去結帳、改時間、未到、取消）；長按預約再拖＝改時間、換人（放開時對齊格子）。
+/// 左邊選、右邊做：
+/// - 點預約＝選起來（旁邊的卡片只給看：服務、電話、會員）；動作都在右欄：大鍵看狀態是報到、開單、結帳，
+///   其他（改時間、編輯、查會員、未到、取消…）是動作鍵。再點一次＝取消選取。
+/// - 點空格＝標出那一格，右欄大鍵「新增預約」；長按空格＝直接新預約。沒選東西時右欄是「新增預約」「現場客」。
+/// - 新預約的表單從右邊滑出來：電話、時間長度用右側鍵盤打；選服務、選設計師、選時間是蓋住右欄的面板（一步一步）。
+/// - 長按預約再拖＝改時間、換人（放開時對齊格子）。
 struct AppointmentsView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -29,7 +33,7 @@ struct AppointmentsView: View {
     @State private var form: ApptFormRequest?
     @State private var confirming: ApptStatusRequest?
     @State private var cardSize = CGSize(width: 300, height: 360)
-    /// 點了空格：先標出來（再點一次「新預約」才開面板，避免點掉卡片時誤開）
+    /// 點了空格：先標出來（右欄大鍵「新增預約」才開面板，避免點掉卡片時誤開）
     @State private var pending: ApptSlot?
     /// 正在拖的預約
     @State private var drag: ApptDrag?
@@ -39,6 +43,8 @@ struct AppointmentsView: View {
     @State private var snapTick = 0
     @State private var liftTick = 0
     @State private var lastLongPress = Date.distantPast
+    /// 正在開單的預約（大鍵顯示「開單中…」）
+    @State private var startingId: String?
 
     /// 一分鐘幾點高（一小時 108 點：15 分鐘一格 27 點，手指點得到）
     fileprivate static let ppm: CGFloat = 1.8
@@ -72,6 +78,7 @@ struct AppointmentsView: View {
             }
         }
         .overlay(alignment: .trailing) { formPanel }
+        .dockSelection(dockItem)
         .task(id: dayKey) { await refreshLoop() }
         .sensoryFeedback(.selection, trigger: snapTick)
         .sensoryFeedback(.impact(weight: .medium), trigger: liftTick)
@@ -135,9 +142,12 @@ struct AppointmentsView: View {
     }
 
     private func refreshLoop() async {
+        await model.loadReservations(for: dayKey)
+        // 截圖：先選下一筆預約（第一次抓完才有資料）
+        if LaunchArguments.preselect, selectedId == nil { selectedId = (dayAppointments.first { $0.status.isActive && $0.endsAt > Date() } ?? dayAppointments.first)?.id }
         while !Task.isCancelled {
-            await model.loadReservations(for: dayKey)
             try? await Task.sleep(for: .seconds(60))
+            await model.loadReservations(for: dayKey)
         }
     }
 
@@ -147,29 +157,8 @@ struct AppointmentsView: View {
         HStack(alignment: .bottom, spacing: 14) {
             PageTitle(title: "Day *book*", subtitle: "預約表・\(model.mode.staffTitle)")
             Spacer(minLength: 12)
+            // 頁首只放標題與切換：新增預約、現場客在右欄
             daySwitcher
-            // 頁首只有一個主要按鈕：新增預約、現場客合成「＋ 新增」
-            Menu {
-                Button {
-                    openNew(staffId: nil, start: defaultStart())
-                } label: {
-                    Label { Text("預約") } icon: { Image("hi-calendar-days").renderingMode(.template) }
-                }
-                Button {
-                    walkIn()
-                } label: {
-                    Label { Text("現場客（直接開單）") } icon: { Image("hi-user").renderingMode(.template) }
-                }
-            } label: {
-                Label {
-                    Text("新增")
-                } icon: {
-                    HeroIcon("plus", size: 15)
-                }
-            }
-            .menuStyle(.button)
-            .menuOrder(.fixed)
-            .buttonStyle(.brand(.primary, size: .md))
         }
     }
 
@@ -445,36 +434,32 @@ struct AppointmentsView: View {
             .accessibilityHidden(true)
     }
 
-    /// 點了空格：那一格框起來＋「新預約」
+    /// 點了空格：那一格框起來（右欄大鍵「新增預約」）
     @ViewBuilder
     private func pendingGhost(_ g: ApptGeometry) -> some View {
         if let p = pending, let ci = g.columns.firstIndex(where: { $0.id == p.columnId }) {
             let y = CGFloat(minuteOfDay(p.start) - g.range.start * 60) * Self.ppm
             let h = max(CGFloat(slot * 2) * Self.ppm, 44)
-            Button {
-                openNew(staffId: p.staffId, start: p.start)
-            } label: {
-                HStack(spacing: 6) {
-                    HeroIcon("plus", size: 14)
-                    Text("新預約 \(p.start.clockText)")
-                        .font(.brand(14, .semibold))
-                        .monospacedDigit()
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(Theme.accentText)
-                .padding(.horizontal, 12)
-                .frame(width: g.colW - 8, height: h, alignment: .leading)
-                .background(Theme.accentSoft, in: .rect(cornerRadius: Metric.radius))
-                .overlay {
-                    RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                        .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
-                }
-                .contentShape(.rect)
+            HStack(spacing: 6) {
+                HeroIcon("plus", size: 14)
+                Text("\(p.start.clockText) 空檔")
+                    .font(.brand(14, .semibold))
+                    .monospacedDigit()
+                Spacer(minLength: 0)
             }
-            .buttonStyle(PressScale(scale: 0.97))
+            .foregroundStyle(Theme.accentText)
+            .padding(.horizontal, 12)
+            .frame(width: g.colW - 8, height: h, alignment: .leading)
+            .background(Theme.accentSoft, in: .rect(cornerRadius: Metric.radius))
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+            }
+            // 再點一下（落在下面的格子上）＝取消；新增預約在右欄
+            .allowsHitTesting(false)
             .offset(x: Self.gutter + CGFloat(ci) * g.colW + 4, y: y + 1)
             .transition(.scale(scale: 0.96).combined(with: .opacity))
-            .accessibilityLabel("新預約 \(p.start.clockText)")
+            .accessibilityLabel("選了 \(p.start.clockText) 的空檔")
         }
     }
 
@@ -781,7 +766,7 @@ struct AppointmentsView: View {
         openNew(staffId: s.staffId, start: s.start)
     }
 
-    /// 「新預約」按鈕：今天是下一格，別天是 10:00
+    /// 右欄「新增預約」：今天是下一格，別天是 10:00
     private func defaultStart() -> Date {
         if isToday {
             let m = minuteOfDay(Date())
@@ -800,12 +785,128 @@ struct AppointmentsView: View {
         }
     }
 
-    private func openEdit(_ r: Reservation) {
+    /// 編輯；改時間＝編輯並直接打開「選時間」那一步
+    private func openEdit(_ r: Reservation, step: ApptStep? = nil) {
         model.keypad.cancel()
         withAnimation(anim) {
             selectedId = nil
             pending = nil
-            form = ApptFormRequest(existing: r, staffId: r.staffId, start: r.startsAt, minutes: r.durationMinutes)
+            form = ApptFormRequest(existing: r, staffId: r.staffId, start: r.startsAt, minutes: r.durationMinutes, step: step)
+        }
+    }
+
+    // MARK: - 右欄
+
+    private var dockItem: DockSelection? {
+        if form != nil { return nil }
+        if let id = selectedId, let r = model.appointments(onDay: dayKey).first(where: { $0.id == id }) {
+            return apptDock(r)
+        }
+        if let p = pending { return slotDock(p) }
+        return DockSelection.page("appointments",
+                     primary: POSAction("新增預約", icon: "plus") { openNew(staffId: nil, start: defaultStart()) },
+                     accent: false,
+                     actions: [POSAction("現場客（直接開單）", icon: "user") { walkIn() }])
+    }
+
+    /// 點了空格：大鍵「新增預約」
+    private func slotDock(_ p: ApptSlot) -> DockSelection {
+        let end = p.start.addingTimeInterval(Double(max(slot * 4, 60)) * 60)
+        return DockSelection(
+            id: "appt-slot-\(p.columnId)-\(p.start.timeIntervalSince1970)",
+            kind: "空檔",
+            title: "\(model.staffName(p.staffId))・\(p.start.clockText)",
+            detail: "\(p.start.dayTitle) \(p.start.clockText)–\(end.clockText)",
+            primary: POSAction("新增預約", icon: "plus") { openNew(staffId: p.staffId, start: p.start) },
+            actions: [POSAction("現場客（直接開單）", icon: "user") { walkIn() }],
+            clear: { withAnimation(spring) { pending = nil } }
+        )
+    }
+
+    /// 選起來的預約：大鍵看狀態（還沒到＝報到、到了＝開單、服務中＝結帳）；其他是動作鍵
+    private func apptDock(_ r: Reservation) -> DockSelection {
+        let ticket = model.openTicket(for: r)
+        let closed: Ticket? = {
+            guard ticket == nil, let id = r.ticketId, let t = model.state.tickets[id], t.status == .closed else { return nil }
+            return t
+        }()
+        let edit = POSAction("編輯", icon: "pencil-square") { openEdit(r) }
+        var detail = "\(ApptText.timeRange(r))・\(model.staffName(r.staffId))・\(ApptText.services(r))"
+        var primary: POSAction?
+        var actions: [POSAction] = []
+        if let t = ticket {
+            let view = POSAction("看單 \(t.number)", icon: "squares-2x2") { model.selectedTicketId = t.id }
+            if model.role.takesPayment {
+                primary = POSAction("結帳", icon: "credit-card") { model.beginCheckout(t) }
+                actions.append(view)
+            } else {
+                // 報到接待不收錢：單子已經在結帳櫃台看得到
+                primary = view
+                detail += "・\(t.number) \(t.totals.amountDue.formatted) 已同步到結帳櫃台"
+            }
+            actions.append(edit)
+        } else if let t = closed {
+            detail += "・已結帳 \(t.number)"
+            actions.append(edit)
+        } else if r.status == .seated && r.ticketId != nil {
+            // 開過單、這台已經沒有那張單（iPad 只留最近兩天，或在別台結的）：不要再開一張
+            detail += "・服務完成，單子在結帳紀錄裡"
+            actions.append(edit)
+        } else if r.status.isActive || r.status == .seated {
+            let starting = startingId == r.id
+            let start = POSAction(starting ? "開單中…" : "開單・開始服務", icon: "scissors", enabled: !starting) { startService(r) }
+            if r.status == .booked || r.status == .notified {
+                primary = POSAction("報到", icon: "check") { Task { await model.markAppointment(r, status: .arrived) } }
+                actions.append(start)
+            } else {
+                primary = start
+            }
+            if r.status.isActive {
+                actions.append(POSAction("改時間", icon: "clock") { openEdit(r, step: .time) })
+            }
+            actions.append(edit)
+            if !r.phone.isEmpty && model.member(for: model.memberRef(for: r)) == nil {
+                actions.append(POSAction("查會員資料", icon: "magnifying-glass") { lookUpMember(r) })
+            }
+            if r.status.isActive {
+                actions.append(POSAction("未到", icon: "no-symbol", destructive: true) { confirming = ApptStatusRequest(reservation: r, status: .noShow) })
+                actions.append(POSAction("取消預約", icon: "x-circle", destructive: true) { confirming = ApptStatusRequest(reservation: r, status: .cancelled) })
+            }
+        } else if r.status == .cancelled || r.status == .noShow {
+            // 按錯了：改回來
+            actions.append(POSAction("改回已預約", icon: "arrow-uturn-left") { Task { await model.markAppointment(r, status: .booked) } })
+        }
+        let tone: Tone
+        switch r.status {
+        case .booked, .notified: tone = .info
+        case .arrived: tone = .gold
+        case .seated: tone = .active
+        case .cancelled: tone = .neutral
+        case .noShow: tone = .danger
+        }
+        return DockSelection(
+            id: "appt-\(r.id)",
+            kind: "預約",
+            title: r.name.isEmpty ? "未留名字" : r.name,
+            detail: detail,
+            badge: DockBadge(r.status.label(for: .appointment), tone: tone),
+            primary: primary,
+            actions: actions,
+            clear: { withAnimation(spring) { selectedId = nil } }
+        )
+    }
+
+    private func startService(_ r: Reservation) {
+        startingId = r.id
+        Task {
+            await model.startService(r)
+            startingId = nil
+        }
+    }
+
+    private func lookUpMember(_ r: Reservation) {
+        Task {
+            _ = await model.findMember(code: r.phone)
         }
     }
 
@@ -830,14 +931,7 @@ struct AppointmentsView: View {
         }
         let top = min(max(p.rect.minY, 6), max(height - h - 6, 6))
         let stylist = model.staffMember(p.reservation.staffId)
-        return ApptCard(
-            reservation: p.reservation,
-            stylist: stylist,
-            slot: slot,
-            onClose: { withAnimation(spring) { selectedId = nil } },
-            onEdit: { openEdit(p.reservation) },
-            onConfirm: { status in confirming = ApptStatusRequest(reservation: p.reservation, status: status) }
-        )
+        return ApptCard(reservation: p.reservation, stylist: stylist)
         .frame(width: Self.cardWidth)
         .onGeometryChange(for: CGSize.self, of: { proxy in proxy.size }, action: { newSize in cardSize = newSize })
         .position(x: x, y: top + h / 2)
@@ -949,6 +1043,15 @@ private struct ApptFormRequest: Identifiable {
     var staffId: String?
     var start: Date
     var minutes: Int
+    /// 打開時直接到哪一步（改時間＝選時間）
+    var step: ApptStep? = nil
+}
+
+/// 新預約的選擇（不用打數字）：一步一步蓋住右欄
+private enum ApptStep: String, Identifiable {
+    case services, staff, time
+
+    var id: String { rawValue }
 }
 
 private struct ApptStatusRequest: Identifiable {
@@ -1471,30 +1574,16 @@ private struct ApptCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let reservation: Reservation
     let stylist: StaffMember?
-    let slot: Int
-    let onClose: () -> Void
-    let onEdit: () -> Void
-    let onConfirm: (ReservationStatus) -> Void
 
     @State private var showPhone = false
-    @State private var rescheduling = false
-    @State private var draftStart = Date()
-    @State private var draftMinutes = 60
-    @State private var draftStaff: String?
-    @State private var conflictAcknowledged = false
-    @State private var busy = false
-    @State private var lookingUp = false
 
+    /// 只給看：動作（報到、開單、結帳、改時間、未到、取消…）都在右欄
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            if rescheduling {
-                rescheduleSection
-            } else {
-                details
-                memberSummary
-                actions
-            }
+            details
+            memberSummary
+            status
         }
         .padding(16)
         .background(Theme.dock)
@@ -1509,7 +1598,7 @@ private struct ApptCard: View {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                 .strokeBorder(Theme.line, lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.28), radius: 28, y: 12)
+        .shadow(color: .black.opacity(0.16), radius: 24, y: 10)
     }
 
     private var anim: Animation? { reduceMotion ? nil : Motion.fast }
@@ -1543,11 +1632,6 @@ private struct ApptCard: View {
                     .foregroundStyle(Theme.muted)
             }
             Spacer(minLength: 4)
-            Button(action: onClose) {
-                HeroIcon("x-mark", size: 14)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 30))
-            .accessibilityLabel("關閉")
         }
     }
 
@@ -1661,17 +1745,10 @@ private struct ApptCard: View {
                 }
             }
         } else if !reservation.phone.isEmpty {
-            Button {
-                lookUp()
-            } label: {
-                Label {
-                    Text(lookingUp ? "查詢中…" : "查會員資料（儲值金、課程卡、上次做了什麼）")
-                } icon: {
-                    HeroIcon("magnifying-glass", size: 14)
-                }
-            }
-            .buttonStyle(.brand(.quiet, size: .sm))
-            .disabled(lookingUp)
+            Text("右邊「查會員資料」看儲值金、課程卡、上次做了什麼")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1680,207 +1757,21 @@ private struct ApptCard: View {
         return "上次 \(v.at.shortText)・\(v.items.joined(separator: "、"))\(who)"
     }
 
-    private func lookUp() {
-        lookingUp = true
-        Task {
-            _ = await model.findMember(code: reservation.phone)
-            lookingUp = false
-        }
-    }
+    // MARK: 狀態（只給看）
 
-    // MARK: 動作（一個主要、最多兩個次要，其他收進「⋯」；取消、未到在「⋯」裡、要確認）
-
-    private var actions: some View {
-        let r = reservation
-        return VStack(alignment: .leading, spacing: 8) {
-            if let t = ticket {
-                // 服務中：收錢的崗位主要是「去結帳」；報到接待只看單（結帳在櫃台）
-                if model.role.takesPayment {
-                    Button {
-                        model.beginCheckout(t)
-                    } label: {
-                        Text("去結帳")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.brand(.accent, size: .lg, fullWidth: true, arrow: true))
-                    ApptActionRow(secondary: [viewTicketAction(t)], more: [editAction])
-                } else {
-                    Button {
-                        model.selectedTicketId = t.id
-                    } label: {
-                        Text("看單 \(t.number)")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
-                    ApptHandOffNote(text: "\(t.number)・\(t.totals.amountDue.formatted) 已同步到結帳櫃台")
-                    ApptActionRow(secondary: [], more: [editAction])
-                }
-            } else if let t = closedTicket {
-                HStack(spacing: 10) {
-                    ApptDoneNote(text: "已結帳 \(t.number)")
-                    MoreMenu(actions: [editAction])
-                }
-            } else if r.status == .seated && r.ticketId != nil {
-                // 開過單、這台已經沒有那張單（iPad 只留最近兩天，或在別台結的）：不要再開一張
-                HStack(spacing: 10) {
-                    ApptDoneNote(text: "服務完成・單子在結帳紀錄裡")
-                    MoreMenu(actions: [editAction])
-                }
-            } else if r.status.isActive || r.status == .seated {
-                Button {
-                    startService()
-                } label: {
-                    Text(busy ? "開單中…" : "開始服務")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
-                .disabled(busy)
-                ApptActionRow(secondary: activeSecondary(r), more: activeMore(r))
-            } else if r.status == .cancelled || r.status == .noShow {
-                // 按錯了：改回來（這時候只有這一個動作）
-                Button {
-                    Task { await model.markAppointment(r, status: .booked) }
-                } label: {
-                    Label {
-                        Text("改回已預約")
-                    } icon: {
-                        HeroIcon("arrow-uturn-left", size: 15)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
+    @ViewBuilder
+    private var status: some View {
+        if let t = ticket {
+            if model.role.takesPayment {
+                ApptDoneNote(text: "服務中・\(t.number) \(t.totals.amountDue.formatted)", done: false)
+            } else {
+                // 報到接待不收錢：單子已經在結帳櫃台看得到
+                ApptHandOffNote(text: "\(t.number)・\(t.totals.amountDue.formatted) 已同步到結帳櫃台")
             }
-        }
-    }
-
-    private var editAction: POSAction {
-        POSAction("編輯", icon: "pencil-square") { onEdit() }
-    }
-
-    private func viewTicketAction(_ t: Ticket) -> POSAction {
-        POSAction("看單 \(t.number)", icon: "squares-2x2") { model.selectedTicketId = t.id }
-    }
-
-    /// 次要：還沒到 →「到店」；可以改的 →「改時間」
-    private func activeSecondary(_ r: Reservation) -> [POSAction] {
-        var list: [POSAction] = []
-        if r.status == .booked || r.status == .notified {
-            list.append(POSAction("到店", icon: "check") { Task { await model.markAppointment(r, status: .arrived) } })
-        }
-        if r.status.isActive {
-            list.append(POSAction("改時間", icon: "clock") { beginReschedule() })
-        }
-        return list
-    }
-
-    private func activeMore(_ r: Reservation) -> [POSAction] {
-        var list = [editAction]
-        if r.status.isActive {
-            list.append(POSAction("未到", icon: "no-symbol", destructive: true) { onConfirm(.noShow) })
-            list.append(POSAction("取消預約", icon: "x-circle", destructive: true) { onConfirm(.cancelled) })
-        }
-        return list
-    }
-
-    private func startService() {
-        busy = true
-        Task {
-            await model.startService(reservation)
-            busy = false
-        }
-    }
-
-    // MARK: 改時間
-
-    private func beginReschedule() {
-        draftStart = reservation.startsAt
-        draftMinutes = reservation.durationMinutes
-        draftStaff = reservation.staffId
-        conflictAcknowledged = false
-        withAnimation(anim) { rescheduling = true }
-    }
-
-    private var conflicts: [Reservation] {
-        model.appointmentConflicts(staffId: draftStaff, start: draftStart, minutes: draftMinutes, ignoring: reservation.id)
-    }
-
-    private var rescheduleSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ApptStepper(label: "開始", value: draftStart.clockText,
-                        minus: { shiftStart(-slot) }, plus: { shiftStart(slot) })
-            ApptStepper(label: "時間", value: ApptText.duration(draftMinutes),
-                        minus: { resize(-slot) }, plus: { resize(slot) })
-            VStack(alignment: .leading, spacing: 8) {
-                Text(model.mode.staffTitle)
-                    .textRole(.label)
-                    .foregroundStyle(Theme.muted)
-                ScrollView(.horizontal) {
-                    HStack(spacing: 10) {
-                        ForEach(model.bookableStaff) { s in
-                            ApptStaffPick(staff: s, selected: draftStaff == s.id, busy: false) {
-                                draftStaff = s.id
-                                conflictAcknowledged = false
-                            }
-                        }
-                    }
-                }
-                .scrollIndicators(.hidden)
-            }
-            if let c = conflicts.first {
-                Text("\(model.staffName(draftStaff)) \(ApptText.timeRange(c)) 已經有 \(c.name)（\(ApptText.services(c))）")
-                    .textRole(.small)
-                    .foregroundStyle(Theme.warningFG)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 8) {
-                Button("返回") {
-                    withAnimation(anim) { rescheduling = false }
-                }
-                .buttonStyle(.brand(.ghost, size: .md))
-                Button {
-                    saveReschedule()
-                } label: {
-                    Text(saveLabel)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.primary, size: .md, fullWidth: true))
-                .disabled(busy)
-            }
-        }
-    }
-
-    private var saveLabel: String {
-        if busy { return "儲存中…" }
-        return !conflicts.isEmpty && conflictAcknowledged ? "撞到了，還是要改" : "改好了"
-    }
-
-    private func shiftStart(_ minutes: Int) {
-        draftStart = draftStart.addingTimeInterval(Double(minutes) * 60)
-        conflictAcknowledged = false
-    }
-
-    private func resize(_ minutes: Int) {
-        draftMinutes = min(max(draftMinutes + minutes, slot), 600)
-        conflictAcknowledged = false
-    }
-
-    private func saveReschedule() {
-        // 撞到別的預約：先提醒一次（不擋），再按一次才存
-        if !conflicts.isEmpty && !conflictAcknowledged {
-            conflictAcknowledged = true
-            return
-        }
-        busy = true
-        let r = reservation
-        let start = draftStart
-        let minutes = draftMinutes
-        let staff = draftStaff
-        Task {
-            let saved = await model.reschedule(r, to: start, minutes: minutes, staffId: staff)
-            busy = false
-            guard saved != nil else { return }
-            model.show("\(r.name) 改到 \(start.clockText)・\(model.staffName(staff))")
-            withAnimation(anim) { rescheduling = false }
+        } else if let t = closedTicket {
+            ApptDoneNote(text: "已結帳 \(t.number)")
+        } else if reservation.status == .seated && reservation.ticketId != nil {
+            ApptDoneNote(text: "服務完成・單子在結帳紀錄裡")
         }
     }
 }
@@ -1960,137 +1851,25 @@ private struct ApptHandOffNote: View {
 /// 這筆預約做完、結完帳了
 private struct ApptDoneNote: View {
     let text: String
+    /// false＝還在服務中（時鐘、墨色）
+    var done = true
 
     var body: some View {
         HStack(spacing: 8) {
-            HeroIcon("check-circle", size: 18)
-                .foregroundStyle(Theme.successFG)
+            HeroIcon(done ? "check-circle" : "clock", size: 18)
+                .foregroundStyle(done ? Theme.successFG : Theme.ink2)
             Text(text)
                 .font(.brand(15, .medium))
-                .foregroundStyle(Theme.successFG)
+                .monospacedDigit()
+                .foregroundStyle(done ? Theme.successFG : Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
     }
 }
 
-/// 卡片下面的次要動作：「⋯」＋最多兩個細框按鈕（撐滿寬度，字不截斷）
-private struct ApptActionRow: View {
-    let secondary: [POSAction]
-    let more: [POSAction]
 
-    var body: some View {
-        HStack(spacing: 8) {
-            if !overflow.isEmpty {
-                MoreMenu(actions: overflow)
-            }
-            ForEach(Array(secondary.prefix(2))) { a in
-                Button(action: a.perform) {
-                    HStack(spacing: 6) {
-                        if let icon = a.icon { HeroIcon(icon, size: 15) }
-                        Text(a.title)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
-                .disabled(!a.isEnabled)
-            }
-            if secondary.isEmpty {
-                Spacer(minLength: 0)
-            }
-        }
-    }
 
-    private var overflow: [POSAction] { Array(secondary.dropFirst(2)) + more }
-}
-
-/// −／＋ 一格（開始時間、時間長度）
-private struct ApptStepper: View {
-    let label: String
-    let value: String
-    let minus: () -> Void
-    let plus: () -> Void
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Text(label)
-                .textRole(.label)
-                .foregroundStyle(Theme.muted)
-                .frame(width: 52, alignment: .leading)
-            HStack(spacing: 0) {
-                Button(action: minus) {
-                    HeroIcon("minus", size: 14)
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .accessibilityLabel("\(label)減少")
-                Text(value)
-                    .font(.brand(18, .medium))
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
-                    .frame(maxWidth: .infinity)
-                Button(action: plus) {
-                    HeroIcon("plus", size: 14)
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .accessibilityLabel("\(label)增加")
-            }
-            .buttonStyle(PressScale(scale: 0.94))
-            .foregroundStyle(Theme.ink)
-            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-            .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-        }
-    }
-}
-
-/// 選設計師：大頭貼（這個人的顏色）＋名字；這個時段有約的右上角一個點
-private struct ApptStaffPick: View {
-    let staff: StaffMember?
-    let selected: Bool
-    let busy: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                ZStack(alignment: .topTrailing) {
-                    if let s = staff {
-                        StaffAvatar(name: s.name, swatch: s.swatch, size: 52, active: selected)
-                    } else {
-                        Circle()
-                            .strokeBorder(Theme.line, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
-                            .frame(width: 52, height: 52)
-                            .overlay { HeroIcon("user", size: 20).foregroundStyle(Theme.muted) }
-                            .overlay {
-                                if selected { Circle().strokeBorder(Theme.accent, lineWidth: 2).padding(-3) }
-                            }
-                    }
-                    if busy {
-                        Circle()
-                            .fill(Theme.warningFG)
-                            .frame(width: 10, height: 10)
-                            .overlay { Circle().strokeBorder(Theme.dock, lineWidth: 2) }
-                    }
-                }
-                Text(staff?.name ?? "不指定")
-                    .font(.brand(12.5, selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Theme.ink : Theme.ink2)
-                    .lineLimit(1)
-                Text(busy ? "這時段有約" : (staff?.title ?? " "))
-                    .font(.brand(10.5, .medium))
-                    .foregroundStyle(busy ? Theme.warningFG : Theme.muted)
-                    .lineLimit(1)
-            }
-            .frame(width: 76)
-            .contentShape(.rect)
-        }
-        .buttonStyle(PressScale(scale: 0.95))
-        .accessibilityLabel((staff?.name ?? "不指定") + (busy ? "，這個時段有約" : ""))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
 
 // MARK: - 新增／編輯預約
 
@@ -2128,13 +1907,14 @@ private struct ApptFormPanel: View {
     @State private var memberState: ApptMemberState
     @State private var joinAsMember = true
     @State private var picked: [ApptPicked]
-    @State private var categoryId: String?
     @State private var staffId: String?
     @State private var start: Date
     @State private var note: String
     @State private var askingPhone = false
     @State private var saving = false
     @State private var problem: String? = nil
+    /// 蓋住右欄的選擇（服務 → 設計師 → 時間）
+    @State private var step: ApptStep?
     @FocusState private var nameFocused: Bool
 
     init(request: ApptFormRequest, slot: Int, onDraft: @escaping (String?, Date, Int) -> Void, onClose: @escaping () -> Void) {
@@ -2154,10 +1934,10 @@ private struct ApptFormPanel: View {
             services.append(ApptPicked(id: "\(s.itemId)#\(i)", itemId: s.itemId, name: s.name, minutes: s.durationMinutes, price: s.price))
         }
         _picked = State(initialValue: services)
-        _categoryId = State(initialValue: nil)
         _staffId = State(initialValue: r?.staffId ?? request.staffId)
         _start = State(initialValue: r?.startsAt ?? request.start)
         _note = State(initialValue: r?.note ?? "")
+        _step = State(initialValue: request.step)
     }
 
     private var isNew: Bool { request.existing == nil }
@@ -2193,20 +1973,138 @@ private struct ApptFormPanel: View {
                         Banner(text: "\(model.staffName(staffId)) \(ApptText.timeRange(c)) 已經有 \(c.name)（\(ApptText.services(c))），還是可以存", tone: .warning)
                     }
                     noteSection
+                    if let problem {
+                        Text(problem)
+                            .textRole(.small)
+                            .foregroundStyle(Theme.dangerFG)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 .padding(22)
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.interactively)
-            Rule()
-            bottomBar
         }
         .onChange(of: totalMinutes) { _, m in onDraft(staffId, start, m) }
+        // 建立／儲存是右欄的大鍵；選服務、選人、選時間也可以從右欄打開
+        .dockSelection(DockSelection(
+            id: "appt-form-\(request.id)",
+            kind: isNew ? "新增預約" : "編輯預約",
+            title: summaryTitle,
+            detail: summaryDetail + (conflicts.isEmpty ? "" : "・時間撞到了，還是可以存"),
+            primary: POSAction(saving ? "儲存中…" : (isNew ? "建立預約" : "儲存"), icon: "check", enabled: !saving) { save() },
+            actions: [
+                POSAction("選服務", icon: "scissors") { openStep(.services) },
+                POSAction("選\(model.mode.staffTitle)", icon: "user") { openStep(.staff) },
+                POSAction("選時間", icon: "clock") { openStep(.time) },
+                POSAction("不存了", icon: "x-mark", destructive: true) { onClose() },
+            ],
+            clear: { onClose() }
+        ))
+        .dockPanel(item: $step, title: { stepTitle($0) }, subtitle: { stepSubtitle($0) }) { st in
+            stepPanel(st)
+        }
         .task {
             onDraft(staffId, start, totalMinutes)
-            // 新的一筆：先問電話（右側鍵盤），查到會員就帶出名字
+            // 新的一筆：先問電話（右側鍵盤），查到會員就帶出名字；接著右欄一步一步選服務、人、時間
             guard isNew, phone.isEmpty else { return }
             await askPhone()
+            if picked.isEmpty && step == nil { openStep(.services) }
+        }
+    }
+
+    // MARK: 右欄的選擇：服務 → 設計師 → 時間（不用打數字，蓋住右欄）
+
+    private func openStep(_ s: ApptStep) {
+        nameFocused = false
+        model.keypad.cancel()
+        withAnimation(anim) { step = s }
+    }
+
+    private func stepTitle(_ s: ApptStep) -> String {
+        switch s {
+        case .services: "選服務"
+        case .staff: "選\(model.mode.staffTitle)"
+        case .time: "選時間"
+        }
+    }
+
+    private func stepSubtitle(_ s: ApptStep) -> String? {
+        switch s {
+        case .services: picked.isEmpty ? "可以選好幾項；時間長度在左邊用鍵盤改" : "共 \(ApptText.duration(totalMinutes))・\(totalPrice.formatted)"
+        case .staff: "\(start.clockText) 起 \(ApptText.duration(totalMinutes))"
+        case .time: "\(model.staffName(staffId))・\(start.dayTitle)・\(ApptText.duration(totalMinutes))"
+        }
+    }
+
+    @ViewBuilder
+    private func stepPanel(_ s: ApptStep) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            switch s {
+            case .services:
+                if serviceItems.isEmpty {
+                    Text("菜單上還沒有「服務」類的品項（到後台菜單把品項種類設成服務、填上時間）")
+                        .textRole(.small)
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(serviceCategories) { c in
+                    Eyebrow(c.name, color: Theme.muted)
+                        .padding(.top, 8)
+                    ForEach(serviceItems.filter { $0.categoryId == c.id }) { item in
+                        DockChoice(title: item.name,
+                                   detail: "\(item.durationMinutes ?? 60) 分",
+                                   trailing: item.openPrice ? "時價" : item.price.short,
+                                   selected: picked.contains { $0.itemId == item.id }) { toggle(item) }
+                    }
+                }
+                DockChoice(title: "下一步：選\(model.mode.staffTitle)", detail: picked.isEmpty ? "還沒選服務也可以先往下" : picked.map(\.name).joined(separator: "＋")) {
+                    withAnimation(anim) { step = .staff }
+                }
+                .padding(.top, 12)
+            case .staff:
+                ForEach(model.bookableStaff) { st in
+                    DockChoice(title: st.name,
+                               detail: isBusy(st.id) ? "這個時段有約" : "這個時段有空",
+                               selected: staffId == st.id) {
+                        pickStaff(st.id)
+                        withAnimation(anim) { step = .time }
+                    }
+                }
+                // 已經指定了人的預約，後台不能改回「不指定」（只送要改的欄位）
+                if isNew || request.existing?.staffId == nil {
+                    DockChoice(title: "不指定", detail: "到了再排", selected: staffId == nil) {
+                        pickStaff(nil)
+                        withAnimation(anim) { step = .time }
+                    }
+                }
+            case .time:
+                let openings = freeSlots(limit: 16)
+                if !openings.contains(start) {
+                    DockChoice(title: start.clockText, detail: conflicts.isEmpty ? "現在選的" : "現在選的・撞到別的預約", selected: true) {
+                        withAnimation(anim) { step = nil }
+                    }
+                }
+                if staffId == nil {
+                    Text("先選\(model.mode.staffTitle)才看得到空檔；也可以在左邊用 −／＋ 調時間")
+                        .textRole(.small)
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if openings.isEmpty {
+                    Text("\(model.staffName(staffId)) 這一天沒有放得下的空檔")
+                        .textRole(.small)
+                        .foregroundStyle(Theme.muted)
+                }
+                ForEach(openings, id: \.self) { t in
+                    DockChoice(title: t.clockText,
+                               detail: "到 \(t.addingTimeInterval(Double(totalMinutes) * 60).clockText)",
+                               selected: t == start) {
+                        withAnimation(spring) { start = t }
+                        onDraft(staffId, start, totalMinutes)
+                        withAnimation(anim) { step = nil }
+                    }
+                }
+            }
         }
     }
 
@@ -2219,11 +2117,6 @@ private struct ApptFormPanel: View {
                 Headline(isNew ? "New *booking*" : "Edit *booking*", role: .h3)
             }
             Spacer(minLength: 8)
-            Button(action: onClose) {
-                HeroIcon("x-mark", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 38))
-            .accessibilityLabel("關閉")
         }
         .padding(.horizontal, 22)
         .padding(.top, 22)
@@ -2308,13 +2201,10 @@ private struct ApptFormPanel: View {
         return model.catalog.categories.filter { ids.contains($0.id) }
     }
 
+    /// 選了哪些（每一項的分鐘數點一下用鍵盤改）；挑服務在右欄
     private var servicesSection: some View {
-        let items = serviceItems
-        let cats = serviceCategories
-        let current = categoryId ?? cats.first?.id
-        let shown = items.filter { current == nil || $0.categoryId == current }
-        return ApptField(label: picked.isEmpty ? "服務" : "服務・共 \(ApptText.duration(totalMinutes))・\(totalPrice.formatted)") {
-            VStack(alignment: .leading, spacing: 14) {
+        ApptField(label: picked.isEmpty ? "服務" : "服務・共 \(ApptText.duration(totalMinutes))・\(totalPrice.formatted)") {
+            VStack(alignment: .leading, spacing: 10) {
                 if !picked.isEmpty {
                     FlowLayout(spacing: 6, rowSpacing: 6) {
                         ForEach(picked) { p in
@@ -2322,58 +2212,11 @@ private struct ApptFormPanel: View {
                         }
                     }
                 }
-                if items.isEmpty {
-                    Text("菜單上還沒有「服務」類的品項（到後台菜單把品項種類設成服務、填上時間）")
-                        .textRole(.small)
-                        .foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    if cats.count > 1 {
-                        ScrollView(.horizontal) {
-                            HStack(spacing: 6) {
-                                ForEach(cats) { c in
-                                    categoryTab(c, selected: c.id == current)
-                                }
-                            }
-                        }
-                        .scrollIndicators(.hidden)
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), spacing: 10)], spacing: 10) {
-                        ForEach(shown) { item in
-                            ApptServiceTile(
-                                item: item,
-                                swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
-                                selected: picked.contains { $0.itemId == item.id }
-                            ) {
-                                toggle(item)
-                            }
-                        }
-                    }
+                ApptChoiceField(value: picked.isEmpty ? "選服務" : "加減服務", placeholder: picked.isEmpty, active: step == .services) {
+                    openStep(.services)
                 }
             }
         }
-    }
-
-    private func categoryTab(_ c: MenuCategory, selected: Bool) -> some View {
-        Button {
-            withAnimation(anim) { categoryId = c.id }
-        } label: {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Theme.swatch(c.swatch))
-                    .frame(width: 9, height: 9)
-                Text(c.name)
-                    .font(.brand(14, selected ? .semibold : .medium))
-            }
-            .foregroundStyle(selected ? Theme.page : Theme.ink)
-            .padding(.horizontal, 14)
-            .frame(height: 36)
-            .background(selected ? Theme.ink : Color.clear, in: .capsule)
-            .overlay { Capsule().strokeBorder(selected ? Color.clear : Theme.line, lineWidth: 1) }
-            .contentShape(.capsule)
-        }
-        .buttonStyle(.press)
-        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func pickedChip(_ p: ApptPicked) -> some View {
@@ -2393,19 +2236,8 @@ private struct ApptFormPanel: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("\(p.name) 時間 \(p.minutes) 分鐘，點一下用右邊鍵盤改")
-            Button {
-                remove(p)
-            } label: {
-                HeroIcon("x-mark", size: 11)
-                    .foregroundStyle(Theme.muted)
-                    .frame(width: 22, height: 22)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("拿掉 \(p.name)")
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 4)
+        .padding(.horizontal, 12)
         .frame(height: 36)
         .background(Theme.surface, in: .capsule)
         .overlay { Capsule().strokeBorder(Theme.line, lineWidth: 1) }
@@ -2424,10 +2256,6 @@ private struct ApptFormPanel: View {
         problem = nil
     }
 
-    private func remove(_ p: ApptPicked) {
-        withAnimation(spring) { picked.removeAll { $0.id == p.id } }
-    }
-
     private func askMinutes(_ p: ApptPicked) {
         nameFocused = false
         Task {
@@ -2440,23 +2268,11 @@ private struct ApptFormPanel: View {
 
     private var staffSection: some View {
         ApptField(label: model.mode.staffTitle) {
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 10) {
-                    ForEach(model.bookableStaff) { s in
-                        ApptStaffPick(staff: s, selected: staffId == s.id, busy: isBusy(s.id)) {
-                            pickStaff(s.id)
-                        }
-                    }
-                    // 已經指定了人的預約，後台不能改回「不指定」（只送要改的欄位）
-                    if isNew || request.existing?.staffId == nil {
-                        ApptStaffPick(staff: nil, selected: staffId == nil, busy: false) {
-                            pickStaff(nil)
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
+            ApptChoiceField(value: staffId == nil ? "不指定" : model.staffName(staffId),
+                            detail: staffId.map { isBusy($0) ? "這個時段有約" : "這個時段有空" },
+                            placeholder: staffId == nil, active: step == .staff) {
+                openStep(.staff)
             }
-            .scrollIndicators(.hidden)
         }
     }
 
@@ -2474,7 +2290,7 @@ private struct ApptFormPanel: View {
 
     private var timeSection: some View {
         let end = start.addingTimeInterval(Double(totalMinutes) * 60)
-        let openings = freeSlots()
+        let openings = freeSlots(limit: 6)
         return ApptField(label: "時間・\(start.dayTitle)") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 14) {
@@ -2521,27 +2337,16 @@ private struct ApptFormPanel: View {
                     }
                     Spacer(minLength: 0)
                 }
-                if !openings.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(model.staffName(staffId)) 接下來的空檔")
-                            .textRole(.xs)
-                            .foregroundStyle(Theme.muted)
-                        FlowLayout(spacing: 6, rowSpacing: 6) {
-                            ForEach(openings, id: \.self) { t in
-                                OptionChip(title: t.clockText, selected: t == start) {
-                                    withAnimation(spring) { start = t }
-                                    onDraft(staffId, start, totalMinutes)
-                                }
-                            }
-                        }
-                    }
+                ApptChoiceField(value: openings.isEmpty ? "看空檔" : "\(model.staffName(staffId)) 的空檔：\(openings.prefix(3).map(\.clockText).joined(separator: "、"))…",
+                                placeholder: true, active: step == .time) {
+                    openStep(.time)
                 }
             }
         }
     }
 
-    /// 這個人這一天還空著、放得下這次服務的時間（最多 6 個，從現在或開門算起）
-    private func freeSlots() -> [Date] {
+    /// 這個人這一天還空著、放得下這次服務的時間（最多 limit 個，從現在或開門算起）
+    private func freeSlots(limit: Int) -> [Date] {
         guard let id = staffId else { return [] }
         let dayStart = Calendar.taipei.startOfDay(for: start)
         let close = dayStart.addingTimeInterval(22 * 3600)
@@ -2555,7 +2360,7 @@ private struct ApptFormPanel: View {
         let step = Double(slot) * 60
         let jump = Double(max(slot, 30)) * 60
         var out: [Date] = []
-        while t.addingTimeInterval(Double(length) * 60) <= close && out.count < 6 {
+        while t.addingTimeInterval(Double(length) * 60) <= close && out.count < limit {
             if model.appointmentConflicts(staffId: id, start: t, minutes: length, ignoring: request.existing?.id).isEmpty {
                 out.append(t)
                 t = t.addingTimeInterval(jump)
@@ -2583,41 +2388,7 @@ private struct ApptFormPanel: View {
         }
     }
 
-    // MARK: 下面：一句話總結＋建立
-
-    private var bottomBar: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                // 名字、服務、時間不截斷：放不下就換行
-                if let problem {
-                    Text(problem)
-                        .textRole(.small)
-                        .foregroundStyle(Theme.dangerFG)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(summaryTitle)
-                        .font(.brand(15, .semibold))
-                        .foregroundStyle(Theme.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(summaryDetail)
-                        .textRole(.xs)
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: 8)
-            Button {
-                save()
-            } label: {
-                Text(saving ? "儲存中…" : (isNew ? "建立預約" : "儲存"))
-            }
-            .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-            .disabled(saving)
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 16)
-    }
+    // MARK: 右欄卡片上的一句話
 
     private var summaryTitle: String {
         let who = name.trimmingCharacters(in: .whitespaces)
@@ -2717,59 +2488,47 @@ private struct ApptFormPanel: View {
     }
 }
 
-/// 一項服務的格子（分類的粉彩色，和點餐畫面同一套）：名字、幾分鐘、價格；選了打勾
-private struct ApptServiceTile: View {
-    let item: MenuItem
-    let swatch: Swatch
-    let selected: Bool
+/// 要在右欄挑的欄位（服務、設計師、時間）：點了右欄換成那一步的選項，這一格框成橘色
+private struct ApptChoiceField: View {
+    let value: String
+    var detail: String? = nil
+    let placeholder: Bool
+    let active: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    Text(item.durationMinutes.map { "\($0) 分" } ?? "—")
-                        .font(.brand(12, .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.tileInkMuted)
-                    Spacer(minLength: 0)
-                    ZStack {
-                        Circle()
-                            .fill(selected ? Theme.tileInk : Color.clear)
-                            .overlay { Circle().strokeBorder(Theme.tileInk.opacity(0.35), lineWidth: selected ? 0 : 1.5) }
-                        if selected {
-                            HeroIcon("check", size: 12)
-                                .foregroundStyle(Theme.swatch(swatch))
-                        }
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(value)
+                        .font(.brand(placeholder ? 15 : 18, .medium))
+                        .foregroundStyle(placeholder ? Theme.ink2 : Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail {
+                        Text(detail)
+                            .textRole(.xs)
+                            .foregroundStyle(Theme.muted)
                     }
-                    .frame(width: 22, height: 22)
                 }
-                Spacer(minLength: 10)
-                Text(item.name)
-                    .font(.brand(16, .semibold))
-                    .foregroundStyle(Theme.tileInk)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Text(item.openPrice ? "依現場報價" : item.price.formatted)
-                    .font(.brand(12.5, .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.tileInkMuted)
-                    .padding(.top, 2)
+                Spacer(minLength: 8)
+                Text(active ? "在右邊選" : "選")
+                    .font(.brand(13, .medium))
+                    .foregroundStyle(active ? Theme.accentText : Theme.muted)
+                HeroIcon("chevron-right", size: 13)
+                    .foregroundStyle(active ? Theme.accent : Theme.faint)
             }
-            .padding(12)
-            .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
-            .background(Theme.swatch(swatch), in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
+            .background(active ? Theme.accentSoft : Theme.surface, in: .rect(cornerRadius: Metric.radius))
             .overlay {
-                RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
-                    .strokeBorder(Theme.ink, lineWidth: selected ? 2.5 : 0)
-                    .padding(-4)
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(active ? Theme.accent : Theme.line, lineWidth: active ? 1.5 : 1)
             }
             .contentShape(.rect)
         }
-        .buttonStyle(PressScale(scale: 0.96))
-        .animation(Motion.fast, value: selected)
-        .accessibilityLabel("\(item.name)，\(item.durationMinutes.map { "\($0) 分鐘" } ?? "")，\(item.price.formatted)")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .buttonStyle(PressScale(scale: 0.98))
+        .accessibilityHint("在右邊選")
     }
 }
 

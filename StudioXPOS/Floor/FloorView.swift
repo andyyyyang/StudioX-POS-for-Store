@@ -13,15 +13,16 @@ import SwiftUI
 ///   │ │   ▭ ▭        ▭ ▭•                         ┌ A2  用餐中 ─────────┐  │ │
 ///   │ │  ▯ A1 ▯     ▯ A2 ▯  ← 用餐中＝實心橘       │ 服務人員  人數      │  │ │
 ///   │ │   ▭ ▭        ▭ ▭                          │ 金額      開桌      │  │ │
-///   │ │                                           │ [   去點餐   →  ]   │  │ │
-///   │ │                                           │ 結帳 結帳單 換桌…   │  │ │
+///   │ │                                           │ ・2 份餐好了        │  │ │
+///   │ │                                           └─────────────────────┘  │ │
 ///   │ ├──────────────────────────────────────────────────────────────────┤ │
 ///   │ │  1F 3/11   2F 1/6   戶外 0/3                     下一組 18:30 …   │ │
 ///   └──────────────────────────────────────────────────────────────────────┘
 ///
-/// 點空桌＝帶位（右側鍵盤問人數、開單、跳到點餐）；點其他桌＝桌子旁邊跳出一張卡片（服務人員、人數、金額、開桌時間、動作）。
-/// 卡片不是系統的 popover：popover 會擋住右側鍵盤（「人數」要用鍵盤打），也跟不上單子欄滑進來時桌位圖的縮放。
-/// 店長按「編輯」可以直接在 iPad 上拖拉排桌，存回後台。
+/// 左邊選、右邊做：點一桌＝選起來（桌子旁邊的卡片只給看：服務人員、人數、金額、要注意的事），
+/// 這一桌的動作都在右欄（.dockSelection）：大鍵看桌況是入座（鍵盤問人數）、點餐／加點、結帳或清桌，
+/// 其他（換桌、併桌、印結帳單、改人數、訂位入座…）是上面的動作鍵。再點一次同一桌＝取消選取。
+/// 店長在右欄按「編輯桌位」可以直接在 iPad 上拖拉排桌，存回後台。
 struct FloorView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -73,7 +74,12 @@ struct FloorView: View {
         .padding(.top, 22)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear { restoreArea() }
+        .dockSelection(dockItem)
+        .onAppear {
+            restoreArea()
+            // 截圖：先選一桌用餐中的
+            if LaunchArguments.preselect, let t = currentArea?.tables.first(where: { !model.state.openTickets(at: $0.id).isEmpty }) { selectedTableId = t.id }
+        }
     }
 
     // MARK: - 資料
@@ -139,24 +145,9 @@ struct FloorView: View {
         HStack(alignment: .bottom, spacing: 24) {
             PageTitle(title: editing ? "Edit the *floor*" : "Floor *plan*", subtitle: editing ? "排桌位" : "桌位")
             Spacer(minLength: 12)
-            if editing {
-                editActions
-            } else {
-                if !areas.isEmpty {
-                    counts
-                }
-                if canEdit {
-                    Button {
-                        beginEditing()
-                    } label: {
-                        Label {
-                            Text("編輯")
-                        } icon: {
-                            HeroIcon("pencil-square", size: 16)
-                        }
-                    }
-                    .buttonStyle(.brand(.ghost, size: .md))
-                }
+            // 頁首只放標題與數字；編輯、儲存、新增桌子在右欄
+            if !editing && !areas.isEmpty {
+                counts
             }
         }
     }
@@ -171,31 +162,6 @@ struct FloorView: View {
             FloorCount(label: TableStatus.available.label, value: free, color: Theme.table(.available))
             FloorCount(label: TableStatus.ordering.label, value: dining, color: Theme.table(.ordering))
             FloorCount(label: TableStatus.needsCleaning.label, value: dirty, color: Theme.table(.needsCleaning))
-        }
-    }
-
-    private var editActions: some View {
-        HStack(spacing: 10) {
-            Button("取消") { cancelEditing() }
-                .buttonStyle(.brand(.ghost, size: .md))
-            Button {
-                addTable()
-            } label: {
-                Label {
-                    Text("新增桌子")
-                } icon: {
-                    HeroIcon("plus", size: 15)
-                }
-            }
-            .buttonStyle(.brand(.ghost, size: .md))
-            .disabled(currentArea == nil)
-            Button {
-                save()
-            } label: {
-                Text(saving ? "儲存中…" : "儲存")
-            }
-            .buttonStyle(.brand(.accent, size: .md, arrow: true))
-            .disabled(saving)
         }
     }
 
@@ -251,7 +217,7 @@ struct FloorView: View {
                 EmptyState(
                     icon: "squares-2x2",
                     title: "這個區域還沒有桌子",
-                    message: editing ? "按右上角「新增桌子」開始排" : (canEdit ? "按右上角「編輯」新增桌子" : "請店長到後台「門市 POS → 桌位」排桌子")
+                    message: editing ? "按右邊的「新增桌子」開始排" : (canEdit ? "按右邊的「編輯桌位」新增桌子" : "請店長到後台「門市 POS → 桌位」排桌子")
                 )
                 .allowsHitTesting(false)
             }
@@ -343,19 +309,6 @@ struct FloorView: View {
             ForEach(areas) { a in
                 areaTab(a)
             }
-            if editing {
-                Button {
-                    addArea()
-                } label: {
-                    Label {
-                        Text("區域")
-                    } icon: {
-                        HeroIcon("plus", size: 14)
-                    }
-                }
-                .buttonStyle(.brand(.quiet, size: .sm))
-                .padding(.leading, 6)
-            }
             Spacer(minLength: 12)
             if !editing {
                 stripHint
@@ -417,7 +370,7 @@ struct FloorView: View {
                     .lineLimit(1)
             }
         } else {
-            Text("點空桌帶位；點其他桌看單、結帳")
+            Text("點一桌選起來，動作在右邊")
                 .font(.brand(12.5, .medium))
                 .foregroundStyle(Theme.muted)
                 .lineLimit(1)
@@ -436,17 +389,13 @@ struct FloorView: View {
                     Text(pickTitle(p, name: name))
                         .font(.brand(15.5, .semibold))
                         .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(pickDetail(p))
                         .textRole(.xs)
                         .foregroundStyle(Theme.muted)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 8)
-                Button("取消") {
-                    withAnimation(anim) { pick = nil }
-                }
-                .buttonStyle(.brand(.ghost, size: .sm))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -484,23 +433,23 @@ struct FloorView: View {
             return
         }
         let t = i.table
-        if i.status == .available {
-            seat(t)
+        if selectedTableId == t.id {
+            // 再點一次＝取消選取
+            deselect()
             return
         }
+        if seatingTableId != nil {
+            // 正在問別桌的人數：換一桌就不問了
+            model.keypad.cancel()
+            seatingTableId = nil
+        }
         withAnimation(anim) {
-            if selectedTableId == t.id {
-                // 再點一次＝收起卡片
-                selectedTableId = nil
-                cardTicketId = nil
-            } else {
-                selectedTableId = t.id
-                // 單子欄正在看這桌的某一張：卡片也看那一張
-                let ids = i.tickets.map(\.id)
-                cardTicketId = model.selectedTicketId.flatMap { ids.contains($0) ? $0 : nil }
-                // 卡片取代右邊的單子欄：桌位圖保持全寬，卡片才放得下
-                model.selectedTicketId = nil
-            }
+            selectedTableId = t.id
+            // 單子欄正在看這桌的某一張：卡片也看那一張
+            let ids = i.tickets.map(\.id)
+            cardTicketId = model.selectedTicketId.flatMap { ids.contains($0) ? $0 : nil }
+            // 單子欄收起來：右欄換成這一桌的動作，桌位圖保持全寬、卡片才放得下
+            model.selectedTicketId = nil
         }
     }
 
@@ -564,6 +513,11 @@ struct FloorView: View {
     private var canOrderHere: Bool { model.visibleSections.contains(.order) }
 
     private func order(_ ticket: Ticket) {
+        // 單子欄打開後右欄換成那張單的動作：這裡的選取就收起來
+        withAnimation(anim) {
+            selectedTableId = nil
+            cardTicketId = nil
+        }
         model.selectedTicketId = ticket.id
         if canOrderHere { model.go(.order) }
     }
@@ -620,7 +574,145 @@ struct FloorView: View {
         }
     }
 
-    // MARK: - 桌子旁邊的卡片
+    // MARK: - 右欄：選起來的桌子與它的動作
+
+    private var dockItem: DockSelection? {
+        if editing { return editDock }
+        if let p = pick { return pickDock(p) }
+        guard let id = selectedTableId, let t = currentArea?.tables.first(where: { $0.id == id }) else { return pageDock }
+        return tableDock(info(t, soon: model.reservedSoon, now: Date()))
+    }
+
+    /// 沒選桌子：這一頁的動作
+    private var pageDock: DockSelection? {
+        var actions: [POSAction] = []
+        if model.visibleSections.contains(.reservations) {
+            actions.append(POSAction("訂位與候位", icon: "calendar-days") { model.go(.reservations) })
+        }
+        if canEdit {
+            actions.append(POSAction(areas.isEmpty ? "開始排桌位" : "編輯桌位", icon: "pencil-square") { beginEditing() })
+        }
+        return actions.isEmpty ? nil : DockSelection.page("floor", actions: actions)
+    }
+
+    private func tableDock(_ i: FloorTableInfo) -> DockSelection {
+        let t = i.table
+        let badge = DockBadge(i.status.label, tone: Self.tone(i.status))
+        let id = "table-\(t.id)"
+        switch i.status {
+        case .available:
+            // 大鍵：入座（右邊鍵盤問人數）；這桌有訂位就多一個「訂位入座」
+            var actions: [POSAction] = []
+            if let r = i.reservation {
+                actions.append(POSAction("訂位入座：\(r.name)", icon: "calendar-days") { seatReservation(r, at: t) })
+            }
+            var detail = "空桌・\(t.seats) 人桌"
+            if let r = i.reservation { detail += "・\(r.startsAt.clockText) \(r.name) \(r.partySize) 位訂了這桌" }
+            return DockSelection(id: id, kind: "桌位", title: t.name, detail: detail, badge: badge,
+                                 primary: POSAction("入座", icon: "users") { seat(t) },
+                                 actions: actions, clear: { deselect() })
+        case .reserved:
+            if let r = i.reservation {
+                return DockSelection(id: id, kind: "桌位", title: t.name,
+                                     detail: "\(r.startsAt.clockText) \(r.name) \(r.partySize) 位", badge: badge,
+                                     primary: POSAction("\(r.name) 到了，入座", icon: "check") { seatReservation(r, at: t) },
+                                     actions: [POSAction("帶其他客人", icon: "users") { seat(t) }], clear: { deselect() })
+            }
+            return DockSelection(id: id, kind: "桌位", title: t.name, detail: "\(t.seats) 人桌", badge: badge,
+                                 primary: POSAction("入座", icon: "users") { seat(t) }, clear: { deselect() })
+        case .needsCleaning:
+            return DockSelection(id: id, kind: "桌位", title: t.name, detail: "結完帳了，桌面整理好就改回空桌", badge: badge,
+                                 primary: POSAction("清桌", icon: "sparkles") { clean(t, thenSeat: false) },
+                                 actions: [POSAction("清好了，直接入座", icon: "users") { clean(t, thenSeat: true) }],
+                                 clear: { deselect() })
+        case .seated, .ordering, .billing:
+            guard let ticket = i.tickets.first(where: { $0.id == cardTicketId }) ?? i.tickets.first else {
+                return DockSelection(id: id, kind: "桌位", title: t.name, badge: badge, clear: { deselect() })
+            }
+            return occupiedDock(i, ticket: ticket, badge: badge)
+        }
+    }
+
+    /// 用餐中：大鍵看桌況（剛入座＝點餐、點過＝加點、印了結帳單＝結帳）；其他是動作鍵
+    private func occupiedDock(_ i: FloorTableInfo, ticket: Ticket, badge: DockBadge) -> DockSelection {
+        let t = i.table
+        let pays = model.role.takesPayment
+        let checkout = POSAction("結帳", icon: "credit-card") { model.beginCheckout(ticket) }
+        let orderTitle = canOrderHere ? (ticket.lines.isEmpty ? "點餐" : "加點") : "看單"
+        let orderAction = POSAction(orderTitle, icon: "squares-2x2") { order(ticket) }
+        let billingFirst = pays && i.status == .billing
+        var actions: [POSAction] = []
+        if billingFirst {
+            actions.append(orderAction)
+        } else if pays {
+            actions.append(checkout)
+        }
+        actions.append(POSAction("印結帳單", icon: "printer") { printBill(ticket) })
+        actions.append(POSAction("改人數", icon: "user-group") { Task { await model.setGuests(ticket) } })
+        actions.append(POSAction("換桌", icon: "arrows-right-left") { startPick(.move(ticketId: ticket.id)) })
+        actions.append(POSAction("併桌", icon: "link") { startPick(.merge(ticketId: ticket.id)) })
+        let minutes = max(0, Int(Date().timeIntervalSince(ticket.openedAt) / 60))
+        var parts = ["\(ticket.guests) 位", "\(minutes) 分", ticket.totals.amountDue.formatted]
+        if i.tickets.count > 1 { parts.insert("\(ticket.number)（共 \(i.tickets.count) 張單）", at: 0) }
+        // 報到接待不收錢：結帳在結帳櫃台
+        if !pays { parts.append("已同步到結帳櫃台") }
+        return DockSelection(id: "table-\(t.id)-\(ticket.id)", kind: "桌位", title: t.name,
+                             detail: parts.joined(separator: "・"), badge: badge,
+                             primary: billingFirst ? checkout : orderAction,
+                             actions: actions, clear: { deselect() })
+    }
+
+    /// 換桌、併桌：等著點目的地
+    private func pickDock(_ p: FloorPick) -> DockSelection {
+        let name = model.state.tickets[p.ticketId].map { $0.title(floor: model.floor) } ?? "這張單"
+        let kind: String
+        switch p {
+        case .move: kind = "換桌"
+        case .merge: kind = "併桌"
+        }
+        return DockSelection(id: "pick-\(p.ticketId)", kind: kind, title: name, detail: pickDetail(p),
+                             actions: [POSAction("取消\(kind)", icon: "x-mark") { cancelPick() }],
+                             clear: { cancelPick() })
+    }
+
+    private func cancelPick() {
+        withAnimation(anim) { pick = nil }
+    }
+
+    /// 排桌位：儲存是大鍵；選了桌子多一個「刪除這張桌子」
+    private var editDock: DockSelection {
+        let saveAction = POSAction(saving ? "儲存中…" : "儲存桌位", icon: "check", enabled: !saving) { save() }
+        let addTableAction = POSAction("新增桌子", icon: "plus", enabled: currentArea != nil) { addTable() }
+        if let id = selectedTableId, let t = draftTable(id) {
+            let busy = !model.state.openTickets(at: t.id).isEmpty
+            return DockSelection(id: "edit-\(t.id)", kind: "桌子", title: t.name.isEmpty ? "未命名" : t.name,
+                                 detail: "\(t.seats) 人・\(Self.shapeLabel(t.shape))" + (busy ? "・還有沒結帳的單，不能刪" : ""),
+                                 primary: saveAction,
+                                 actions: [
+                                     addTableAction,
+                                     POSAction("刪除這張桌子", icon: "trash", destructive: true, enabled: !busy) { deleteTable(t.id) },
+                                 ],
+                                 clear: { withAnimation(anim) { selectedTableId = nil } })
+        }
+        var actions = [addTableAction, POSAction("新增區域", icon: "squares-2x2") { addArea() }]
+        if let a = currentArea, a.tables.isEmpty {
+            actions.append(POSAction("刪除這個區域", icon: "trash", destructive: true) { deleteArea(a.id) })
+        }
+        actions.append(POSAction("不存了，離開", icon: "x-mark", destructive: true) { cancelEditing() })
+        return DockSelection.page("floor-edit", primary: saveAction, accent: true, actions: actions)
+    }
+
+    private static func tone(_ s: TableStatus) -> Tone {
+        switch s {
+        case .available: .neutral
+        case .reserved: .info
+        case .seated, .ordering: .gold
+        case .billing: .warning
+        case .needsCleaning: .danger
+        }
+    }
+
+    // MARK: - 桌子旁邊的卡片（只給看）
 
     private func card(for i: FloorTableInfo, rect: CGRect, canvas: CGSize, now: Date) -> some View {
         let p = cardPosition(for: rect, canvas: canvas)
@@ -631,7 +723,7 @@ struct FloorView: View {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                     .strokeBorder(Theme.line, lineWidth: 1)
             }
-            .shadow(color: .black.opacity(0.28), radius: 28, y: 12)
+            .shadow(color: .black.opacity(0.16), radius: 24, y: 10)
             .onGeometryChange(for: CGSize.self, of: { proxy in proxy.size }, action: { newSize in cardSize = newSize })
             .position(p)
             .transition(.scale(scale: 0.96).combined(with: .opacity))
@@ -695,13 +787,6 @@ struct FloorView: View {
                     .foregroundStyle(Theme.muted)
             }
             Spacer(minLength: 4)
-            Button {
-                deselect()
-            } label: {
-                HeroIcon("x-mark", size: 14)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 30))
-            .accessibilityLabel("關閉")
         }
     }
 
@@ -723,13 +808,6 @@ struct FloorView: View {
             if !i.attention.isEmpty {
                 attentionList(i.attention)
             }
-            Button {
-                order(ticket)
-            } label: {
-                Text(canOrderHere ? "去點餐" : "看單")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
             if !model.role.takesPayment {
                 // 報到接待不收錢：結帳在結帳櫃台
                 Text("\(ticket.number)・\(ticket.totals.amountDue.formatted) 已同步到結帳櫃台")
@@ -738,26 +816,7 @@ struct FloorView: View {
                     .foregroundStyle(Theme.infoFG)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // 主要「去點餐」；常用的最多再露兩個（結帳、結帳單），換桌、併桌、人數收進「⋯」
-            FloorActionRow(secondary: occupiedSecondary(ticket), more: occupiedMore(ticket))
         }
-    }
-
-    private func occupiedSecondary(_ ticket: Ticket) -> [POSAction] {
-        var list: [POSAction] = []
-        if model.role.takesPayment {
-            list.append(POSAction("結帳", icon: "credit-card") { model.beginCheckout(ticket) })
-        }
-        list.append(POSAction("結帳單", icon: "printer") { printBill(ticket) })
-        return list
-    }
-
-    private func occupiedMore(_ ticket: Ticket) -> [POSAction] {
-        [
-            POSAction("換桌", icon: "arrows-right-left") { startPick(.move(ticketId: ticket.id)) },
-            POSAction("併桌", icon: "link") { startPick(.merge(ticketId: ticket.id)) },
-            POSAction("改人數", icon: "user-group") { Task { await model.setGuests(ticket) } },
-        ]
     }
 
     private func occupiedInfo(_ ticket: Ticket, now: Date) -> some View {
@@ -850,20 +909,26 @@ struct FloorView: View {
                     .foregroundStyle(Theme.warningFG)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // 主要：訂位的客人到了；臨時帶別的客人收進「⋯」
-            ActionBar(
-                primary: POSAction("到了，入座", icon: "check") { seatReservation(r, at: i.table) },
-                more: [POSAction("帶其他客人", icon: "users") { seat(i.table) }],
-                size: .lg
-            )
         } else {
-            Button {
-                seat(i.table)
-            } label: {
-                Text("帶位")
-                    .frame(maxWidth: .infinity)
+            Text("\(i.table.seats) 人桌・訂位的資料還沒抓到")
+                .textRole(.small)
+                .monospacedDigit()
+                .foregroundStyle(Theme.ink2)
+        }
+        seatingHint(i)
+    }
+
+    /// 右欄的鍵盤正在問這一桌的人數
+    @ViewBuilder
+    private func seatingHint(_ i: FloorTableInfo) -> some View {
+        if seatingTableId == i.table.id && model.keypad.isAsking {
+            HStack(spacing: 10) {
+                LiveDot(color: Theme.accent)
+                Text("在右邊鍵盤輸入人數 →")
+                    .font(.brand(15, .medium))
+                    .foregroundStyle(Theme.accentText)
             }
-            .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
+            .padding(.vertical, 6)
         }
     }
 
@@ -873,11 +938,7 @@ struct FloorView: View {
             .textRole(.small)
             .foregroundStyle(Theme.ink2)
             .fixedSize(horizontal: false, vertical: true)
-        ActionBar(
-            primary: POSAction("清好了", icon: "sparkles") { clean(i.table, thenSeat: false) },
-            more: [POSAction("清好了，直接帶位", icon: "users") { clean(i.table, thenSeat: true) }],
-            size: .lg
-        )
+        seatingHint(i)
     }
 
     @ViewBuilder
@@ -891,23 +952,7 @@ struct FloorView: View {
                 .textRole(.small)
                 .foregroundStyle(Theme.table(.reserved))
         }
-        if seatingTableId == i.table.id && model.keypad.isAsking {
-            HStack(spacing: 10) {
-                LiveDot(color: Theme.accent)
-                Text("在右邊鍵盤輸入人數 →")
-                    .font(.brand(15, .medium))
-                    .foregroundStyle(Theme.accentText)
-            }
-            .padding(.vertical, 6)
-        } else {
-            Button {
-                seat(i.table)
-            } label: {
-                Text("帶位")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
-        }
+        seatingHint(i)
     }
 
     private func ticketChip(_ tk: Ticket, selected: Bool) -> some View {
@@ -944,14 +989,10 @@ struct FloorView: View {
                 icon: "table-cells",
                 title: "還沒有桌位圖",
                 message: canEdit
-                    ? "到後台「門市 POS → 桌位」排好桌子，這裡會自動出現；也可以按「編輯」直接在 iPad 上排。"
+                    ? "到後台「門市 POS → 桌位」排好桌子，這裡會自動出現；也可以按右邊的「編輯桌位」直接在 iPad 上排。"
                     : "請店長到後台「門市 POS → 桌位」排好桌子，這裡會自動出現。"
             )
             .frame(maxHeight: 260)
-            if canEdit {
-                Button("開始排桌位") { beginEditing() }
-                    .buttonStyle(.brand(.primary, size: .lg, arrow: true))
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -1298,24 +1339,11 @@ struct FloorView: View {
             .monospacedDigit()
             .foregroundStyle(Theme.muted)
 
-        Rule()
-
-        let busy = !model.state.openTickets(at: t.id).isEmpty
-        Button(role: .destructive) {
-            deleteTable(t.id)
-        } label: {
-            Label {
-                Text("刪除這張桌子")
-            } icon: {
-                HeroIcon("trash", size: 15)
-            }
-        }
-        .buttonStyle(.brand(.danger, size: .md, fullWidth: true))
-        .disabled(busy)
-        if busy {
+        if !model.state.openTickets(at: t.id).isEmpty {
             Text("這桌還有沒結帳的單，先結帳或換桌才能刪。")
                 .textRole(.xs)
                 .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1338,19 +1366,9 @@ struct FloorView: View {
             .monospacedDigit()
             .foregroundStyle(Theme.ink2)
 
-        // 「新增桌子」在右上角（同一個動作一個畫面只放一次）
-        if a.tables.isEmpty {
-            Button(role: .destructive) {
-                deleteArea(a.id)
-            } label: {
-                Text("刪除這個區域")
-            }
-            .buttonStyle(.brand(.danger, size: .md, fullWidth: true))
-        }
-
         Rule()
 
-        Text("改完按右上角「儲存」，其他 iPad 會跟著更新。")
+        Text("新增桌子、新增區域、儲存都在右邊。改完按「儲存」，其他 iPad 會跟著更新。")
             .textRole(.small)
             .foregroundStyle(Theme.muted)
             .fixedSize(horizontal: false, vertical: true)
@@ -1823,34 +1841,6 @@ private struct FloorInfoCell<Content: View>: View {
 }
 
 /// 卡片下面一排小動作：圖示在上、字在下
-/// 卡片下面的次要動作：「⋯」＋最多兩個細框按鈕（撐滿寬度，字不截斷）
-private struct FloorActionRow: View {
-    let secondary: [POSAction]
-    let more: [POSAction]
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if !overflow.isEmpty {
-                MoreMenu(actions: overflow)
-            }
-            ForEach(Array(secondary.prefix(2))) { a in
-                Button(action: a.perform) {
-                    HStack(spacing: 6) {
-                        if let icon = a.icon { HeroIcon(icon, size: 15) }
-                        Text(a.title)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
-                .disabled(!a.isEnabled)
-            }
-        }
-    }
-
-    private var overflow: [POSAction] { Array(secondary.dropFirst(2)) + more }
-}
 
 /// 編輯側欄的一欄：小字標題＋內容
 private struct FloorField<Content: View>: View {
