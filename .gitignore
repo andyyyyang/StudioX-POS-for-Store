@@ -6,3 +6,6 @@ xcuserdata/
 *.xcuserstate
 build.log
 Packages/POSKit/.build/
+
+__pycache__/
+*.pyc
