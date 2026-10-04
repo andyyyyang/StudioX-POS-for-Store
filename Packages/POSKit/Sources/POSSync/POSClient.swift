@@ -68,6 +68,9 @@ public protocol POSAPI: Sendable {
     func queue(_ action: QueueAction) async throws -> QueueState
     /// 門市折價券：能不能用在這張單（subtotal：整單折扣前的小計）。沒有這張券＝nil；斷線丟 APIError.offline（App 不套用）
     func coupon(code: String, subtotal: Money, memberId: String?) async throws -> CouponLookup?
+    /// 主管授權問後台（個人的裝置沒有 PIN 雜湊）：PIN 對到的人（staffId 省略＝看 PIN 對到誰）。
+    /// PIN 不對丟 `.http(401, "wrong_pin", "PIN 不對")`；錯太多次 `.http(429, "rate_limited", …)`；斷線 `.offline`
+    func verifyPin(staffId: String?, pin: String, purpose: String) async throws -> VerifiedStaff
 }
 
 extension POSAPI {
@@ -92,6 +95,23 @@ extension POSAPI {
 
     public func coupon(code: String, subtotal: Money, memberId: String?) async throws -> CouponLookup? {
         throw APIError.http(status: 404, code: "unsupported", message: POSClient.couponsUnsupported)
+    }
+
+    public func verifyPin(staffId: String?, pin: String, purpose: String) async throws -> VerifiedStaff {
+        throw APIError.http(status: 404, code: "unsupported", message: POSClient.verifyPinUnsupported)
+    }
+}
+
+extension APIError {
+    /// 主管授權問後台時 PIN 不對（401 wrong_pin）
+    public static let wrongPinCode = "wrong_pin"
+    public static let wrongPinMessage = "PIN 不對"
+    public static let pinRateLimitedMessage = "錯太多次了，10 分鐘後再試"
+
+    /// PIN 不對（不是這台的登入失效）
+    public var isWrongPin: Bool {
+        if case .http(401, Self.wrongPinCode, _) = self { return true }
+        return false
     }
 }
 
@@ -213,6 +233,24 @@ public struct POSClient: POSAPI {
         }
     }
 
+    /// 後台還沒有 verify-pin（舊版的後台：路徑不存在）
+    public static let verifyPinUnsupported = "後台還不支援主管授權，請更新後台"
+
+    /// POST /staff/verify-pin。401 wrong_pin、429 rate_limited 的訊息沒給時補上協定的那一句；舊版後台（沒有這個路徑）說請更新後台
+    public func verifyPin(staffId: String?, pin: String, purpose: String) async throws -> VerifiedStaff {
+        let body = VerifyPinRequest(staffId: staffId?.isEmpty == false ? staffId : nil, pin: pin, purpose: purpose)
+        do {
+            let r: VerifyPinResponse = try await call("staff/verify-pin", method: "POST", body: body)
+            return r.staff
+        } catch APIError.http(401, let code, let message) where code == APIError.wrongPinCode {
+            throw APIError.http(status: 401, code: code, message: message ?? APIError.wrongPinMessage)
+        } catch APIError.http(429, let code, let message) {
+            throw APIError.http(status: 429, code: code, message: message ?? APIError.pinRateLimitedMessage)
+        } catch APIError.http(404, let code, _) {
+            throw APIError.http(status: 404, code: code, message: Self.verifyPinUnsupported)
+        }
+    }
+
     // MARK: 傳輸
 
     struct Empty: Encodable {}
@@ -253,6 +291,8 @@ public struct POSClient: POSAPI {
             switch (status, err?.error) {
             case (401, "revoked"): throw APIError.revoked
             case (401, "staff_inactive"): throw APIError.staffInactive
+            // 主管授權的 PIN 不對：不是這台的登入失效（不能回配對畫面）
+            case (401, APIError.wrongPinCode): throw APIError.http(status: 401, code: APIError.wrongPinCode, message: err?.message ?? APIError.wrongPinMessage)
             case (401, _): throw APIError.unauthorized
             case (403, "service_off"): throw APIError.serviceOff
             default: throw APIError.http(status: status, code: err?.error ?? "http_\(status)", message: err?.message)

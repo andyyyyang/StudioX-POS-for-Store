@@ -30,10 +30,14 @@ final class KeypadController {
         var keepsSelection: Bool
         /// 大鍵的字跟著打的數字變（「數量 2」「改成 3」）；nil＝題目的 confirmLabel
         var confirmTitle: ((KeypadEntry) -> String)?
+        /// validate 過了之後還要等的檢查（問後台 PIN 對不對）：等的時候鍵盤留著、按鍵不動、大鍵是「確認中…」；
+        /// 回字串＝不行，和 validate 一樣寫在鍵盤上
+        var check: (@MainActor (KeypadEntry) async -> String?)?
+        var isChecking = false
         var continuation: CheckedContinuation<KeypadEntry?, Never>
 
         /// 最下面那顆大鍵的字
-        var confirmLabel: String { confirmTitle?(entry) ?? spec.confirmLabel }
+        var confirmLabel: String { isChecking ? "確認中…" : (confirmTitle?(entry) ?? spec.confirmLabel) }
     }
 
     private(set) var request: Request?
@@ -56,14 +60,15 @@ final class KeypadController {
 
     /// 問一個數字。cancel、或被下一個問題取代時回 nil。
     /// keepsSelection：選起來的那一筆（卡片、動作鍵）照樣留在鍵盤上面，見 Request.keepsSelection。
-    /// confirmTitle 放在 validate 後面：`ask(spec) { e in … }` 的尾隨閉包照舊是 validate
+    /// confirmTitle、check 放在 validate 後面：`ask(spec) { e in … }` 的尾隨閉包照舊是 validate
     func ask(_ spec: KeypadSpec, error: String? = nil, clearsOnError: Bool = false, keepsSelection: Bool = false,
              validate: @escaping (KeypadEntry) -> String? = { _ in nil },
-             confirmTitle: ((KeypadEntry) -> String)? = nil) async -> KeypadEntry? {
+             confirmTitle: ((KeypadEntry) -> String)? = nil,
+             check: (@MainActor (KeypadEntry) async -> String?)? = nil) async -> KeypadEntry? {
         cancel()
         return await withCheckedContinuation { c in
             request = Request(spec: spec, entry: KeypadEntry(spec), error: error, validate: validate, clearsOnError: clearsOnError,
-                              keepsSelection: keepsSelection, confirmTitle: confirmTitle, continuation: c)
+                              keepsSelection: keepsSelection, confirmTitle: confirmTitle, check: check, continuation: c)
             if error != nil { errorTick += 1 }
         }
     }
@@ -80,6 +85,7 @@ final class KeypadController {
     }
 
     func press(_ key: KeypadKey) {
+        if request?.isChecking == true { return }
         keyTick += 1
         if var r = request {
             r.entry.press(key)
@@ -91,8 +97,8 @@ final class KeypadController {
     }
 
     func apply(_ quick: KeypadSpec.QuickKey) {
+        guard var r = request, !r.isChecking else { return }
         keyTick += 1
-        guard var r = request else { return }
         r.entry.apply(quick)
         r.error = nil
         request = r
@@ -107,7 +113,7 @@ final class KeypadController {
 
     /// 換成這串數字並確認（掃到的會員卡）：和打完按「查詢」一樣
     func fill(_ digits: String) {
-        guard var r = request else { return }
+        guard var r = request, !r.isChecking else { return }
         r.entry.press(.clear)
         for ch in digits {
             if let n = ch.wholeNumberValue { r.entry.press(.digit(n)) }
@@ -125,7 +131,7 @@ final class KeypadController {
     }
 
     func commit() {
-        guard var r = request else { return }
+        guard var r = request, !r.isChecking else { return }
         if let problem = r.entry.problem {
             fail(problem, clear: false)
             return
@@ -137,6 +143,30 @@ final class KeypadController {
             errorTick += 1
             return
         }
+        if let check = r.check {
+            // 等檢查（問後台）：鍵盤留著；取消了、換了別的題目就不管結果
+            r.isChecking = true
+            r.error = nil
+            request = r
+            let id = r.id
+            let entry = r.entry
+            Task {
+                let problem = await check(entry)
+                guard var now = self.request, now.id == id else { return }
+                now.isChecking = false
+                self.request = now
+                if let problem {
+                    self.fail(problem, clear: now.clearsOnError)
+                } else {
+                    self.finish(now)
+                }
+            }
+            return
+        }
+        finish(r)
+    }
+
+    private func finish(_ r: Request) {
         request = nil
         successTick += 1
         r.continuation.resume(returning: r.entry)

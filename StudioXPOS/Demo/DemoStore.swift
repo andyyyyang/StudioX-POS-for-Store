@@ -559,6 +559,9 @@ actor DemoAPI: POSAPI {
     private var line: DemoQueue?
     /// 門市折價券（代碼 → 券）
     private let coupons: [String: DemoCoupon]
+    /// 主管授權打錯 PIN 的時間（和後台一樣：10 分鐘錯 5 次鎖 10 分鐘）
+    private var pinFailures: [Date] = []
+    private var pinLockedUntil: Date?
 
     /// queue：這家示範的叫號一打開的樣子（黃毛丫頭的號碼對著今天的單）；沒給是晨麥手作那一套
     init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil,
@@ -746,6 +749,28 @@ actor DemoAPI: POSAPI {
             return CouponLookup(coupon: c.coupon, problem: "未達最低消費 \(minimum.formatted)")
         }
         return CouponLookup(coupon: c.coupon)
+    }
+
+    // MARK: 主管授權
+
+    /// 和後台的 POST /staff/verify-pin 一樣（-personal 的示範手機用；示範的人員在這台有 PIN 雜湊，這裡照樣在本機比對）：
+    /// 只看啟用中的人，沒給 staffId 時兩個人一樣取職能最高的；錯了 401 wrong_pin；10 分鐘錯 5 次鎖 10 分鐘（對了不歸零）
+    func verifyPin(staffId: String?, pin: String, purpose: String) async throws -> VerifiedStaff {
+        let now = Date()
+        if let until = pinLockedUntil, until > now {
+            throw APIError.http(status: 429, code: "rate_limited", message: APIError.pinRateLimitedMessage)
+        }
+        let pool = base.staff.filter { $0.isActive && (staffId == nil || $0.id == staffId) }
+        // max(by:) 職能一樣時留名單上前面的那位（後台的名單照名字排，也是取前面的）
+        guard let m = pool.filter({ $0.verify(pin: pin) }).max(by: { $0.role < $1.role }) else {
+            pinFailures = pinFailures.filter { now.timeIntervalSince($0) < 600 } + [now]
+            if pinFailures.count >= 5 {
+                pinFailures = []
+                pinLockedUntil = now.addingTimeInterval(600)
+            }
+            throw APIError.http(status: 401, code: APIError.wrongPinCode, message: APIError.wrongPinMessage)
+        }
+        return VerifiedStaff(id: m.id, name: m.name, role: m.role.rawValue)
     }
 
     // MARK: 課表

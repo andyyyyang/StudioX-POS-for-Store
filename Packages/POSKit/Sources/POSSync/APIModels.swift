@@ -407,6 +407,42 @@ public struct CouponLookup: Codable, Sendable, Hashable {
     }
 }
 
+// MARK: - 主管授權（後台驗 PIN）
+
+/// POST {cms}/api/pos/v1/staff/verify-pin：個人的裝置拿不到 PIN 雜湊，主管授權改問後台（docs/API.md「用 StudioX 帳號登入」第 5 步）。
+/// 錯了 `401 wrong_pin`；同一台 10 分鐘錯 5 次 `429 rate_limited`（鎖 10 分鐘）
+public struct VerifyPinRequest: Codable, Sendable, Hashable {
+    /// 省略＝看 PIN 對到誰（兩個人一樣，後台取職能最高的）
+    public var staffId: String?
+    public var pin: String
+    /// 要授權什麼（Permission 的 rawValue：voidTicket、refund、largeDiscount…）
+    public var purpose: String
+
+    public init(staffId: String? = nil, pin: String, purpose: String) {
+        self.staffId = staffId; self.pin = pin; self.purpose = purpose
+    }
+}
+
+/// PIN 對到的人
+public struct VerifiedStaff: Codable, Sendable, Hashable {
+    public var id: String
+    public var name: String
+    /// cashier｜supervisor｜manager｜owner；用字串收：不認得的值也不會讓整個回應讀不進來（當作收銀，見 staffRole）
+    public var role: String
+
+    public init(id: String, name: String, role: String) {
+        self.id = id; self.name = name; self.role = role
+    }
+
+    /// 不認得的職能當作最低的（收銀）：寧可再問一次，不要多給權限
+    public var staffRole: StaffRole { StaffRole(rawValue: role) ?? .cashier }
+}
+
+public struct VerifyPinResponse: Codable, Sendable, Hashable {
+    public var staff: VerifiedStaff
+    public init(staff: VerifiedStaff) { self.staff = staff }
+}
+
 // MARK: - 訂位與候位
 
 public enum ReservationKind: String, Codable, Sendable, Hashable {

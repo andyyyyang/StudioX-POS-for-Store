@@ -16,6 +16,7 @@ import UIKit
 ///   - 他被停用（401 staff_inactive）：**不清**本機資料（還沒送的帳要留著），擋住畫面「請找店長」＋重試（PersonalBlockedView）；
 ///     店長重新啟用之後同步恢復就自動解開
 ///   - 設定「登出這支手機」：網站停用這台（POST /devices/self/revoke）、清掉 StudioX 帳號的 token、回配對畫面
+///   - 開機資料的人員沒有 PIN 雜湊：主管授權（作廢、退款、超過上限的折扣…）問後台（authorizeOnline），斷網不能授權
 ///
 /// 店裡共用的裝置（配對碼、或用 StudioX 帳號登入時選「店裡共用的」）照舊：大家用 PIN 登入。
 extension POSModel {
@@ -203,6 +204,54 @@ extension POSModel {
             throw APIError.decoding("後台網址不對")
         }
         try await completePairing(cmsURL: url, response: r.pair, personalStaff: r.boundStaff)
+    }
+
+    // MARK: 主管授權（問後台）
+
+    /// 斷網、還沒連上後台時不能做主管授權（共用的裝置照舊在本機驗）
+    static let authorizeNeedsConnection = "主管授權要連線"
+
+    /// 主管授權（個人的裝置，POSModel.authorize 叫的）：本機沒有 PIN 雜湊（後台不給：4–6 位數的 PIN 在自己的手機上很容易離線試出來），
+    /// 右側鍵盤打的 PIN 問後台（POST /staff/verify-pin；不先選人：後台看 PIN 對到誰，兩個人一樣取職能最高的）。
+    /// 等的時候鍵盤留著（大鍵「確認中…」）；PIN 不對、沒有這個權限、錯太多次（後台鎖 10 分鐘）、斷網都寫在鍵盤上，可以再打或取消
+    func authorizeOnline(_ p: Permission, spec: KeypadSpec) async -> Authorization? {
+        guard let api else {
+            show(Self.authorizeNeedsConnection, tone: .warning)
+            return nil
+        }
+        var matched: StaffMember?
+        let entry = await keypad.ask(spec, clearsOnError: true, check: { e in
+            do {
+                let verified = try await api.verifyPin(staffId: nil, pin: e.digits, purpose: p.rawValue)
+                let m = self.authorizer(verified)
+                guard m.can(p) else { return "PIN 不對，或沒有這個權限" }
+                matched = m
+                return nil
+            } catch let error as APIError {
+                return Self.authorizeProblem(error)
+            } catch {
+                return Self.authorizeNeedsConnection
+            }
+        })
+        guard entry != nil, let m = matched else { return nil }
+        return .by(m)
+    }
+
+    /// 後台說 PIN 是這位：用本機人員名單裡的那一位（頭像、職稱），職能照後台的（比開機資料新）
+    private func authorizer(_ v: VerifiedStaff) -> StaffMember {
+        var m = staffMember(v.id) ?? StaffMember(id: v.id, name: v.name, role: v.staffRole)
+        m.role = v.staffRole
+        return m
+    }
+
+    /// 後台驗不過的時候鍵盤上寫什麼
+    static func authorizeProblem(_ e: APIError) -> String {
+        if e.isWrongPin { return e.userMessage }
+        switch e {
+        case .offline: return authorizeNeedsConnection
+        case .http(429, _, let message): return message ?? APIError.pinRateLimitedMessage
+        default: return e.userMessage
+        }
     }
 
     // MARK: 示範（截圖）

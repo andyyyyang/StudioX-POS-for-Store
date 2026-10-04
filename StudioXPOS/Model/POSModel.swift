@@ -530,11 +530,11 @@ final class POSModel {
             show("沒有人有「\(p.label)」的權限，請到後台設定", tone: .danger)
             return nil
         }
+        let spec = KeypadSpec.pin(title: "主管授權", subtitle: (detail.map { "\($0)・" } ?? "") + "\(p.label)要\(p.minimumRole.label)以上輸入 PIN")
+        // 個人的裝置沒有 PIN 雜湊：問後台（POSModel+Personal.swift）；店裡共用的照舊在本機驗（斷網也能授權）
+        if isPersonalDevice { return await authorizeOnline(p, spec: spec) }
         var matched: StaffMember?
-        let entry = await keypad.ask(
-            .pin(title: "主管授權", subtitle: (detail.map { "\($0)・" } ?? "") + "\(p.label)要\(p.minimumRole.label)以上輸入 PIN"),
-            clearsOnError: true
-        ) { e in
+        let entry = await keypad.ask(spec, clearsOnError: true) { e in
             matched = candidates.first { $0.verify(pin: e.digits) }
             return matched == nil ? "PIN 不對，或沒有這個權限" : nil
         }

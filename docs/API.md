@@ -13,6 +13,8 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 - 錯誤：HTTP 4xx/5xx ＋ `{ "error": "<code>", "message": "給人看的一句話" }`。
   - `401 unauthorized`：token 不對 → App 回到配對畫面
   - `401 revoked`：後台移除了這台 → App 清掉本機資料、回到配對畫面
+  - `401 staff_inactive`：個人裝置綁的門市人員被停用 → **不清**本機資料，鎖起來等店長重新啟用（見「用 StudioX 帳號登入」）
+  - `401 wrong_pin`：`/staff/verify-pin` 的 PIN 不對 → 只是這一次授權失敗，不是登出
   - `403 service_off`：StudioX 沒開通／店家暫停了「門市 POS」 → App 照常營業（離線模式），提示「後台暫停同步」
   - `429 rate_limited`
 
@@ -65,8 +67,13 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
    - **個人裝置拿不到 PIN 雜湊**：開機資料的 `staff[]` 照樣有每個人（名字、角色、職稱），但 `pinHash`、`pinSalt`、`pinIterations` 不給
      （4–6 位數的 PIN 在自己的手機上很容易離線試出來）。要主管授權（作廢已送出的、超過上限的折扣、退款…）時，App 改問後台：
      `POST /staff/verify-pin { "staffId": "…"（可省略：看 PIN 對到誰）, "pin": "1234", "purpose": "void" }`
-     → `{ "staff": { id, name, role } }`；錯了 `401 wrong_pin`；同一台 10 分鐘錯 5 次 `429 rate_limited`（鎖 10 分鐘）。
-     斷網時個人裝置不能做主管授權（「主管授權要連線」）；共用裝置照舊在本機驗
+     → `{ "staff": { id, name, role } }`；錯了 `401 wrong_pin`（停用的人的 PIN 也是）；`staffId` 省略時兩個人 PIN 一樣取職能最高的。
+     - 同一台（個人的裝置另外再算同一個人：換一支手機也一樣）10 分鐘錯 5 次 → 第 5 次起鎖 10 分鐘 `429 rate_limited`；**打對不會重算**；鎖著的時候對的也不驗
+     - PIN 不是 4–6 位數字、`staffId` 格式不對 → `400 invalid`（不算錯一次）；`purpose` 選填（App 送權限的名字，例如 `voidTicket`），只記在鎖住的紀錄
+     - 後台數不了錯幾次（Redis 不通）→ `503 unavailable`「主管授權暫時不能用」（不放行）
+     - PIN 不寫進任何紀錄
+     斷網時個人裝置不能做主管授權（「主管授權要連線」）；共用裝置照舊在本機驗。個人的裝置也拿不到 `invoice.qrKey`（只點餐、不開發票）。
+     上線後：在這之前配對過的個人手機已經下載過舊的雜湊——負責人、店長請換一次 PIN
    - 設定 →「登出這支手機」：`POST /devices/self/revoke`（網站停用這台），清掉 console 的 token
 
 ## 開機資料
@@ -83,7 +90,7 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 | `features` | 開了哪些功能：`seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission`。後三個沒給＝`false`（要後台有對應的資料表才開） |
 | `catalog` | `categories`（`swatch` 是色塊名稱）、`items`（只給上架的；`isAvailable=false` 是今天賣完；非餐飲的欄位見下方「品項的種類與規格」）、`modifierGroups` |
 | `floor` | `areas[].tables[]`，座標是 0–100 的格子 |
-| `staff` | 門市人員（只給啟用中的），含 PIN 雜湊：`PBKDF2-HMAC-SHA256(pin, pinSalt, pinIterations, 32 bytes)` 的十六進位。後台用 Node：`crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex')`。選填：`title`（職稱：設計師、教練）、`bookable`（排進預約表）、`commissionBps`（預設抽成，萬分比） |
+| `staff` | 門市人員（只給啟用中的），含 PIN 雜湊（**個人的裝置沒有**，見「用 StudioX 帳號登入」）：`PBKDF2-HMAC-SHA256(pin, pinSalt, pinIterations, 32 bytes)` 的十六進位。後台用 Node：`crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex')`。選填：`title`（職稱：設計師、教練）、`bookable`（排進預約表）、`commissionBps`（預設抽成，萬分比） |
 | `invoice` | `enabled, sellerTaxId, sellerName, sellerAddress, qrKey`（財政部的 QR Code 加密金鑰，32 個十六進位字）、`rolls`（**這台**還在用的號碼段；每段帶 `usedThrough`＝後台收到這一段用到的最後一號，iPad 一定從它的下一號開始，所以本機事件刪掉了也不會重號） |
 | `mesh` | 同一家店的 iPad 在區網互相同步用的金鑰（32 bytes 十六進位）與開關 |
 | `printStyle` | 單據樣式（見下方「單據樣式」）；沒給＝預設 |

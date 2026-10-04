@@ -1,6 +1,7 @@
 import Foundation
 
 // 門市人員：在 iPad 上用 4–6 位數 PIN 登入（右側鍵盤）。PIN 的雜湊由後台算好傳過來，斷網也能登入。
+// 個人的裝置（用 StudioX 帳號登入的手機）拿不到雜湊：主管授權改問後台（POSAPI.verifyPin；docs/API.md「用 StudioX 帳號登入」）。
 // 和後台帳號分開：工讀生不需要能登入網站後台；需要的人可以在後台把兩個綁在一起（userId）。
 
 public enum StaffRole: String, Codable, Sendable, CaseIterable, Hashable, Comparable {
@@ -91,10 +92,12 @@ public struct StaffMember: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     public var name: String
     public var role: StaffRole
-    /// PBKDF2-HMAC-SHA256(pin, salt, iterations) 的十六進位
-    public var pinHash: String
-    public var pinSalt: String
-    public var pinIterations: Int
+    /// PBKDF2-HMAC-SHA256(pin, salt, iterations) 的十六進位。
+    /// 個人的裝置的開機資料沒有這三個（4–6 位數的 PIN 在自己的手機上很容易離線試出來）：nil，這位在本機驗不了 PIN
+    public var pinHash: String?
+    public var pinSalt: String?
+    /// 沒給＝Staff.defaultIterations
+    public var pinIterations: Int?
     /// 頭像的色（Swatch）
     public var swatch: Swatch
     public var isActive: Bool
@@ -105,10 +108,11 @@ public struct StaffMember: Codable, Sendable, Hashable, Identifiable {
     /// 預設抽成（萬分比；品項自己有設就用品項的）
     public var commissionBps: Int?
 
-    public init(id: String, name: String, role: StaffRole, pinHash: String, pinSalt: String, pinIterations: Int = Staff.defaultIterations,
+    /// pinIterations 沒給：有雜湊的用 Staff.defaultIterations（和以前一樣寫進 JSON），沒有雜湊的不寫
+    public init(id: String, name: String, role: StaffRole, pinHash: String? = nil, pinSalt: String? = nil, pinIterations: Int? = nil,
                 swatch: Swatch = .sand, isActive: Bool = true, title: String? = nil, bookable: Bool? = nil, commissionBps: Int? = nil) {
         self.id = id; self.name = name; self.role = role; self.pinHash = pinHash; self.pinSalt = pinSalt
-        self.pinIterations = pinIterations; self.swatch = swatch; self.isActive = isActive
+        self.pinIterations = pinIterations ?? (pinHash == nil ? nil : Staff.defaultIterations); self.swatch = swatch; self.isActive = isActive
         self.title = title; self.bookable = bookable; self.commissionBps = commissionBps
     }
 
@@ -119,9 +123,15 @@ public struct StaffMember: Codable, Sendable, Hashable, Identifiable {
     /// 名字的第一個字（頭像）
     public var initial: String { String(name.prefix(1)) }
 
+    /// 這台有這位的 PIN 雜湊（店裡共用的裝置才有；個人的裝置要問後台）
+    public var hasPin: Bool { pinHash?.isEmpty == false && pinSalt != nil }
+
+    /// 在本機驗 PIN。沒有雜湊（個人的裝置）一律 false
     public func verify(pin: String) -> Bool {
-        guard isActive, let expected = Crypto.bytes(hex: pinHash) else { return false }
-        let got = Crypto.pbkdf2SHA256(password: Array(pin.utf8), salt: Array(pinSalt.utf8), iterations: pinIterations, keyLength: expected.count)
+        guard isActive, let pinHash, let pinSalt, let expected = Crypto.bytes(hex: pinHash), !expected.isEmpty else { return false }
+        let iterations = pinIterations ?? Staff.defaultIterations
+        guard iterations > 0 else { return false }
+        let got = Crypto.pbkdf2SHA256(password: Array(pin.utf8), salt: Array(pinSalt.utf8), iterations: iterations, keyLength: expected.count)
         return Crypto.constantTimeEquals(got, expected)
     }
 }
@@ -135,9 +145,10 @@ public enum Staff {
         Crypto.hex(Crypto.pbkdf2SHA256(password: Array(pin.utf8), salt: Array(salt.utf8), iterations: iterations))
     }
 
-    /// 同一個 PIN 對到哪一位（PIN 登入不先選人時用；兩個人 PIN 一樣就回 nil，請他們先點自己）
+    /// 同一個 PIN 對到哪一位（PIN 登入不先選人時用；兩個人 PIN 一樣就回 nil，請他們先點自己）。
+    /// 沒有雜湊的人（個人的裝置拿到的人員名單）跳過
     public static func match(pin: String, in staff: [StaffMember]) -> StaffMember? {
-        let hits = staff.filter { $0.verify(pin: pin) }
+        let hits = staff.filter { $0.hasPin && $0.verify(pin: pin) }
         return hits.count == 1 ? hits[0] : nil
     }
 }
