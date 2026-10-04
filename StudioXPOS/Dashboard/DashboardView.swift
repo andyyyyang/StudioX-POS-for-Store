@@ -415,25 +415,55 @@ private struct DashHeadline: View {
     let compare: DashComparison?
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            DashTile(title: "營業額", icon: "currency-dollar", accent: true, note: "扣退款後 \(summary.net.formatted)", delta: delta(\.total.cents)) {
-                MoneyText(money: summary.total, role: .stat, color: Theme.onAccent)
+        // 夠寬一排四格；不夠（直的 iPad）排成兩排，數字才不會被截成「NT$8,6…」
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+                revenueTile
+                ticketsTile
+                averageTile
+                guestsTile
             }
-            DashTile(title: "單數", icon: "queue-list", note: ticketsNote, delta: delta(\.tickets)) {
-                Text(String(summary.tickets))
-                    .textRole(.stat)
-                    .foregroundStyle(Theme.ink)
-            }
-            DashTile(title: "客單價", icon: "tag", note: "每位 \(summary.averagePerGuest.formatted)", delta: delta(\.averageTicket.cents)) {
-                MoneyText(money: summary.averageTicket, role: .stat)
-            }
-            DashTile(title: "來客數", icon: "users", note: guestsNote, delta: delta(\.guests)) {
-                Text(String(summary.guests))
-                    .textRole(.stat)
-                    .foregroundStyle(Theme.ink)
+            .frame(minWidth: 4 * 196 + 3 * 16)
+            VStack(spacing: 16) {
+                HStack(alignment: .top, spacing: 16) {
+                    revenueTile
+                    ticketsTile
+                }
+                HStack(alignment: .top, spacing: 16) {
+                    averageTile
+                    guestsTile
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var revenueTile: some View {
+        DashTile(title: "營業額", icon: "currency-dollar", accent: true, note: "扣退款後 \(summary.net.formatted)", delta: delta(\.total.cents)) {
+            MoneyText(money: summary.total, role: .stat, color: Theme.onAccent)
+        }
+    }
+
+    private var ticketsTile: some View {
+        DashTile(title: "單數", icon: "queue-list", note: ticketsNote, delta: delta(\.tickets)) {
+            Text(String(summary.tickets))
+                .textRole(.stat)
+                .foregroundStyle(Theme.ink)
+        }
+    }
+
+    private var averageTile: some View {
+        DashTile(title: "客單價", icon: "tag", note: "每位 \(summary.averagePerGuest.formatted)", delta: delta(\.averageTicket.cents)) {
+            MoneyText(money: summary.averageTicket, role: .stat)
+        }
+    }
+
+    private var guestsTile: some View {
+        DashTile(title: "來客數", icon: "users", note: guestsNote, delta: delta(\.guests)) {
+            Text(String(summary.guests))
+                .textRole(.stat)
+                .foregroundStyle(Theme.ink)
+        }
     }
 
     private func delta(_ key: KeyPath<SalesSummary, Int>) -> Double? {

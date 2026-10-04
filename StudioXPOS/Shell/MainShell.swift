@@ -24,8 +24,10 @@ struct MainShell: View {
 
     var body: some View {
         GeometryReader { geo in
-            let wide = geo.size.width >= 1180
-            let roomy = geo.size.width >= 1000
+            // 四欄並排要的寬度：側欄 88＋工作區至少 460＋單子 320＋鍵盤 296 ≈ 1164。
+            // 橫的 11 吋（1180 以上）四欄；直的 13 吋（1032）單子改成從右邊滑出，點餐區才不會被擠成一字一行
+            let wide = geo.size.width >= 1360
+            let roomy = geo.size.width >= 1164
             HStack(spacing: 0) {
                 SidebarRail()
                 VStack(spacing: 0) {

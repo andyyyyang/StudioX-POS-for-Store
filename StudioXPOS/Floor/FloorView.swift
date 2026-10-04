@@ -283,8 +283,12 @@ struct FloorView: View {
 
     /// 一桌在圖上佔的地方（桌子＋椅子）：格子座標 × 每格的點數
     private func footprint(_ t: DiningTable, unitX: CGFloat, unitY: CGFloat) -> CGRect {
-        CGRect(x: CGFloat(t.x) * unitX, y: CGFloat(t.y) * unitY,
-               width: max(CGFloat(t.width) * unitX, 36), height: max(CGFloat(t.height) * unitY, 36))
+        let r = CGRect(x: CGFloat(t.x) * unitX, y: CGFloat(t.y) * unitY,
+                       width: max(CGFloat(t.width) * unitX, 36), height: max(CGFloat(t.height) * unitY, 36))
+        // 格子的橫、直各自照畫面縮放：圓桌要一直是圓的（直的 iPad 上不然會被拉成細長的橢圓）
+        guard t.shape == .round, t.width == t.height else { return r }
+        let side = min(r.width, r.height)
+        return CGRect(x: r.midX - side / 2, y: r.midY - side / 2, width: side, height: side)
     }
 
     @ViewBuilder
