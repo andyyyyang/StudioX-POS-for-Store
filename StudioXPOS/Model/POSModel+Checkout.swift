@@ -297,20 +297,45 @@ extension POSModel {
 
     // MARK: 退款
 
-    /// 退款：右側鍵盤打金額（預設全部）；同一期整張退＝發票作廢，其他＝折讓單
-    func refund(_ sale: SaleRecord, tender: Tender, reason: String) async {
+    /// 退款：右側鍵盤打金額（預設全部）；同一期整張退＝發票作廢，其他＝折讓單。
+    /// lines：退哪幾件（服飾、課程卡、儲值）——金額照原單實收算好、不再問；庫存、課程卡、儲值金跟著退
+    func refund(_ sale: SaleRecord, tender: Tender, reason: String, lines: [String: Int] = [:]) async {
         guard let t = state.tickets[sale.ticketId], let me = currentStaff else { return }
+        guard role.takesPayment else {
+            show("這台是「\(role.label)」，退款請到結帳櫃台", tone: .info)
+            return
+        }
+        if tender == .cash && !role.hasDrawer {
+            show("這台沒有錢櫃：現金退款請到結帳櫃台", tone: .warning)
+            return
+        }
         guard let auth = await authorize(.refund, detail: "\(sale.number) 退款") else { return }
         let refundable = sale.total + sale.tip - t.refundedAmount
         guard refundable.cents > 0 else {
             show("這張單已經全部退完了", tone: .neutral)
             return
         }
-        guard let amount = await keypad.askMoney(.refund(max: refundable)) else { return }
-        let full = amount == refundable && t.refunds.isEmpty
+        let already = sale.refundedQuantities(t.refunds)
+        let itemised: [RefundLine] = lines.compactMap { lineId, q in
+            guard q > 0 else { return nil }
+            let amount = sale.refundAmount(lineId: lineId, quantity: q, alreadyRefunded: already[lineId] ?? 0)
+            return amount.cents > 0 ? RefundLine(lineId: lineId, quantity: q, amount: amount) : nil
+        }.sorted { $0.lineId < $1.lineId }
+        let amount: Money
+        if itemised.isEmpty {
+            guard let typed = await keypad.askMoney(.refund(max: refundable)) else { return }
+            amount = typed
+        } else {
+            amount = min(Money.sum(itemised.map(\.amount)), refundable)
+        }
+        // 整張退：沒有退過、而且金額是全部（或每一件都退了）
+        let everyLine = !itemised.isEmpty && sale.lines.allSatisfy { l in
+            (already[l.lineId] ?? 0) + (itemised.first { $0.lineId == l.lineId }?.quantity ?? 0) >= l.quantity
+        }
+        let full = t.refunds.isEmpty && (amount == refundable || everyLine)
         let invoice = t.invoice.flatMap { state.invoices[$0.number] }
         let action = (invoice != nil && t.invoice?.isVoided == false) ? InvoiceBuilder.refundAction(invoice: invoice, isFullRefund: full, at: Date()) : .none
-        var refund = Refund(id: newID(), amount: amount, tender: tender, reason: reason, invoiceAction: action, at: Date(),
+        var refund = Refund(id: newID(), amount: amount, tender: tender, lines: full ? [] : itemised, reason: reason, invoiceAction: action, at: Date(),
                             by: me.id, authorizedBy: auth.authorizerId, shiftId: openShift?.id)
         var bodies: [EventBody] = []
         var allowance: EInvoiceAllowance? = nil
