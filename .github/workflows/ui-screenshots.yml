@@ -231,7 +231,7 @@ jobs:
           P="-demo cafe -autologin 1234"
           # 名稱|啟動參數|等幾秒（預設 7）
           phone=(
-            "phone/01-order|$P -section order"
+            "phone/01-order|$P -section order|16"
             "phone/02-ticket|$P -section order -preselect|9"
             "phone/03-floor|$P -section floor"
             "phone/04-orders|$P -section orders"

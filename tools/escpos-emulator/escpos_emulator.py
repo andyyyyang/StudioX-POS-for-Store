@@ -29,30 +29,73 @@ try:
 except ImportError:  # pragma: no cover
     qrcode = None
 
+# 依序試；.ttc 裡每一個字型都試。要有繁體字（台灣的單子）：簡體字型（Songti SC、Hiragino Sans GB、STHeiti）
+# 常常沒有「麥、號、廚、稅、聯」這些繁體才有的字，畫出來是空白——先挑繁體的，再用 FONT_PROBE 確認真的有字
 FONT_CANDIDATES = [
+    "/System/Library/Fonts/Hiragino Sans CNS.ttc",
     "/System/Library/Fonts/PingFang.ttc",
-    "/System/Library/Fonts/Supplemental/Songti.ttc",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/Library/Fonts/Arial Unicode.ttf",
+    "/System/Library/Fonts/Supplemental/Songti.ttc",
     "/System/Library/Fonts/STHeiti Medium.ttc",
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/STHeiti Light.ttc",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
 ]
+# 繁體才有的字（簡體字型沒有）＋常用的：都畫得出來才用這個字型
+FONT_PROBE = "麥號廚稅聯發單細帶計區晨"
 
 # Font A：英數 12×24 點，中文 24×24 點（台灣常見的 58／80 mm 熱感機都是這個大小）
 CELL_W, CELL_H = 12, 24
 LINE_GAP = 6  # ESC 2 的預設行距 30 點＝24＋6
 
 
-def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+_FONT_CHOICE: tuple[str, int] | None = None
+
+
+def _glyph(font: ImageFont.FreeTypeFont, ch: str) -> Image.Image:
+    img = Image.new("L", (40, 40), 0)
+    ImageDraw.Draw(img).text((4, 4), ch, font=font, fill=255)
+    return img
+
+
+def _has_glyphs(font: ImageFont.FreeTypeFont, text: str) -> bool:
+    """每個字都有自己的字形（不是缺字時的空白或 .notdef 方塊）"""
+    missing = _glyph(font, "\U0010FFFD").tobytes()
+    for ch in text:
+        g = _glyph(font, ch)
+        if g.getbbox() is None or g.tobytes() == missing:
+            return False
+    return True
+
+
+def pick_font() -> tuple[str, int] | None:
+    """第一個繁體字都畫得出來的字型（路徑、.ttc 裡的第幾個）；記住，之後都用它"""
+    global _FONT_CHOICE
+    if _FONT_CHOICE is not None:
+        return _FONT_CHOICE
     for path in FONT_CANDIDATES:
-        if os.path.exists(path):
+        if not os.path.exists(path):
+            continue
+        for index in range(0, 16 if path.endswith(".ttc") else 1):
             try:
-                return ImageFont.truetype(path, size)
+                f = ImageFont.truetype(path, 24, index=index)
             except OSError:
-                continue
+                break
+            if _has_glyphs(f, FONT_PROBE):
+                _FONT_CHOICE = (path, index)
+                print(f"字型：{os.path.basename(path)} #{index}", file=sys.stderr)
+                return _FONT_CHOICE
+    print("找不到有繁體字的字型：缺的字會是空白", file=sys.stderr)
+    return None
+
+
+def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    choice = pick_font()
+    if choice:
+        return ImageFont.truetype(choice[0], size, index=choice[1])
     return ImageFont.load_default()
 
 
