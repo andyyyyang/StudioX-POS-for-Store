@@ -12,13 +12,7 @@ struct CodeScannerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(title).textRole(.h4)
-                Spacer()
-                Button("取消") { dismiss() }
-                    .buttonStyle(.brand(.ghost, size: .sm))
-            }
-            .padding(20)
+            SheetHeader(title: title, subtitle: "對準條碼，掃到就自動關掉", closeLabel: "取消", close: { dismiss() })
             if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
                 ScannerRepresentable(symbologies: types) { code in
                     onCode(code)
@@ -27,11 +21,13 @@ struct CodeScannerSheet: View {
                 .clipShape(.rect(cornerRadius: Metric.radiusLg))
                 .padding([.horizontal, .bottom], 20)
             } else {
-                EmptyState(icon: "qr-code", title: "這台 iPad 不能用相機掃碼", message: "請用外接的條碼掃描器，或直接輸入")
+                EmptyState(icon: "qr-code", title: "這台裝置不能用相機掃碼", message: "請用外接的條碼掃描器，或直接輸入")
+                    .frame(maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 520, minHeight: 520)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.sheet)
+        .posSheet()
     }
 }
 

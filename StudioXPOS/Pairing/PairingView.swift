@@ -75,27 +75,25 @@ struct PairingView: View {
             }
         }
         .sheet(isPresented: $showDemos) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Eyebrow("先看看示範")
-                        Text("四家虛構的店，資料只在這次開著的時候。點一家就打開")
-                            .textRole(.xs)
-                            .foregroundStyle(Theme.muted)
-                    }
-                    ForEach(DemoKind.allCases) { kind in
-                        DemoStoreCard(kind: kind) {
-                            showDemos = false
-                            keypad.cancel()
-                            model.startDemo(kind: kind)
+            VStack(spacing: 0) {
+                SheetHeader(title: "先看看示範", subtitle: "\(DemoKind.allCases.count) 家示範的店，資料只在這次開著的時候。點一家就打開",
+                            close: { showDemos = false })
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(DemoKind.allCases) { kind in
+                            DemoStoreCard(kind: kind) {
+                                showDemos = false
+                                keypad.cancel()
+                                model.startDemo(kind: kind)
+                            }
                         }
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
                 }
-                .padding(20)
+                .scrollIndicators(.hidden)
             }
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Theme.page)
+            .posSheet()
         }
     }
 
