@@ -62,6 +62,11 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
    - 裝置被停用（`401 revoked`）→ 回到配對畫面
    - 這位門市人員被停用（`401 staff_inactive`）：**不清本機資料**（還沒送出的帳要留著），顯示「你在這家店的門市人員被停用了，請找店長」；店長重新啟用後照常
    - 個人裝置送出別人（`staffId` 不是綁的那位）的事件：照收（不斷鏈）但不算進帳、通知店長
+   - **個人裝置拿不到 PIN 雜湊**：開機資料的 `staff[]` 照樣有每個人（名字、角色、職稱），但 `pinHash`、`pinSalt`、`pinIterations` 不給
+     （4–6 位數的 PIN 在自己的手機上很容易離線試出來）。要主管授權（作廢已送出的、超過上限的折扣、退款…）時，App 改問後台：
+     `POST /staff/verify-pin { "staffId": "…"（可省略：看 PIN 對到誰）, "pin": "1234", "purpose": "void" }`
+     → `{ "staff": { id, name, role } }`；錯了 `401 wrong_pin`；同一台 10 分鐘錯 5 次 `429 rate_limited`（鎖 10 分鐘）。
+     斷網時個人裝置不能做主管授權（「主管授權要連線」）；共用裝置照舊在本機驗
    - 設定 →「登出這支手機」：`POST /devices/self/revoke`（網站停用這台），清掉 console 的 token
 
 ## 開機資料
