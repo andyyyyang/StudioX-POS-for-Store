@@ -226,6 +226,53 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 - 選填：`staffId`（指定的設計師、教練；`PATCH` 時送 `""`＝改回不指定）、`services[]`（`itemId, name, durationMinutes, staffId?, price?`）、`memberId`、`sessionId`（團體課）、`ticketId`（到店後開的單）
 - `GET /classes?date=2026-10-04` → `{ "classes": [ { id, name, staffId, startsAt, durationMinutes, capacity, booked, room, itemId, dropInPrice, note } ] }`（後台「課表」排的；`booked` 不含取消）
 
+## 叫號（號碼牌）
+
+店裡的號碼牌：取號 → 出單 → 叫號 → 過號。黃毛丫頭原本的叫號系統（`yellowgirl-queue-system`：Railway 的 Flask 伺服器、
+樹莓派出單與叫號螢幕）整合進來，iPad 的「叫號」頁取代原本的 TicketSystem App。後台設定（`queue`）決定號碼存在哪裡：
+
+| `mode` | 號碼存在 | 樹莓派、叫號螢幕、客人的 QR |
+|---|---|---|
+| `legacy` | 原本的叫號伺服器（`queue.legacyUrl`，例：`https://yellowgirl.up.railway.app`）；後台代轉，iPad 不直接連 | 照舊，不用改 |
+| `native` | 後台自己的資料庫（一次一筆、鎖住再改，不會互相覆蓋；每天 `resetHour` 點後第一次用到時歸零） | 樹莓派 `server_url.txt` 改成 `{CMS 前台}/api/pos/queue/status`、`qr_url.txt` 改成 `{前台}/q?no={number}&waiting={waiting}` |
+
+開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, printOnDevice, customerUrl }`（`printOnDevice`＝沒有樹莓派的店由 iPad 的出單機印號碼牌；
+`customerUrl` 是印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉）。
+
+### `GET /queue` → 現在的狀態
+
+```json
+{ "mode": "native", "current": 23, "waiting": [24, 25, 26], "missed": [19], "marked": [25],
+  "nextNo": 27, "calledAt": "2026-10-04T07:12:00.000Z", "updatedAt": "2026-10-04T07:12:00.000Z",
+  "takenAt": { "24": "2026-10-04T07:01:10.000Z", "25": "…", "26": "…" }, "servedToday": 22 }
+```
+- `current`：現在叫到的號碼（沒有就不出現）；`waiting`：照順序；`missed`：過號；`marked`：標記（店員自己看的星號）
+- `calledAt`、`takenAt`、`servedToday`：只有 `native` 才有（舊伺服器沒記）
+
+### 動作：`POST /queue/<action>` → 改完的狀態（和 `GET /queue` 一樣）
+
+| 動作 | body | 做什麼 |
+|---|---|---|
+| `take` | `{ "count": 1–20, "requestId": "<uuid>" }` | 取號：`nextNo` 起連續 `count` 張加到 `waiting` 最後。回應多一個 `"numbers": [27, 28]`。同一個 `requestId` 十分鐘內重送不會再取（`native`） |
+| `next` | `{ "requestId" }` | 叫下一號：`waiting` 第一個變成 `current`（原本的 `current` 算服務完了，順便取消它的標記）；`waiting` 空的＝`current` 清掉 |
+| `miss` | `{ "requestId" }` | 過號：`current` 移到 `missed`，自動叫下一號 |
+| `previous` | | 返回前一號：`current` 放回 `waiting` 最前面。沒有在叫的回 `400 nothing_called` |
+| `recall` | `{ "number": 19 }` | 再叫一次過號的：從 `missed` 拿出來變成 `current`。只有 `native`（舊伺服器沒有這個動作，回 `409 unsupported`） |
+| `unmiss` | `{ "number": 19 }` | 從過號清單刪掉（同時取消標記） |
+| `mark`／`unmark` | `{ "number": 25 }` | 標記／取消標記 |
+| `reset` | `{ "staffId": "…" }` | 全部歸零（iPad 先要店長 PIN） |
+
+錯誤：`409 queue_off`（後台沒開叫號）、`502 upstream`（`legacy` 模式連不到原本的伺服器；iPad 顯示「叫號伺服器連不上」，不要重試動作類的請求）。
+iPad 在叫號頁每 2 秒 `GET /queue`；動作的回應直接拿來更新畫面。叫號要網路（和原本的 App 一樣），斷線時這一頁只能看不能按。
+
+### 公開的（不用登入，只有 `native`）
+
+- `GET /api/pos/queue/status` → `{ "current": 23, "waiting": [24, 25], "missed": [19], "marked": [], "next_no": 27 }`：
+  和原本叫號伺服器的 `/status` **一模一樣的格式**（樹莓派只要換網址）；允許跨網域、不快取
+- `GET /q?no=24` → 給客人看的頁面：現在叫到幾號、你前面還有幾位，每 5 秒更新
+
+範例：`samples/queue-state.json`。
+
 ## 歷史
 
 `GET /history?date=2026-10-01` → 那一個營業日所有裝置的資料（iPad 只留最近兩天，更早的跟後台要）：
