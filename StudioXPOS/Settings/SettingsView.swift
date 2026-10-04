@@ -1642,6 +1642,13 @@ private struct SettingsReceiptsSection: View {
                 Toggle(isOn: $settings.printKitchenTickets) {
                     SettingsToggleLabel(title: "印廚房出單", detail: "送單、催菜、作廢時，印到負責那一站的出單機")
                 }
+                if settings.printKitchenTickets && model.takesPayment {
+                    Rule(color: Theme.hair)
+                    Toggle(isOn: $settings.printKitchenForOthers) {
+                        SettingsToggleLabel(title: "幫手機出廚房單",
+                                            detail: "前場的手機沒有出單機：它送的單由這台印到廚房。有好幾台櫃台時只留一台打開，才不會印兩張")
+                    }
+                }
                 Rule(color: Theme.hair)
                 Toggle(isOn: $settings.openDrawerOnCash) {
                     SettingsToggleLabel(title: "收現金時開錢櫃", detail: "收現金、現金退款時自動打開")

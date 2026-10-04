@@ -6,9 +6,11 @@ import POSSync
 import SwiftUI
 
 /// 結帳（工作區）：應收多少、怎麼付（可以分好幾種）、發票怎麼開、會員。
-/// 金額一律在右側鍵盤打：現金有「剛好」與湊整的快速鍵，刷卡、電子支付預設剩下的全部
+/// 金額一律在右側鍵盤打：現金有「剛好」與湊整的快速鍵，刷卡、電子支付預設剩下的全部。
+/// 手機（寬度 compact，這支手機打開「也能收款」時）：付款方式、發票、會員由上往下排，金額在下面升起的鍵盤打
 struct PaymentView: View {
     @Environment(POSModel.self) private var model
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let ticketId: String
 
     @State private var carrierText = ""
@@ -28,12 +30,16 @@ struct PaymentView: View {
         }
     }
 
+    private var compact: Bool { sizeClass == .compact }
+
     private func content(_ t: Ticket) -> some View {
         let x = t.totals
+        // 手機：兩欄改成上下排
+        let columns = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 24)) : AnyLayout(HStackLayout(alignment: .top, spacing: 24))
         return ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: compact ? 22 : 28) {
                 header(t, x)
-                HStack(alignment: .top, spacing: 24) {
+                columns {
                     VStack(alignment: .leading, spacing: 24) {
                         tenders(t, x)
                         if !shares.isEmpty { sharesView }
@@ -47,7 +53,7 @@ struct PaymentView: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
             }
-            .padding(24)
+            .padding(compact ? 16 : 24)
         }
         .scrollIndicators(.hidden)
         .safeAreaInset(edge: .bottom) { footer(t, x) }
@@ -65,7 +71,27 @@ struct PaymentView: View {
 
     // MARK: 上面：應收
 
+    @ViewBuilder
     private func header(_ t: Ticket, _ x: TicketTotals) -> some View {
+        if compact {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Eyebrow("結帳・\(t.number)・\(t.title(floor: model.floor))")
+                    Headline(x.isPaidInFull ? "All *paid*" : "Collect *payment*", role: .h2)
+                }
+                HStack(alignment: .bottom, spacing: 20) {
+                    stat("應收", x.amountDue, role: .number, color: Theme.ink2)
+                    if x.paid.cents > 0 { stat("已收", x.paid, role: .number, color: Theme.successFG) }
+                    Spacer(minLength: 0)
+                    stat(x.balance.isNegative ? "多收" : "尚欠", Money(cents: abs(x.balance.cents)), role: .stat, color: x.balance.isNegative ? Theme.dangerFG : Theme.ink)
+                }
+            }
+        } else {
+            regularHeader(t, x)
+        }
+    }
+
+    private func regularHeader(_ t: Ticket, _ x: TicketTotals) -> some View {
         HStack(alignment: .bottom, spacing: 28) {
             VStack(alignment: .leading, spacing: 6) {
                 Eyebrow("結帳・\(t.number)・\(t.title(floor: model.floor))")
@@ -590,12 +616,12 @@ struct PaymentView: View {
                 .foregroundStyle(Theme.ink)
                 .contentTransition(.numericText(value: Double(x.isPaidInFull ? x.paid.cents : x.balance.cents)))
             Spacer(minLength: 8)
-            Text(x.isPaidInFull ? "右邊「完成結帳」" : "選付款方式，在右邊打金額")
+            Text(x.isPaidInFull ? (compact ? "下面「完成結帳」" : "右邊「完成結帳」") : (compact ? "選付款方式，再打金額" : "選付款方式，在右邊打金額"))
                 .textRole(.small)
                 .foregroundStyle(Theme.muted)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 24)
+        .padding(.horizontal, compact ? 16 : 24)
         .padding(.vertical, 14)
         .background(Theme.page.opacity(0.96))
         .overlay(alignment: .top) { Rule() }

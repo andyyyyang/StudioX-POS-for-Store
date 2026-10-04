@@ -45,6 +45,7 @@ struct MenuView: View {
         }
         .animation(Motion.ease, value: model.modifierItem)
         .animation(Motion.ease, value: model.variantItem)
+        // 結帳櫃台：手機送來結帳的單（還沒開單時在右欄，大鍵「去結帳」）
         .onAppear {
             if categoryId == nil { categoryId = model.catalog.categories.first?.id }
         }

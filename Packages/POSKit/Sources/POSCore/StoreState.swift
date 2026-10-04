@@ -213,6 +213,8 @@ public struct StoreState: Codable, Sendable, Hashable {
         case .billPrinted(let b):
             guard var t = tickets[b.ticketId] else { return }
             t.billPrintedAt = at
+            // 送到結帳櫃台（手機、報到接待）記從哪裡來；之後在櫃台真的印了結帳單就是印的
+            t.billSentFrom = b.sentFrom
             tickets[t.id] = t
 
         case .paymentAdded(let p):

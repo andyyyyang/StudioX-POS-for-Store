@@ -3,6 +3,7 @@ import POSCore
 import POSInvoice
 import POSPrinting
 import POSSync
+import SwiftUI
 
 /// 櫃台查會員的結果（報到、預約、課程報名共用）
 enum FrontDeskLookup {
@@ -198,7 +199,7 @@ extension POSModel {
         }
         await markAppointment(r, status: .seated, ticketId: t.id)
         selectedTicketId = t.id
-        show("\(name.isEmpty ? t.number : name) 開始服務・\(t.number)" + (role.takesPayment ? "" : "・已同步到結帳櫃台"))
+        show("\(name.isEmpty ? t.number : name) 開始服務・\(t.number)" + (takesPayment ? "" : "・已同步到結帳櫃台"))
         return state.tickets[t.id]
     }
 
@@ -223,7 +224,7 @@ extension POSModel {
         }
         guard let t = openTicket(type: mode.defaultOrderType, member: ref) else { return nil }
         let who = ref.map { $0.name ?? $0.maskedPhone } ?? "現場客"
-        show("\(who) 開單・\(t.number)" + (role.takesPayment ? "" : "・已同步到結帳櫃台"))
+        show("\(who) 開單・\(t.number)" + (takesPayment ? "" : "・已同步到結帳櫃台"))
         return t
     }
 
@@ -290,7 +291,7 @@ extension POSModel {
 
     /// 開好單之後：會收錢的崗位直接結帳；報到接待（不收錢）交給結帳櫃台
     func checkoutOrHandOff(_ t: Ticket) {
-        if role.takesPayment {
+        if takesPayment {
             beginCheckout(t)
         } else {
             let who = t.member.map { $0.name ?? $0.maskedPhone } ?? t.number

@@ -75,6 +75,8 @@ struct FloorView: View {
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .dockSelection(dockItem)
+        // 結帳櫃台：手機送來結帳的單（沒選桌子、沒在排桌位時在右欄）
+        .checkoutHandoffDock(enabled: !editing)
         .onAppear {
             restoreArea()
             // 截圖：先選一桌用餐中的
@@ -95,32 +97,7 @@ struct FloorView: View {
     private var anim: Animation? { reduceMotion ? nil : Motion.ease }
 
     private func info(_ t: DiningTable, soon: Set<String>, now: Date) -> FloorTableInfo {
-        let tickets = model.state.openTickets(at: t.id)
-        let upcoming = model.reservations
-            .filter { $0.kind == .reservation && $0.status.isActive && $0.tableIds.contains(t.id) && $0.startsAt > now.addingTimeInterval(-15 * 60) }
-            .min { $0.startsAt < $1.startsAt }
-
-        // 要注意（桌子右上角的橘點）：餐好了要上、印了結帳單還沒付、超過用餐時間、15 分鐘內有訂位
-        var attention: [String] = []
-        let ready = tickets.flatMap(\.lines).filter { $0.isActive && $0.kitchen == .ready }.reduce(0) { $0 + $1.quantity }
-        if ready > 0 { attention.append("\(ready) 份餐好了，可以上菜") }
-        if tickets.contains(where: { $0.billPrintedAt != nil }) { attention.append("結帳單印了，等客人付款") }
-        let limit = model.store.tableTimeLimitMinutes
-        if limit > 0, let opened = tickets.map(\.openedAt).min() {
-            let m = Int(now.timeIntervalSince(opened) / 60)
-            if m > limit { attention.append("超過用餐時間 \(m - limit) 分鐘") }
-        }
-        if let r = upcoming, r.startsAt <= now.addingTimeInterval(15 * 60) {
-            attention.append("\(r.startsAt.clockText) \(r.name) \(r.partySize) 位訂了這桌")
-        }
-
-        return FloorTableInfo(
-            table: t,
-            status: model.state.status(of: t.id, reservedSoon: soon),
-            tickets: tickets,
-            reservation: upcoming,
-            attention: attention
-        )
+        FloorTableInfo.make(t, model: model, soon: soon, now: now)
     }
 
     /// 回到桌位時：停在右邊那張單所在的區域
@@ -504,11 +481,6 @@ struct FloorView: View {
         }
     }
 
-    private func printBill(_ ticket: Ticket) {
-        model.printBill(ticket)
-        model.show("已送出 \(ticket.title(floor: model.floor)) 的結帳單")
-    }
-
     /// 這台有點餐頁（報到接待沒有：只把單子打開在旁邊）
     private var canOrderHere: Bool { model.visibleSections.contains(.order) }
 
@@ -535,13 +507,7 @@ struct FloorView: View {
     }
 
     private func eligible(_ i: FloorTableInfo, for p: FloorPick) -> Bool {
-        guard let source = model.state.tickets[p.ticketId] else { return false }
-        switch p {
-        case .move:
-            return (i.status == .available || i.status == .reserved) && !source.tableIds.contains(i.table.id)
-        case .merge:
-            return i.tickets.contains { $0.id != source.id }
-        }
+        i.accepts(p, in: model.state)
     }
 
     private func finishPick(_ p: FloorPick, at i: FloorTableInfo) {
@@ -595,71 +561,16 @@ struct FloorView: View {
         return actions.isEmpty ? nil : DockSelection.page("floor", actions: actions)
     }
 
+    /// 選起來的一桌：動作和手機的桌位清單同一份（TableDock）
     private func tableDock(_ i: FloorTableInfo) -> DockSelection {
-        let t = i.table
-        let badge = DockBadge(i.status.label, tone: Self.tone(i.status))
-        let id = "table-\(t.id)"
-        switch i.status {
-        case .available:
-            // 大鍵：入座（右邊鍵盤問人數）；這桌有訂位就多一個「訂位入座」
-            var actions: [POSAction] = []
-            if let r = i.reservation {
-                actions.append(POSAction("訂位入座：\(r.name)", icon: "calendar-days") { seatReservation(r, at: t) })
-            }
-            var detail = "空桌・\(t.seats) 人桌"
-            if let r = i.reservation { detail += "・\(r.startsAt.clockText) \(r.name) \(r.partySize) 位訂了這桌" }
-            return DockSelection(id: id, kind: "桌位", title: t.name, detail: detail, badge: badge,
-                                 primary: POSAction("入座", icon: "users") { seat(t) },
-                                 actions: actions, clear: { deselect() })
-        case .reserved:
-            if let r = i.reservation {
-                return DockSelection(id: id, kind: "桌位", title: t.name,
-                                     detail: "\(r.startsAt.clockText) \(r.name) \(r.partySize) 位", badge: badge,
-                                     primary: POSAction("\(r.name) 到了，入座", icon: "check") { seatReservation(r, at: t) },
-                                     actions: [POSAction("帶其他客人", icon: "users") { seat(t) }], clear: { deselect() })
-            }
-            return DockSelection(id: id, kind: "桌位", title: t.name, detail: "\(t.seats) 人桌", badge: badge,
-                                 primary: POSAction("入座", icon: "users") { seat(t) }, clear: { deselect() })
-        case .needsCleaning:
-            return DockSelection(id: id, kind: "桌位", title: t.name, detail: "結完帳了，桌面整理好就改回空桌", badge: badge,
-                                 primary: POSAction("清桌", icon: "sparkles") { clean(t, thenSeat: false) },
-                                 actions: [POSAction("清好了，直接入座", icon: "users") { clean(t, thenSeat: true) }],
-                                 clear: { deselect() })
-        case .seated, .ordering, .billing:
-            guard let ticket = i.tickets.first(where: { $0.id == cardTicketId }) ?? i.tickets.first else {
-                return DockSelection(id: id, kind: "桌位", title: t.name, badge: badge, clear: { deselect() })
-            }
-            return occupiedDock(i, ticket: ticket, badge: badge)
-        }
-    }
-
-    /// 用餐中：大鍵看桌況（剛入座＝點餐、點過＝加點、印了結帳單＝結帳）；其他是動作鍵
-    private func occupiedDock(_ i: FloorTableInfo, ticket: Ticket, badge: DockBadge) -> DockSelection {
-        let t = i.table
-        let pays = model.role.takesPayment
-        let checkout = POSAction("結帳", icon: "credit-card") { model.beginCheckout(ticket) }
-        let orderTitle = canOrderHere ? (ticket.lines.isEmpty ? "點餐" : "加點") : "看單"
-        let orderAction = POSAction(orderTitle, icon: "squares-2x2") { order(ticket) }
-        let billingFirst = pays && i.status == .billing
-        var actions: [POSAction] = []
-        if billingFirst {
-            actions.append(orderAction)
-        } else if pays {
-            actions.append(checkout)
-        }
-        actions.append(POSAction("印結帳單", icon: "printer") { printBill(ticket) })
-        actions.append(POSAction("改人數", icon: "user-group") { Task { await model.setGuests(ticket) } })
-        actions.append(POSAction("換桌", icon: "arrows-right-left") { startPick(.move(ticketId: ticket.id)) })
-        actions.append(POSAction("併桌", icon: "link") { startPick(.merge(ticketId: ticket.id)) })
-        let minutes = max(0, Int(Date().timeIntervalSince(ticket.openedAt) / 60))
-        var parts = ["\(ticket.guests) 位", "\(minutes) 分", ticket.totals.amountDue.formatted]
-        if i.tickets.count > 1 { parts.insert("\(ticket.number)（共 \(i.tickets.count) 張單）", at: 0) }
-        // 報到接待不收錢：結帳在結帳櫃台
-        if !pays { parts.append("已同步到結帳櫃台") }
-        return DockSelection(id: "table-\(t.id)-\(ticket.id)", kind: "桌位", title: t.name,
-                             detail: parts.joined(separator: "・"), badge: badge,
-                             primary: billingFirst ? checkout : orderAction,
-                             actions: actions, clear: { deselect() })
+        TableDock(model: model, cardTicketId: cardTicketId,
+                  seat: { seat($0) },
+                  seatReservation: { seatReservation($0, at: $1) },
+                  clean: { clean($0, thenSeat: $1) },
+                  order: { order($0) },
+                  startPick: { startPick($0) },
+                  deselect: { deselect() })
+            .selection(i)
     }
 
     /// 換桌、併桌：等著點目的地
@@ -700,16 +611,6 @@ struct FloorView: View {
         }
         actions.append(POSAction("不存了，離開", icon: "x-mark", destructive: true) { cancelEditing() })
         return DockSelection.page("floor-edit", primary: saveAction, accent: true, actions: actions)
-    }
-
-    private static func tone(_ s: TableStatus) -> Tone {
-        switch s {
-        case .available: .neutral
-        case .reserved: .info
-        case .seated, .ordering: .gold
-        case .billing: .warning
-        case .needsCleaning: .danger
-        }
     }
 
     // MARK: - 桌子旁邊的卡片（只給看）
@@ -808,9 +709,9 @@ struct FloorView: View {
             if !i.attention.isEmpty {
                 attentionList(i.attention)
             }
-            if !model.role.takesPayment {
-                // 報到接待不收錢：結帳在結帳櫃台
-                Text("\(ticket.number)・\(ticket.totals.amountDue.formatted) 已同步到結帳櫃台")
+            if !model.takesPayment {
+                // 不收錢的崗位（報到接待、前場的手機）：結帳在結帳櫃台
+                Text("\(ticket.number)・\(ticket.totals.amountDue.formatted) " + (ticket.billSentFrom != nil ? "已送到結帳櫃台" : "已同步到結帳櫃台"))
                     .font(.brand(13, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.infoFG)
@@ -1385,38 +1286,9 @@ struct FloorView: View {
     }
 }
 
-// MARK: - 資料
-
-/// 換桌、併桌：先選單子，再點目的地
-private enum FloorPick: Equatable {
-    case move(ticketId: String)
-    case merge(ticketId: String)
-
-    var ticketId: String {
-        switch self {
-        case .move(let id), .merge(let id): id
-        }
-    }
-}
-
-/// 一桌現在的樣子（畫面用，不存）
-private struct FloorTableInfo: Identifiable {
-    let table: DiningTable
-    let status: TableStatus
-    let tickets: [Ticket]
-    /// 這桌接下來的訂位（還沒到、沒取消）
-    let reservation: Reservation?
-    /// 要注意的事（有就在桌子右上角點橘點，卡片上一條一條列出來）
-    let attention: [String]
-
-    var id: String { table.id }
-    var isOccupied: Bool { !tickets.isEmpty }
-    var guests: Int { tickets.reduce(0) { $0 + $1.guests } }
-    /// 最早開的那張單（用餐多久從這裡算）
-    var openedAt: Date? { tickets.map(\.openedAt).min() }
-}
-
 // MARK: - 一桌：桌面＋椅子
+
+// 資料（FloorPick、FloorTableInfo）與選起來之後的動作（TableDock）在 TableDock.swift，和手機的桌位清單共用
 
 /// 一張椅子：中心點、轉幾度（弧度）、長、厚
 private struct FloorChair {
@@ -1801,7 +1673,7 @@ private struct FloorCount: View {
 }
 
 /// 桌況的小標籤（顏色＋字）
-private struct FloorStatusTag: View {
+struct FloorStatusTag: View {
     let status: TableStatus
 
     var body: some View {

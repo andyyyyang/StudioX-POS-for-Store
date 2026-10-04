@@ -5,10 +5,15 @@
 	<!-- 其他的 Info.plist 欄位由 Xcode 產生（project.pbxproj 的 INFOPLIST_KEY_*）；這裡只放它產生不了的 -->
 	<key>NSBonjourServices</key>
 	<array>
-		<!-- 同一家店的 iPad 互相找（區網同步） -->
+		<!-- 同一家店的 iPad、iPhone 互相找（區網同步） -->
 		<string>_studiox-pos._tcp</string>
 		<!-- 找網路出單機（Epson、Star） -->
 		<string>_pdl-datastream._tcp</string>
+	</array>
+	<!-- iPhone（店員手上的點餐機）只用直的；iPad 的方向在 project.pbxproj（INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad）-->
+	<key>UISupportedInterfaceOrientations~iphone</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>

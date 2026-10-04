@@ -321,6 +321,10 @@ final class POSModel {
         if added > 0 { remoteActivity = "其他裝置加點了 \(added) 項" }
         let closed = events.filter { if case .ticketClosed = $0.body { true } else { false } }.count
         if closed > 0 { remoteActivity = "其他裝置結帳了 \(closed) 張單" }
+        // 統一結帳：手機送來結帳 → 櫃台提示；送出去的單結好了 → 手機提示（POSModel+Handoff）
+        noteHandoffs(in: events)
+        // 手機送的單：這台幫忙印廚房單（POSModel+KitchenRelay）
+        relayKitchenPrints(in: events)
     }
 
     func refreshState() {
@@ -572,9 +576,9 @@ final class POSModel {
     var usesMembersPage: Bool { features.members && (mode.wantsCustomer || features.accounts) }
 
     /// 這台的崗位：店長在 iPad 上改過的，否則後台配對時給的
+    /// iPhone 是店員手上的點餐機：一律當「前場點餐」（後廚、出餐口照舊；POSModel+Phone）
     var role: DeviceRole {
-        if let r = DeviceRole(rawValue: settings.workstation) { return r }
-        return device.role
+        phoneRole(DeviceRole(rawValue: settings.workstation) ?? device.role)
     }
 
     /// 換崗位（nil＝回到後台給的）：要店長授權；換了之後照新崗位的首頁
@@ -607,7 +611,7 @@ final class POSModel {
     var visibleSections: [AppSection] {
         let allowed: Set<AppSection> = switch role {
         case .register: Set(AppSection.allCases)
-        case .handheld: [.order, .floor, .appointments, .checkIn, .orders, .members, .reservations, .settings]
+        case .handheld: [.order, .floor, .appointments, .checkIn, .queue, .orders, .members, .reservations, .settings]
         case .reception: [.floor, .appointments, .checkIn, .queue, .members, .reservations, .orders, .settings]
         case .kitchen: [.kitchen, .orders, .settings]
         // 出餐口：叫號（取餐號碼牌）也在這裡
@@ -675,7 +679,7 @@ final class POSModel {
 
     /// 剩不到 10 張、或下一期快開始（最後 3 天）就跟後台要一段
     func topUpInvoiceRolls() async {
-        guard let api, features.invoice, invoiceSettings.enabled, role.issuesInvoices else { return }
+        guard let api, features.invoice, invoiceSettings.enabled, issuesInvoices else { return }
         var periods = [invoicePeriod]
         if invoicePeriod.endsAt.timeIntervalSinceNow < 3 * 86_400 { periods.append(invoicePeriod.next) }
         for p in periods where allocator.needsMore(period: p) {
@@ -703,6 +707,8 @@ final class LocalSettings {
     /// 交易明細：always 每張都印、ask 問客人、never 不印
     var receiptMode: String { didSet { d.set(receiptMode, forKey: "receiptMode") } }
     var printKitchenTickets: Bool { didSet { d.set(printKitchenTickets, forKey: "printKitchenTickets") } }
+    /// 幫前場的手機印廚房單（手機沒有出單機時，送單由這台印）。有好幾台櫃台時只留一台打開
+    var printKitchenForOthers: Bool { didSet { d.set(printKitchenForOthers, forKey: "printKitchenForOthers") } }
     var consoleURLString: String { didSet { d.set(consoleURLString, forKey: "consoleURL") } }
     var openDrawerOnCash: Bool { didSet { d.set(openDrawerOnCash, forKey: "openDrawerOnCash") } }
     /// 這台的營業模式（ServiceMode 的 rawValue；空的＝用後台的預設）
@@ -729,6 +735,7 @@ final class LocalSettings {
         autoLockMinutes = d.object(forKey: "autoLockMinutes") as? Int ?? 5
         receiptMode = d.string(forKey: "receiptMode") ?? "ask"
         printKitchenTickets = d.object(forKey: "printKitchenTickets") as? Bool ?? true
+        printKitchenForOthers = d.object(forKey: "printKitchenForOthers") as? Bool ?? true
         consoleURLString = d.string(forKey: "consoleURL") ?? "https://console.studiox.tw"
         openDrawerOnCash = d.object(forKey: "openDrawerOnCash") as? Bool ?? true
         serviceMode = d.string(forKey: "serviceMode") ?? ""

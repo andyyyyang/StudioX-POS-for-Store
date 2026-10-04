@@ -1,3 +1,4 @@
+import Foundation
 import POSCore
 import POSInvoice
 import POSPrinting
@@ -22,8 +23,9 @@ struct StudioXPOSApp: App {
                 .environment(\.locale, Locale(identifier: "zh_Hant_TW"))
                 .tint(Theme.primary)
                 .preferredColorScheme(model.settings.colorScheme)
-                // 收銀台滿版：不要系統的時間列（時間在側欄、鎖定畫面）；iPadOS 的視窗模式下系統還是會顯示，畫面的底色照樣延伸到最上緣
-                .statusBarHidden(true)
+                // 收銀台滿版：不要系統的時間列（時間在側欄、鎖定畫面）；iPadOS 的視窗模式下系統還是會顯示，畫面的底色照樣延伸到最上緣。
+                // iPhone（店員手上的點餐機）照常顯示時間列、電量
+                .statusBarHidden(!model.isPhone)
                 .onOpenURL { model.handle($0) }
         }
         .commands {
@@ -93,12 +95,23 @@ struct RootView: View {
                 LockView()
                     .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .top).combined(with: .opacity)))
             case .ready:
-                MainShell()
-                    .transition(.opacity)
+                // iPhone：上面選、下面做（PhoneShell）；iPad：四欄的收銀台
+                if model.isPhone {
+                    PhoneShell()
+                        .transition(.opacity)
+                } else {
+                    MainShell()
+                        .transition(.opacity)
+                }
             }
         }
         .animation(Motion.inOut, value: model.phase)
-        .overlay(alignment: .bottom) { ToastHost() }
+        // 手機的提示在上面（下面是分頁與動作）；收銀台的畫面裡由 PhoneShell 自己放（才不會被單子的 sheet 蓋住）
+        .overlay(alignment: model.isPhone ? .top : .bottom) {
+            if !(model.isPhone && model.phase == .ready) {
+                ToastHost(edge: model.isPhone ? .top : .bottom)
+            }
+        }
         .alert(model.alert?.title ?? "", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } }), presenting: model.alert) { _ in
             Button("知道了", role: .cancel) {}
         } message: { a in
@@ -107,6 +120,8 @@ struct RootView: View {
         .task {
             if model.phase == .launching { model.launch() }
             model.requestLandscapeIfAsked()
+            // 手機在店員口袋裡：照系統的設定自動關螢幕（收銀台的 iPad 不睡）
+            if model.isPhone { UIApplication.shared.isIdleTimerDisabled = false }
         }
         .onChange(of: model.phase) { _, p in
             // 截圖、自動測試：鎖定畫面一出現就照參數登入、開頁
@@ -132,9 +147,10 @@ struct LaunchView: View {
     }
 }
 
-/// 畫面下方的一句話，2.6 秒後收起來
+/// 畫面下方（手機是上方）的一句話，2.6 秒後收起來
 struct ToastHost: View {
     @Environment(POSModel.self) private var model
+    var edge: VerticalEdge = .bottom
 
     var body: some View {
         ZStack {
@@ -150,8 +166,9 @@ struct ToastHost: View {
                 .padding(.vertical, 14)
                 .background(Theme.inverse, in: .capsule)
                 .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
-                .padding(.bottom, 28)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .padding(edge == .bottom ? .bottom : .top, edge == .bottom ? 28 : 8)
+                .padding(.horizontal, edge == .top ? 16 : 0)
+                .transition(.move(edge: edge == .bottom ? .bottom : .top).combined(with: .opacity))
                 .id(t.id)
                 .task(id: t.id) {
                     try? await Task.sleep(for: .seconds(2.6))

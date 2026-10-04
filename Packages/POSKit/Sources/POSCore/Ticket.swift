@@ -320,6 +320,7 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
     public var openedAt: Date
     public var openedBy: String
     public var businessDate: String
+    /// 待結帳：印了結帳單、或從不收錢的裝置「送到結帳櫃台」的時間
     public var billPrintedAt: Date?
     public var closedAt: Date?
     public var closedBy: String?
@@ -342,6 +343,8 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
     public var appointmentId: String?
     /// 結帳後同款換規格的紀錄
     public var swaps: [VariantSwap]?
+    /// 從哪裡送到結帳櫃台的（「手機」「報到接待」）；nil＝結帳單是印出來的（或還沒待結帳）
+    public var billSentFrom: String?
 
     public init(
         id: String, number: String, deviceId: String, orderType: OrderType, tableIds: [String] = [], guests: Int = 0,
@@ -351,7 +354,7 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
         billPrintedAt: Date? = nil, closedAt: Date? = nil, closedBy: String? = nil, voidInfo: VoidInfo? = nil,
         splitFrom: String? = nil, customerName: String? = nil, mergedInto: String? = nil, closedDeviceId: String? = nil,
         serviceMode: ServiceMode? = nil, salespersonId: String? = nil, exchange: ExchangeCredit? = nil, appointmentId: String? = nil,
-        swaps: [VariantSwap]? = nil
+        swaps: [VariantSwap]? = nil, billSentFrom: String? = nil
     ) {
         self.id = id; self.number = number; self.deviceId = deviceId; self.orderType = orderType; self.tableIds = tableIds
         self.guests = guests; self.lines = lines; self.discount = discount; self.serviceChargeBps = serviceChargeBps; self.tip = tip
@@ -361,7 +364,7 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
         self.voidInfo = voidInfo; self.splitFrom = splitFrom; self.customerName = customerName
         self.mergedInto = mergedInto; self.closedDeviceId = closedDeviceId
         self.serviceMode = serviceMode; self.salespersonId = salespersonId; self.exchange = exchange
-        self.appointmentId = appointmentId; self.swaps = swaps
+        self.appointmentId = appointmentId; self.swaps = swaps; self.billSentFrom = billSentFrom
     }
 
     public var activeLines: [TicketLine] { lines.filter(\.isActive) }

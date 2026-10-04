@@ -1,6 +1,7 @@
 import Foundation
 import POSCore
 import POSInvoice
+import POSPrinting
 import POSSync
 import SwiftUI
 
@@ -58,6 +59,7 @@ struct OrdersView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .dockSelection(dockItem)
+        // 結帳櫃台：手機送來結帳的單（沒選單子時在右欄）
         .dockPanel(isPresented: Binding(get: { voidingTicketId != nil }, set: { if !$0 { voidingTicketId = nil } }),
                    title: "作廢整張單", subtitle: voidSubtitle) {
             voidChoices
@@ -95,7 +97,7 @@ struct OrdersView: View {
                 model.go(.order)
             }
             : nil
-        let checkout: POSAction? = model.role.takesPayment
+        let checkout: POSAction? = model.takesPayment
             ? POSAction("結帳", icon: "credit-card", enabled: !t.activeLines.isEmpty) { model.beginCheckout(t) }
             : nil
         var actions: [POSAction] = []
@@ -818,7 +820,7 @@ private struct OrdersTicketCard: View {
             }
             Spacer(minLength: 4)
             if ticket.billPrintedAt != nil {
-                StatusBadge("已印結帳單", tone: .warning)
+                StatusBadge(ticket.billSentFrom.map { "\($0)送來結帳" } ?? "已印結帳單", tone: .warning)
             }
         }
     }
@@ -1590,7 +1592,7 @@ private struct OrdersSaleDetail: View {
     private var refunded: Money { Money.sum(refunds.map(\.amount)) }
     /// 這台還有這張單（最近兩天）：可以退款、換貨、改發票；更早的只在後台
     private var isEditable: Bool { model.state.sales[sale.ticketId] != nil }
-    private var issuesInvoices: Bool { isEditable && model.role.issuesInvoices }
+    private var issuesInvoices: Bool { isEditable && model.issuesInvoices }
     private var refundable: Money { sale.total + sale.tip - refunded }
     private var invoiceEnabled: Bool { model.features.invoice && model.invoiceSettings.enabled }
     private var buyerKind: OrdersBuyerKind { OrdersBuyerKind(stamp?.buyer) }
@@ -1617,7 +1619,7 @@ private struct OrdersSaleDetail: View {
     }
 
     /// 退款要能收錢的崗位，而且這台還有這張單
-    private var canRefund: Bool { isEditable && model.role.takesPayment }
+    private var canRefund: Bool { isEditable && model.takesPayment }
 
     /// 還有可以退回的商品、還在換貨期限內（換貨單會開在這台，要能開單）
     private var canExchangeNow: Bool {

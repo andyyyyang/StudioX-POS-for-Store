@@ -36,6 +36,8 @@ struct MainShell: View {
                     StatusBanners()
                     workspace
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // 別台（手機、報到接待）送來結帳的單：每一頁都在右欄等著「去結帳」（這一頁自己選了東西時讓開）
+                        .checkoutHandoffDock()
                 }
                 // 直的 iPad 單子收起來時，單子欄照樣在（看不到）：整張單的動作（送單、結帳…）才會出現在右欄
                 .background {
@@ -345,6 +347,8 @@ struct SidebarRail: View {
             // 已到店、等著開始的預約
             model.reservations.filter { $0.kind == .appointment && $0.status == .arrived }.count
         case .queue: model.queue.state?.waiting.count ?? 0
+        // 待結帳（前場的手機、報到接待送來的）
+        case .orders: model.awaitingCheckoutCount
         default: 0
         }
     }

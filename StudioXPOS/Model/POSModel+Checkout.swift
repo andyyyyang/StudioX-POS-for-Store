@@ -3,6 +3,7 @@ import POSCore
 import POSInvoice
 import POSPrinting
 import POSSync
+import SwiftUI
 
 /// 結帳：收款（可以分好幾種付）、發票（紙本／載具／統編／捐贈）、結帳、印；退款、補開、改統編
 extension POSModel {
@@ -13,7 +14,7 @@ extension POSModel {
             show("還沒有點東西", tone: .warning)
             return
         }
-        guard role.takesPayment else {
+        guard takesPayment else {
             show("這台是「\(role.label)」，請到結帳櫃台結帳（單子已經同步過去了）", tone: .info)
             return
         }
@@ -301,7 +302,7 @@ extension POSModel {
     /// lines：退哪幾件（服飾、課程卡、儲值）——金額照原單實收算好、不再問；庫存、課程卡、儲值金跟著退
     func refund(_ sale: SaleRecord, tender: Tender, reason: String, lines: [String: Int] = [:]) async {
         guard let t = state.tickets[sale.ticketId], let me = currentStaff else { return }
-        guard role.takesPayment else {
+        guard takesPayment else {
             show("這台是「\(role.label)」，退款請到結帳櫃台", tone: .info)
             return
         }

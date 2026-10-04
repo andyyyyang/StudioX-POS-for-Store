@@ -14,6 +14,8 @@ import SwiftUI
 /// 服飾多了整張單的銷售人員與換貨；美業、課程多了會員條（儲值金、課程卡）、每一行的設計師／教練與助理、用課程卡抵。
 struct TicketColumn: View {
     @Environment(POSModel.self) private var model
+    /// 截圖（-preselect）時先選起第一行；看不到的那一份（直的 iPad、手機只為了交出整張單的動作）不要選
+    var preselects = true
     @State private var splitting: Ticket?
     @State private var noteFor: TicketLine?
     @State private var noteText = ""
@@ -74,7 +76,7 @@ struct TicketColumn: View {
         }
         // 截圖：先選起第一行（只在 Debug、帶 -preselect）
         .task(id: model.selectedTicketId) {
-            if LaunchArguments.preselect { preselectForScreenshot() }
+            if preselects && LaunchArguments.preselect { preselectForScreenshot() }
         }
         .sheet(item: $splitting) { t in
             SplitSheet(ticket: t)
@@ -273,7 +275,7 @@ struct TicketColumn: View {
                 HStack(spacing: 8) {
                     if showsOrderChip(t) { StatusBadge(orderChipText(t), tone: .neutral) }
                     if model.mode.staffPerTicket { salespersonTag(t) }
-                    if t.billPrintedAt != nil { StatusBadge("已印結帳單", tone: .warning) }
+                    if t.billPrintedAt != nil { StatusBadge(billBadge(t), tone: .warning) }
                 }
             }
             if let x = t.exchange {
@@ -302,6 +304,12 @@ struct TicketColumn: View {
             }
         }
         .animation(Motion.fast, value: memberOpen)
+    }
+
+    /// 待結帳的標籤：印了結帳單、或送到結帳櫃台（櫃台看到的是「手機送來結帳」）
+    private func billBadge(_ t: Ticket) -> String {
+        guard let from = t.billSentFrom else { return "已印結帳單" }
+        return model.role.hasDrawer ? "\(from)送來結帳" : "已送到結帳櫃台"
     }
 
     /// 用餐方式＋人數的標籤：有內用的模式，或這張單本來就有桌子、人數
@@ -514,17 +522,18 @@ struct TicketColumn: View {
             let count = unsent.reduce(0) { $0 + $1.quantity }
             return .page("ticket-\(t.id)", primary: POSAction("送單 \(count)", icon: "fire") { model.send(t) }, accent: true, actions: actions)
         }
-        return .page("ticket-\(t.id)", primary: checkout, accent: model.role.takesPayment, actions: actions)
+        return .page("ticket-\(t.id)", primary: checkout, accent: model.takesPayment, actions: actions)
     }
 
-    /// 結帳；不收錢的崗位（報到接待）：單子已經同步到結帳櫃台，請客人過去結
+    /// 結帳；不收錢的崗位（報到接待、前場的手機）：送到結帳櫃台（單子變成待結帳、櫃台跳出來），請客人過去結
     private func checkoutAction(_ t: Ticket) -> POSAction {
         let hasLines = !t.activeLines.isEmpty
-        if model.role.takesPayment {
+        if model.takesPayment {
             return POSAction("結帳", icon: "banknotes", enabled: hasLines) { model.beginCheckout(t) }
         }
-        return POSAction("送到結帳櫃台", icon: "paper-airplane", enabled: hasLines) {
-            model.show("\(t.number) 已經同步到結帳櫃台，請客人到櫃台結帳", tone: .info)
+        let sent = t.billPrintedAt != nil && t.billSentFrom != nil
+        return POSAction(sent ? "再送一次到櫃台" : "送到結帳櫃台", icon: "paper-airplane", enabled: hasLines) {
+            model.sendToRegister(t)
         }
     }
 
@@ -818,9 +827,11 @@ struct TicketColumn: View {
                     model.go(.floor)
                 }
             }
-            DockChoice(title: "印結帳單", detail: t.billPrintedAt.map { "已印過 \(TaipeiTime.clock($0))" }) {
-                panel = nil
-                model.printBill(t)
+            if model.canPrintBill {
+                DockChoice(title: "印結帳單", detail: t.billPrintedAt.map { (t.billSentFrom == nil ? "已印過 " : "已送到結帳櫃台 ") + TaipeiTime.clock($0) }) {
+                    panel = nil
+                    model.printBill(t)
+                }
             }
         case .salesperson:
             staffChoices(salespeople, selected: t.salespersonId, none: "不指定（算給開單的人）") { id in

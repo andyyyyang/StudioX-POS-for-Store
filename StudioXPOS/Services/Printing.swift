@@ -111,6 +111,9 @@ final class PrinterHub {
         }
     }
 
+    /// 這台有沒有設定廚房出單機（沒有的話送單時請櫃台幫忙印）
+    var hasKitchenPrinter: Bool { printers.contains { $0.roles.contains(.kitchen) } }
+
     // MARK: 印
 
     func print(_ r: Receipt, role: PrinterRole, station: String? = nil) {

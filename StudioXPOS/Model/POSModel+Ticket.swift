@@ -307,8 +307,11 @@ extension POSModel {
             return
         }
         let first = !t.lines.contains(where: \.isSent)
-        record(.linesSent(LinesSent(ticketId: t.id, lineIds: lines.map(\.id))))
-        if settings.printKitchenTickets && mode.usesKitchen { printKitchen(t, lines: lines, mode: first ? .new : .add) }
+        let printHere = settings.printKitchenTickets && mode.usesKitchen
+        // 這台沒有廚房出單機（前場的手機）：事件上註記，櫃台的 iPad 幫忙印（POSModel+KitchenRelay）
+        let relay = printHere && !printers.hasKitchenPrinter
+        record(.linesSent(LinesSent(ticketId: t.id, lineIds: lines.map(\.id), relayPrint: relay ? (first ? "new" : "add") : nil)))
+        if printHere && !relay { printKitchen(t, lines: lines, mode: first ? .new : .add) }
         show("已送出 \(lines.reduce(0) { $0 + $1.quantity }) 項")
     }
 
@@ -316,8 +319,9 @@ extension POSModel {
     func fire(course: Int, of t: Ticket) {
         let lines = t.unsentLines.filter { $0.course == course }
         guard !lines.isEmpty else { return }
-        record(.linesSent(LinesSent(ticketId: t.id, lineIds: lines.map(\.id))))
-        if settings.printKitchenTickets { printKitchen(t, lines: lines, mode: .fire) }
+        let relay = settings.printKitchenTickets && !printers.hasKitchenPrinter
+        record(.linesSent(LinesSent(ticketId: t.id, lineIds: lines.map(\.id), relayPrint: relay ? "fire" : nil)))
+        if settings.printKitchenTickets && !relay { printKitchen(t, lines: lines, mode: .fire) }
         show("第 \(course) 道開始做")
     }
 

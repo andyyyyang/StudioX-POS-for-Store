@@ -1,5 +1,6 @@
 # UI 截圖：在 GitHub 的 Mac 上用 iPad 模擬器打開四家示範店（餐廳咖啡、服飾、美業、健身）的每個畫面，
 # 截圖縮小後提交回這個分支的 docs/screenshots/（深色）與 docs/screenshots/light/（淺色），也放在這次執行的 artifact。
+# 再用 iPhone 模擬器拍店員手上的點餐機（直的）：docs/screenshots/phone/。
 # 提交訊息有 [screenshots] 才跑（Mac 的分鐘數比較貴），也可以手動 Run workflow。
 # 和 StudioX Console App 的 ui-screenshots.yml 同一套做法。
 name: UI 截圖
@@ -23,7 +24,7 @@ jobs:
       group: ui-screenshots-${{ github.ref }}
       cancel-in-progress: true
     runs-on: macos-26
-    timeout-minutes: 62
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
 
@@ -52,7 +53,7 @@ jobs:
             2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
           grep -q "BUILD SUCCEEDED" build.log
 
-      - name: 選 iPad 模擬器
+      - name: 選 iPad、iPhone 模擬器
         run: |
           xcrun simctl list devices available -j > devices.json
           python3 - <<'PY' >> "$GITHUB_ENV"
@@ -65,6 +66,14 @@ jobs:
               if hit: print("IPAD=" + hit["udid"]); break
           else:
               print("IPAD=" + next(x for x in devs if x["name"].startswith("iPad"))["udid"])
+          # iPhone：最新的「iPhone N Pro」（沒有就 Pro Max、再沒有就任何一台 iPhone）
+          def newest(pattern):
+              hits = [(int(m.group(1)), x) for x in devs for m in [re.fullmatch(pattern, x["name"])] if m]
+              return max(hits, key=lambda h: h[0])[1] if hits else None
+          phone = newest(r"iPhone (\d+) Pro") or newest(r"iPhone (\d+) Pro Max") or next((x for x in devs if x["name"].startswith("iPhone")), None)
+          if phone:
+              print("IPHONE=" + phone["udid"])
+              print("IPHONE_NAME=" + phone["name"])
           PY
 
       - name: 截圖
@@ -160,6 +169,45 @@ jobs:
           limit 60 xcrun simctl shutdown "$dev" || true
           ls shots | wc -l
 
+      # 店員手上的點餐機：iPhone 直的（同一個模擬器版本的 App：裝置家族有 iPhone）。上面選、下面做；結帳在結帳櫃台
+      - name: 截圖（iPhone）
+        if: env.IPHONE != ''
+        timeout-minutes: 15
+        continue-on-error: true
+        run: |
+          app="build/Build/Products/Debug-iphonesimulator/StudioXPOS.app"
+          bundle=tw.studiox.pos
+          mkdir -p shots/phone
+          P="-demo cafe -autologin 1234"
+          # 名稱|啟動參數|等幾秒（預設 7）
+          phone=(
+            "phone/01-order|$P -section order"
+            "phone/02-ticket|$P -section order -preselect|9"
+            "phone/03-floor|$P -section floor"
+            "phone/04-orders|$P -section orders"
+          )
+          limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+          dev="$IPHONE"
+          echo "== 開機 $IPHONE_NAME $(date +%T)"
+          limit 60 xcrun simctl boot "$dev" || true
+          limit 300 xcrun simctl bootstatus "$dev" -b || true
+          limit 30 xcrun simctl status_bar "$dev" override --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 || true
+          limit 30 xcrun simctl ui "$dev" appearance dark || true
+          sleep 3
+          for scene in "${phone[@]}"; do
+            IFS='|' read -r name args wait <<< "$scene"
+            echo "-- $name $(date +%T)"
+            limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
+            # 每張都重新安裝：示範模式的資料、這台的設定都從乾淨的開始
+            limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
+            limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
+            limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
+            sleep "${wait:-7}"
+            limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
+          done
+          limit 60 xcrun simctl shutdown "$dev" || true
+          ls shots/phone | wc -l
+
       - name: 截圖放在這次執行（逾時也放）
         if: always()
         uses: actions/upload-artifact@v5
@@ -171,10 +219,12 @@ jobs:
       - name: 縮小、提交回分支
         if: always()
         run: |
-          ls shots/*.png >/dev/null 2>&1 || { echo "沒有截到"; exit 0; }
-          mkdir -p docs/screenshots/light
-          rm -f docs/screenshots/*.jpg docs/screenshots/light/*.jpg
-          for f in shots/*.png shots/light/*.png; do
+          if ! ls shots/*.png >/dev/null 2>&1 && ! ls shots/phone/*.png >/dev/null 2>&1; then echo "沒有截到"; exit 0; fi
+          mkdir -p docs/screenshots/light docs/screenshots/phone
+          # 哪一輪有截到才換掉那一輪的舊圖（iPhone 那輪失敗時不會把舊的手機截圖刪掉）
+          if ls shots/*.png >/dev/null 2>&1; then rm -f docs/screenshots/*.jpg docs/screenshots/light/*.jpg; fi
+          if ls shots/phone/*.png >/dev/null 2>&1; then rm -f docs/screenshots/phone/*.jpg; fi
+          for f in shots/*.png shots/light/*.png shots/phone/*.png; do
             [ -f "$f" ] || continue
             out="docs/screenshots/${f#shots/}"
             sips -Z 1600 -s format jpeg -s formatOptions 72 "$f" --out "${out%.png}.jpg" >/dev/null

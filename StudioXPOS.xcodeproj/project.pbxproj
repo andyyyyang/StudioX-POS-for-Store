@@ -212,7 +212,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "連到藍牙出單機（58／80 mm 熱感機）列印收據、發票證明聯與廚房單。";
 				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、客人的手機條碼載具與付款碼、商品條碼。";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad 即時同步點單（斷網也能用）。";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "店長用 Face ID 授權退款、作廢這類動作。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -231,7 +231,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 2;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -252,7 +252,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "連到藍牙出單機（58／80 mm 熱感機）列印收據、發票證明聯與廚房單。";
 				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、客人的手機條碼載具與付款碼、商品條碼。";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad 即時同步點單（斷網也能用）。";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "店長用 Face ID 授權退款、作廢這類動作。";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -271,7 +271,7 @@
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 2;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};

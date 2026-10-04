@@ -24,6 +24,24 @@ struct EventTests {
         #expect(!tampered.isHashValid)
     }
 
+    @Test func linesSentRelayPrintIsOptional() throws {
+        // 沒有 relayPrint：JSON 和以前一模一樣（舊的 iPad、後台都不受影響）
+        let plain = try String(decoding: EventCoding.encoder().encode(LinesSent(ticketId: "t1", lineIds: ["l1"])), as: UTF8.self)
+        #expect(!plain.contains("relayPrint"))
+        // 手機送單（沒有廚房出單機）：請櫃台幫忙印
+        var d = Device("P")
+        let e = d.emit(.linesSent(LinesSent(ticketId: "t1", lineIds: ["l1", "l2"], relayPrint: "add")))
+        let back = try JSONDecoder().decode(POSEvent.self, from: JSONEncoder().encode(e))
+        #expect(back.isHashValid)
+        if case .linesSent(let s) = back.body {
+            #expect(s.relayPrint == "add")
+            #expect(s.lineIds == ["l1", "l2"])
+        } else { Issue.record("內容解不開") }
+        // 舊的事件（沒有這個欄位）照樣解得開
+        let old = try EventCoding.decoder().decode(LinesSent.self, from: Data(#"{"ticketId":"t1","lineIds":["l1"]}"#.utf8))
+        #expect(old.relayPrint == nil)
+    }
+
     @Test func hashIsTheDocumentedString() throws {
         // docs/API.md 的規則：SHA-256(id|deviceId|seq|lamport|at|staffId|type|prevHash|data)；後台照這個驗
         let e = try POSEvent(id: "e1", deviceId: "dev", seq: 1, lamport: 7, at: Date(timeIntervalSince1970: 1_790_000_000.123),
@@ -162,6 +180,32 @@ struct StoreStateTests {
         let afterClose = c.emit(.paymentAdded(PaymentAdded(ticketId: "t1", payment: Payment(id: "pc", tender: .card, amount: Money(dollars: 66), at: c.clock, by: "s1"))))
         let s3 = StoreState.replay(shared + fromA + [afterClose])
         #expect(s3.unresolvedConflicts.map(\.kind) == [.paymentAfterClose])
+    }
+
+    /// 統一結帳：手機（不收錢）把單送到結帳櫃台＝`bill.printed` 帶 sentFrom。櫃台算出一樣的「待結帳」，也知道是從哪裡送來的
+    @Test func sentToRegisterIsAwaitingPayment() throws {
+        var phone = Device("P"), register = Device("A")
+        var ev = [open(&phone, number: "P001")]
+        ev.append(phone.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l1", "珍奶", 60)]))))
+        ev.append(phone.emit(.billPrinted(TicketRef(ticketId: "t1", sentFrom: "手機"))))
+        var s = StoreState.replay(ev)
+        #expect(s.status(of: "t1") == .billing)
+        #expect(s.tickets["t1"]?.billSentFrom == "手機")
+        #expect(s.tickets["t1"]?.billPrintedAt != nil)
+
+        // 沒有 sentFrom 時資料和以前一模一樣（舊版 App、後台照樣讀）；舊版的資料讀進來是「印的」
+        #expect(try EventBody.billPrinted(TicketRef(ticketId: "t1")).encodedData() == #"{"ticketId":"t1"}"#)
+        let old = try EventBody.decode(type: "bill.printed", data: #"{"ticketId":"t1"}"#)
+        #expect(old == .billPrinted(TicketRef(ticketId: "t1")))
+        let fresh = try EventBody.decode(type: "bill.printed", data: #"{"sentFrom":"手機","ticketId":"t1"}"#)
+        #expect(fresh == .billPrinted(TicketRef(ticketId: "t1", sentFrom: "手機")))
+
+        // 櫃台後來真的印了結帳單：就是印的
+        register.observe(ev)
+        ev.append(register.emit(.billPrinted(TicketRef(ticketId: "t1"))))
+        s = StoreState.replay(ev)
+        #expect(s.tickets["t1"]?.billSentFrom == nil)
+        #expect(s.status(of: "t1") == .billing)
     }
 
     @Test func splitAndMerge() throws {

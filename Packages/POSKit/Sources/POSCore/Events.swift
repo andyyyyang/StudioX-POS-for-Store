@@ -98,7 +98,11 @@ public struct LinesVoided: Codable, Sendable, Hashable {
 public struct LinesSent: Codable, Sendable, Hashable {
     public var ticketId: String
     public var lineIds: [String]
-    public init(ticketId: String, lineIds: [String]) { self.ticketId = ticketId; self.lineIds = lineIds }
+    /// 送單的這台沒有廚房出單機（前場的手機）：請櫃台幫忙印。`new` 第一次送、`add` 加點、`fire` 催菜；沒有＝已經印了或不用印
+    public var relayPrint: String?
+    public init(ticketId: String, lineIds: [String], relayPrint: String? = nil) {
+        self.ticketId = ticketId; self.lineIds = lineIds; self.relayPrint = relayPrint
+    }
 }
 
 public struct KitchenUpdated: Codable, Sendable, Hashable {
@@ -167,7 +171,15 @@ public struct TicketSplit: Codable, Sendable, Hashable {
 
 public struct TicketRef: Codable, Sendable, Hashable {
     public var ticketId: String
-    public init(ticketId: String) { self.ticketId = ticketId }
+    /// 只有 `bill.printed` 用：不是在這裡印結帳單，而是不收錢的裝置（前場的手機、報到接待）把單「送到結帳櫃台」——
+    /// 寫從哪裡送來的（「手機」「報到接待」），櫃台跳出「A2 從手機送來結帳」。nil＝真的印了結帳單。
+    /// 舊版 App 不認得這個欄位：照樣當成「待結帳」
+    public var sentFrom: String?
+
+    public init(ticketId: String, sentFrom: String? = nil) {
+        self.ticketId = ticketId
+        self.sentFrom = sentFrom
+    }
 }
 
 public struct PaymentAdded: Codable, Sendable, Hashable {

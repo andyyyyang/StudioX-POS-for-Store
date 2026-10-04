@@ -836,7 +836,7 @@ struct AppointmentsView: View {
         var actions: [POSAction] = []
         if let t = ticket {
             let view = POSAction("看單 \(t.number)", icon: "squares-2x2") { model.selectedTicketId = t.id }
-            if model.role.takesPayment {
+            if model.takesPayment {
                 primary = POSAction("結帳", icon: "credit-card") { model.beginCheckout(t) }
                 actions.append(view)
             } else {
@@ -1762,7 +1762,7 @@ private struct ApptCard: View {
     @ViewBuilder
     private var status: some View {
         if let t = ticket {
-            if model.role.takesPayment {
+            if model.takesPayment {
                 ApptDoneNote(text: "服務中・\(t.number) \(t.totals.amountDue.formatted)", done: false)
             } else {
                 // 報到接待不收錢：單子已經在結帳櫃台看得到
