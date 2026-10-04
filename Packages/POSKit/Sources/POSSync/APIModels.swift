@@ -614,19 +614,37 @@ public struct QueueTicketLayout: Codable, Sendable, Hashable {
 }
 
 /// 開機資料的 `queue`：號碼存在哪裡、號碼牌的 QR 網址與版面
+/// 叫號用在哪裡（可以兩個都開）。都沒開＝只有「叫號」頁，店員自己取號、叫號
+public enum QueueUsage: String, Codable, Sendable, Hashable, CaseIterable {
+    /// 全外帶（黃毛丫頭）：外帶單結帳完成時自動取號、印號碼牌，做好了在右欄叫號
+    case takeout
+    /// 排隊等內用：取號時打人數，叫到號時選桌入座
+    case dineIn
+
+    public var label: String {
+        switch self {
+        case .takeout: "外帶取餐"
+        case .dineIn: "排隊等內用"
+        }
+    }
+}
+
 public struct QueueConfig: Codable, Sendable, Hashable {
     public var mode: QueueMode
     /// 號碼牌 QR 的網址樣板：{number}、{waiting} 會被換掉（例：https://shop.tw/q?no={number}&waiting={waiting}）
     public var customerUrl: String?
     public var ticket: QueueTicketLayout
+    /// 用在哪裡（看不懂的值略過）
+    public var usage: Set<QueueUsage>
 
-    public init(mode: QueueMode = .native, customerUrl: String? = nil, ticket: QueueTicketLayout = .standard) {
+    public init(mode: QueueMode = .native, customerUrl: String? = nil, ticket: QueueTicketLayout = .standard, usage: Set<QueueUsage> = []) {
         self.mode = mode
         self.customerUrl = customerUrl
         self.ticket = ticket
+        self.usage = usage
     }
 
-    enum CodingKeys: String, CodingKey { case mode, customerUrl, ticket }
+    enum CodingKeys: String, CodingKey { case mode, customerUrl, ticket, usage }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -634,6 +652,16 @@ public struct QueueConfig: Codable, Sendable, Hashable {
         let url = (try? c.decodeIfPresent(String.self, forKey: .customerUrl))?.trimmingCharacters(in: .whitespacesAndNewlines)
         customerUrl = (url?.isEmpty ?? true) ? nil : url
         ticket = ((try? c.decodeIfPresent(QueueTicketLayout.self, forKey: .ticket)) ?? nil) ?? .standard
+        let raw = ((try? c.decodeIfPresent([String].self, forKey: .usage)) ?? nil) ?? []
+        usage = Set(raw.compactMap(QueueUsage.init(rawValue:)))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(mode, forKey: .mode)
+        try c.encodeIfPresent(customerUrl, forKey: .customerUrl)
+        try c.encode(ticket, forKey: .ticket)
+        if !usage.isEmpty { try c.encode(QueueUsage.allCases.filter(usage.contains).map(\.rawValue), forKey: .usage) }
     }
 
     /// 號碼牌上的 QR：這個號碼的網址（沒設網址樣板是 nil）
@@ -666,15 +694,19 @@ public struct QueueState: Codable, Sendable, Hashable {
     public var servedToday: Int?
     /// 取號的回應：這次取到的號碼
     public var numbers: [Int]?
+    /// 號碼的附帶資料（native）：幾位、哪一張單（key 是號碼的字串）
+    public var entries: [String: QueueEntry]
 
     public init(mode: QueueMode? = nil, current: Int? = nil, waiting: [Int] = [], missed: [Int] = [], marked: [Int] = [], nextNo: Int? = nil,
-                calledAt: Date? = nil, updatedAt: Date? = nil, takenAt: [String: Date] = [:], servedToday: Int? = nil, numbers: [Int]? = nil) {
+                calledAt: Date? = nil, updatedAt: Date? = nil, takenAt: [String: Date] = [:], servedToday: Int? = nil, numbers: [Int]? = nil,
+                entries: [String: QueueEntry] = [:]) {
         self.mode = mode; self.current = current; self.waiting = waiting; self.missed = missed; self.marked = marked; self.nextNo = nextNo
         self.calledAt = calledAt; self.updatedAt = updatedAt; self.takenAt = takenAt; self.servedToday = servedToday; self.numbers = numbers
+        self.entries = entries
     }
 
     enum CodingKeys: String, CodingKey {
-        case mode, current, waiting, missed, marked, nextNo, calledAt, updatedAt, takenAt, servedToday, numbers
+        case mode, current, waiting, missed, marked, nextNo, calledAt, updatedAt, takenAt, servedToday, numbers, entries
         /// 舊伺服器 /status 的寫法
         case nextNoSnake = "next_no"
     }
@@ -695,6 +727,7 @@ public struct QueueState: Codable, Sendable, Hashable {
         takenAt = raw.compactMapValues(EventCoding.parseTimestamp)
         servedToday = (try? c.decodeIfPresent(Int.self, forKey: .servedToday)) ?? nil
         numbers = (try? c.decodeIfPresent([Int].self, forKey: .numbers)) ?? nil
+        entries = ((try? c.decodeIfPresent([String: QueueEntry].self, forKey: .entries)) ?? nil) ?? [:]
     }
 
     // 選填的沒有值就不出現；時間一律是 ISO 8601（UTC、毫秒）
@@ -711,7 +744,11 @@ public struct QueueState: Codable, Sendable, Hashable {
         if !takenAt.isEmpty { try c.encode(takenAt.mapValues(EventCoding.timestamp), forKey: .takenAt) }
         try c.encodeIfPresent(servedToday, forKey: .servedToday)
         try c.encodeIfPresent(numbers, forKey: .numbers)
+        if !entries.isEmpty { try c.encode(entries, forKey: .entries) }
     }
+
+    /// 這個號碼的附帶資料（幾位、哪一張單）
+    public func entry(_ n: Int) -> QueueEntry? { entries[String(n)] }
 
     /// 沒有人在等、也沒有在叫、沒有過號
     public var isEmpty: Bool { current == nil && waiting.isEmpty && missed.isEmpty }
@@ -743,15 +780,35 @@ public struct QueueState: Codable, Sendable, Hashable {
     }
 }
 
+/// 一個號碼的附帶資料：排隊等內用的人數、外帶單（取號時帶上；舊的叫號伺服器沒有）
+public struct QueueEntry: Codable, Sendable, Hashable {
+    /// 幾位（排隊等內用）
+    public var guests: Int?
+    /// 哪一張單（外帶結帳時自動取號的）
+    public var ticketId: String?
+    /// 給人看的一句（「A012・3 項」）
+    public var label: String?
+
+    public init(guests: Int? = nil, ticketId: String? = nil, label: String? = nil) {
+        self.guests = guests; self.ticketId = ticketId; self.label = label
+    }
+}
+
 /// POST {cms}/api/pos/v1/queue/<action> 的 body
 public struct QueueActionBody: Codable, Sendable, Hashable {
     public var count: Int?
     public var requestId: String?
     public var number: Int?
     public var staffId: String?
+    /// 取號時帶的附帶資料（一次只取一張時）
+    public var guests: Int?
+    public var ticketId: String?
+    public var label: String?
 
-    public init(count: Int? = nil, requestId: String? = nil, number: Int? = nil, staffId: String? = nil) {
+    public init(count: Int? = nil, requestId: String? = nil, number: Int? = nil, staffId: String? = nil,
+                guests: Int? = nil, ticketId: String? = nil, label: String? = nil) {
         self.count = count; self.requestId = requestId; self.number = number; self.staffId = staffId
+        self.guests = guests; self.ticketId = ticketId; self.label = label
     }
 }
 
@@ -773,6 +830,10 @@ public enum QueueAction: Sendable, Hashable {
     case unmark(Int)
     /// 全部歸零（店長授權過）
     case reset(staffId: String)
+    /// 取一張、帶附帶資料：排隊等內用（幾位）、外帶結帳（哪一張單）
+    case takeOne(entry: QueueEntry, requestId: String)
+    /// 叫指定的號碼（外帶：先做好的先叫）：等候中的那一號變成 current（只有 native）
+    case call(Int, requestId: String)
 
     /// POST /queue/<path>
     public var path: String {
@@ -786,6 +847,8 @@ public enum QueueAction: Sendable, Hashable {
         case .mark: "mark"
         case .unmark: "unmark"
         case .reset: "reset"
+        case .takeOne: "take"
+        case .call: "call"
         }
     }
 
@@ -796,6 +859,8 @@ public enum QueueAction: Sendable, Hashable {
         case .previous: QueueActionBody()
         case .recall(let n), .unmiss(let n), .mark(let n), .unmark(let n): QueueActionBody(number: n)
         case .reset(let staffId): QueueActionBody(staffId: staffId)
+        case .takeOne(let e, let id): QueueActionBody(count: 1, requestId: id, guests: e.guests, ticketId: e.ticketId, label: e.label)
+        case .call(let n, let id): QueueActionBody(requestId: id, number: n)
         }
     }
 }

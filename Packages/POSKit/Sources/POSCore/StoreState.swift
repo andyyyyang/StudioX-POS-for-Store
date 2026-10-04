@@ -125,6 +125,13 @@ public struct StoreState: Codable, Sendable, Hashable {
                 }
             }
 
+        case .linesRemoved(let r):
+            // 只拿掉還沒送出的（送出去的要作廢，廚房才知道）
+            guard var t = tickets[r.ticketId], t.isOpen else { return }
+            let ids = Set(r.lineIds)
+            t.lines.removeAll { ids.contains($0.id) && !$0.isSent }
+            tickets[t.id] = t
+
         case .linesSent(let s):
             for id in s.lineIds {
                 updateLine(s.ticketId, id) { l in
@@ -159,6 +166,7 @@ public struct StoreState: Codable, Sendable, Hashable {
             if let m = u.member { t.member = m }
             if let c = u.customerName { t.customerName = c.isEmpty ? nil : c }
             if let s = u.salespersonId { t.salespersonId = s.isEmpty ? nil : s }
+            if let q = u.queueNumber { t.queueNumber = q > 0 ? q : nil }
             tickets[t.id] = t
 
         case .ticketMoved(let m):

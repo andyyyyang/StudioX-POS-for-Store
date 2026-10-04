@@ -670,6 +670,14 @@ actor DemoAPI: POSAPI {
             q.marked.removeAll { $0 == n }
         case .reset:
             q.reset(at: now)
+        case .takeOne(_, let requestId):
+            numbers = q.take(count: 1, requestId: requestId, at: now)
+        case .call(let n, _):
+            // 叫指定的號碼：排到最前面再叫
+            guard q.waiting.contains(n) else { throw APIError.http(status: 404, code: "not_found", message: "\(n) 號不在等候中") }
+            q.waiting.removeAll { $0 == n }
+            q.waiting.insert(n, at: 0)
+            q.next(at: now)
         }
         line = q
         var s = q.state(now: now)

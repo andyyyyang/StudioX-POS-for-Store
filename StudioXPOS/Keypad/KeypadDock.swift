@@ -29,6 +29,8 @@ struct KeypadDock: View {
     var content = DockContent()
     /// 題目右上的「取消」。鎖定、配對畫面的鍵盤一直在等 PIN／配對碼，取消沒有意義
     var showsCancel = true
+    /// 最上面固定的一塊（DockPinned：外帶的叫號）。只有收銀台的右欄放
+    var showsPinned = false
 
     struct IdleActions {
         var lookup: (String) -> Void
@@ -64,6 +66,9 @@ struct KeypadDock: View {
 
     private var column: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if showsPinned {
+                DockPinned()
+            }
             top
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .clipped()

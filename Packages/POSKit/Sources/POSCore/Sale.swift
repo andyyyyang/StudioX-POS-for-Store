@@ -62,6 +62,8 @@ public struct SaleRecord: Codable, Sendable, Hashable {
     public var tableNames: String
     public var guests: Int
     public var customerName: String?
+    /// 叫號的號碼（收據、取餐、報表上看得到）
+    public var queueNumber: Int? = nil
     public var openedAt: Date
     public var closedAt: Date
     public var openedBy: String
@@ -104,6 +106,7 @@ public struct SaleRecord: Codable, Sendable, Hashable {
         tableNames = floor.tableNames(t.tableIds)
         guests = t.guests
         customerName = t.customerName
+        queueNumber = t.queueNumber
         openedAt = t.openedAt
         self.closedAt = closedAt
         openedBy = t.openedBy

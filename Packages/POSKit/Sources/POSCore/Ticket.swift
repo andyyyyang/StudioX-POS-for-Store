@@ -329,6 +329,8 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
     public var splitFrom: String?
     /// 外帶、外送的客人稱呼（「王先生」「#12」）
     public var customerName: String?
+    /// 叫號的號碼（外帶結帳時自動取的、排隊入座時叫到的）
+    public var queueNumber: Int? = nil
     /// 併到哪一張單（併單後這張就關掉，報表不算作廢）
     public var mergedInto: String?
     /// 在哪一台結帳（錢進了哪個錢櫃）
@@ -384,6 +386,7 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
             return number
         }
         if let name = customerName, !name.isEmpty { return "\(orderType.label) \(name)" }
+        if let q = queueNumber { return "\(orderType.label) \(q) 號" }
         return "\(orderType.label) \(number)"
     }
 

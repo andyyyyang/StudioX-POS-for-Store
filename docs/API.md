@@ -218,6 +218,11 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 **送到結帳櫃台**（統一結帳）：不收錢的裝置（手機、報到接待）把單交給櫃台，記一筆 `bill.printed`，`data` 多一個 `sentFrom`（從哪裡送來：「手機」「報到接待」）：
 `{"sentFrom":"手機","ticketId":"…"}`。沒有 `sentFrom` 的就是真的印了結帳單（舊的資料不變）。兩種都是「待結帳」；後台照樣只存、原樣轉發，舊版 App 也當成待結帳。
 
+**刪掉品項不留紀錄**：還沒送出的品項用 `lines.removed`（`{ "ticketId", "lineIds": [] }`）直接從單子拿掉；已經送出的照樣用 `lines.voided`
+（廚房要印作廢單），但 iPad 的單子上不再留一行劃掉的。
+
+**叫號的號碼**：`ticket.updated` 多一個 `queueNumber`（外帶結帳自動取的、排隊入座叫到的；`0`＝拿掉），交易紀錄（`sale`）也帶著。
+
 **手機送單的廚房單**：沒有設定廚房出單機的裝置（前場的手機）送單時，`lines.sent` 的 `data` 多一個 `relayPrint`（`new` 第一次送、`add` 加點、`fire` 催菜），自己不印；
 櫃台的 iPad（設定「幫手機出廚房單」，預設開；有好幾台櫃台時只留一台）收到後照同一個樣式印到負責那一站的出單機。同一個事件只印一次、只印 10 分鐘內送的。
 沒有這個欄位＝送單的那台自己印了（或不用印）。
@@ -247,7 +252,16 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 | `legacy` | 原本的叫號伺服器（`queue.legacyUrl`，例：`https://yellowgirl.up.railway.app`）；後台代轉，iPad 不直接連 | 照舊，不用改 |
 | `native` | 後台自己的資料庫（一次一筆、鎖住再改，不會互相覆蓋；每天 `resetHour` 點後第一次用到時歸零） | 樹莓派 `server_url.txt` 改成 `{CMS_URL}/api/pos/queue/status`；號碼牌的 QR 預設 `{CMS_URL}/q?no={number}&waiting={waiting}` |
 
-開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, customerUrl, ticket }`：
+**叫號是獨立的服務插件**（後台的 `queue` 模組，可以單獨開、不一定要有 POS）：沒有 POS 的店用後台「叫號」頁的按鈕取號、叫號；
+有 POS 時 iPad 的「叫號」頁、右欄與結帳流程接上同一份號碼。`queue.usage` 決定用在哪裡（可以兩個都開）：
+
+| usage | 情境 | POS 怎麼用 |
+|---|---|---|
+| `takeout` | 全外帶（夜市攤、手搖飲；黃毛丫頭） | 外帶單**結帳完成時自動取號**（`take` 帶 `ticketId`）、印號碼牌、單子掛上號碼（`ticket.updated` 的 `queueNumber`）；做好了在右欄叫號（`call` 指定號碼：先做好的先叫） |
+| `dineIn` | 排隊等內用 | 取號時打人數（`take` 帶 `guests`）；叫到號時選桌入座（開內用單、掛上號碼） |
+| 都沒開 | 只有「叫號」頁 | 店員自己取號、叫號（和原本的 TicketSystem App 一樣） |
+
+開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, customerUrl, ticket, usage }`：
 - `customerUrl`：印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉。`native` 預設是後台的 `/q`；`legacy` 沒有預設，要在後台貼上樹莓派原本 `qr_url.txt` 的網址（沒填就不印 QR）
 - `ticket`：號碼牌的版面（**iPad 直接印**，不用樹莓派）。座標都以 58 mm 的 384 點寬為準（80 mm 的機器等比放大），預設值和樹莓派原本印的一模一樣：
 
@@ -270,12 +284,14 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 ```
 - `current`：現在叫到的號碼（沒有就不出現）；`waiting`：照順序；`missed`：過號；`marked`：標記（店員自己看的星號）
 - `calledAt`、`takenAt`、`servedToday`：只有 `native` 才有（舊伺服器沒記）
+- `entries`：號碼的附帶資料（`native`）：`{ "24": { "guests": 4 }, "25": { "ticketId": "…", "label": "A012・3 項" } }`
 
 ### 動作：`POST /queue/<action>` → 改完的狀態（和 `GET /queue` 一樣）
 
 | 動作 | body | 做什麼 |
 |---|---|---|
-| `take` | `{ "count": 1–20, "requestId": "<uuid>" }` | 取號：`nextNo` 起連續 `count` 張加到 `waiting` 最後。回應多一個 `"numbers": [27, 28]`。同一個 `requestId` 十分鐘內重送不會再取（`native`） |
+| `take` | `{ "count": 1–20, "requestId": "<uuid>", "guests"?, "ticketId"?, "label"? }` | 取號：`nextNo` 起連續 `count` 張加到 `waiting` 最後。回應多一個 `"numbers": [27, 28]`。同一個 `requestId` 十分鐘內重送不會再取（`native`）。`count` 是 1 時可以帶附帶資料（存進 `entries`；`legacy` 略過） |
+| `call` | `{ "number": 25, "requestId" }` | 叫指定的號碼：等候中的那一號變成 `current`（原本的算服務完了）。外帶先做好的先叫。只有 `native`（`legacy` 回 `409 unsupported`：只能照順序「下一號」） |
 | `next` | `{ "requestId" }` | 叫下一號：`waiting` 第一個變成 `current`（原本的 `current` 算服務完了，順便取消它的標記）；`waiting` 空的＝`current` 清掉 |
 | `miss` | `{ "requestId" }` | 過號：`current` 移到 `missed`，自動叫下一號 |
 | `previous` | | 返回前一號：`current` 放回 `waiting` 最前面。沒有在叫的回 `400 nothing_called` |

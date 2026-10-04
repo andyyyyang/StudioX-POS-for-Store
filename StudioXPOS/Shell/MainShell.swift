@@ -115,7 +115,7 @@ struct MainShell: View {
             // 右欄：左邊選起來的那一筆＋它的動作、數字鍵、蓋住整欄的面板（見 Keypad/Dock.swift）。
             // 放在兩個 overlay 後面：直的 iPad 滑出來的單子交上來的選取也收得到
             .overlayPreferenceValue(DockKey.self, alignment: .trailing) { content in
-                KeypadDock(idleActions: idleActions, content: content)
+                KeypadDock(idleActions: idleActions, content: content, showsPinned: true)
                     .frame(width: wide ? Metric.dock : Metric.dockNarrow)
             }
             .onChange(of: showsTicket) { _, v in if !v { showTicketSheet = false } }

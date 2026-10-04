@@ -95,6 +95,13 @@ public struct LinesVoided: Codable, Sendable, Hashable {
     }
 }
 
+/// 刪掉還沒送出的品項：直接從單子拿掉、不留紀錄（已經送出的要用 lines.voided：廚房要知道、要印作廢單）
+public struct LinesRemoved: Codable, Sendable, Hashable {
+    public var ticketId: String
+    public var lineIds: [String]
+    public init(ticketId: String, lineIds: [String]) { self.ticketId = ticketId; self.lineIds = lineIds }
+}
+
 public struct LinesSent: Codable, Sendable, Hashable {
     public var ticketId: String
     public var lineIds: [String]
@@ -129,14 +136,17 @@ public struct TicketUpdated: Codable, Sendable, Hashable {
     public var customerName: String?
     /// 整張單的銷售人員（"" = 拿掉）
     public var salespersonId: String?
+    /// 叫號的號碼（外帶結帳時自動取的、排隊入座時叫到的；0＝拿掉）
+    public var queueNumber: Int?
 
     public init(ticketId: String, guests: Int? = nil, note: String? = nil, orderType: OrderType? = nil, serviceChargeBps: Int? = nil,
                 discount: Discount? = nil, clearDiscount: Bool? = nil, tip: Money? = nil, invoiceBuyer: InvoiceBuyer? = nil,
-                member: MemberRef? = nil, clearMember: Bool? = nil, customerName: String? = nil, salespersonId: String? = nil) {
+                member: MemberRef? = nil, clearMember: Bool? = nil, customerName: String? = nil, salespersonId: String? = nil,
+                queueNumber: Int? = nil) {
         self.ticketId = ticketId; self.guests = guests; self.note = note; self.orderType = orderType
         self.serviceChargeBps = serviceChargeBps; self.discount = discount; self.clearDiscount = clearDiscount; self.tip = tip
         self.invoiceBuyer = invoiceBuyer; self.member = member; self.clearMember = clearMember; self.customerName = customerName
-        self.salespersonId = salespersonId
+        self.salespersonId = salespersonId; self.queueNumber = queueNumber
     }
 }
 
@@ -309,6 +319,7 @@ public enum EventBody: Sendable, Hashable {
     case lineUpdated(LineUpdated)
     case linesVoided(LinesVoided)
     case linesSent(LinesSent)
+    case linesRemoved(LinesRemoved)
     case kitchenUpdated(KitchenUpdated)
     case ticketUpdated(TicketUpdated)
     case ticketMoved(TicketMoved)
@@ -343,6 +354,7 @@ public enum EventBody: Sendable, Hashable {
         case .lineUpdated: "line.updated"
         case .linesVoided: "lines.voided"
         case .linesSent: "lines.sent"
+        case .linesRemoved: "lines.removed"
         case .kitchenUpdated: "kitchen.updated"
         case .ticketUpdated: "ticket.updated"
         case .ticketMoved: "ticket.moved"
@@ -378,6 +390,7 @@ public enum EventBody: Sendable, Hashable {
         case .lineUpdated(let e): e.ticketId
         case .linesVoided(let e): e.ticketId
         case .linesSent(let e): e.ticketId
+        case .linesRemoved(let e): e.ticketId
         case .kitchenUpdated(let e): e.ticketId
         case .ticketUpdated(let e): e.ticketId
         case .ticketMoved(let e): e.ticketId
@@ -405,6 +418,7 @@ public enum EventBody: Sendable, Hashable {
         case .lineUpdated(let e): try encoder.encode(e)
         case .linesVoided(let e): try encoder.encode(e)
         case .linesSent(let e): try encoder.encode(e)
+        case .linesRemoved(let e): try encoder.encode(e)
         case .kitchenUpdated(let e): try encoder.encode(e)
         case .ticketUpdated(let e): try encoder.encode(e)
         case .ticketMoved(let e): try encoder.encode(e)
@@ -442,6 +456,7 @@ public enum EventBody: Sendable, Hashable {
         case "line.updated": return .lineUpdated(try d.decode(LineUpdated.self, from: bytes))
         case "lines.voided": return .linesVoided(try d.decode(LinesVoided.self, from: bytes))
         case "lines.sent": return .linesSent(try d.decode(LinesSent.self, from: bytes))
+        case "lines.removed": return .linesRemoved(try d.decode(LinesRemoved.self, from: bytes))
         case "kitchen.updated": return .kitchenUpdated(try d.decode(KitchenUpdated.self, from: bytes))
         case "ticket.updated": return .ticketUpdated(try d.decode(TicketUpdated.self, from: bytes))
         case "ticket.moved": return .ticketMoved(try d.decode(TicketMoved.self, from: bytes))
