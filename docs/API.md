@@ -234,10 +234,10 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 | `mode` | 號碼存在 | 樹莓派、叫號螢幕、客人的 QR |
 |---|---|---|
 | `legacy` | 原本的叫號伺服器（`queue.legacyUrl`，例：`https://yellowgirl.up.railway.app`）；後台代轉，iPad 不直接連 | 照舊，不用改 |
-| `native` | 後台自己的資料庫（一次一筆、鎖住再改，不會互相覆蓋；每天 `resetHour` 點後第一次用到時歸零） | 樹莓派 `server_url.txt` 改成 `{CMS 前台}/api/pos/queue/status`、`qr_url.txt` 改成 `{前台}/q?no={number}&waiting={waiting}` |
+| `native` | 後台自己的資料庫（一次一筆、鎖住再改，不會互相覆蓋；每天 `resetHour` 點後第一次用到時歸零） | 樹莓派 `server_url.txt` 改成 `{CMS_URL}/api/pos/queue/status`；號碼牌的 QR 預設 `{CMS_URL}/q?no={number}&waiting={waiting}` |
 
 開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, customerUrl, ticket }`：
-- `customerUrl`：印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉
+- `customerUrl`：印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉。`native` 預設是後台的 `/q`；`legacy` 沒有預設，要在後台貼上樹莓派原本 `qr_url.txt` 的網址（沒填就不印 QR）
 - `ticket`：號碼牌的版面（**iPad 直接印**，不用樹莓派）。座標都以 58 mm 的 384 點寬為準（80 mm 的機器等比放大），預設值和樹莓派原本印的一模一樣：
 
 ```json
