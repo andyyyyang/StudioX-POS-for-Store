@@ -208,33 +208,48 @@ private struct EscapeShortcut: ViewModifier {
 }
 
 /// 動作鍵：兩欄、和數字鍵同一種鍵；危險的排最後、紅字
+///
+/// 用一般的 Grid、不用 LazyVGrid：動作頂多十來個，不需要懶載入；而且 iOS 26 在 ViewThatFits 量 LazyVGrid 的大小時
+/// 會在主執行緒以外叫 ForEach 的內容，Swift 6 的隔離檢查會讓 App 直接結束（手機上選起一行時發生過）
 struct DockActionKeys: View {
     let actions: [POSAction]
 
     var body: some View {
         let ordered = actions.filter { !$0.isDestructive } + actions.filter(\.isDestructive)
         if !ordered.isEmpty {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                ForEach(ordered) { a in
-                    Button(action: a.perform) {
-                        HStack(spacing: 7) {
-                            if let icon = a.icon { HeroIcon(icon, size: 16) }
-                            Text(a.title)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                                .minimumScaleFactor(0.85)
+            let rows = stride(from: 0, to: ordered.count, by: 2).map { Array(ordered[$0 ..< min($0 + 2, ordered.count)]) }
+            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                ForEach(rows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(rows[r].indices, id: \.self) { i in
+                            key(rows[r][i])
                         }
-                        .font(.brand(14.5, .medium))
-                        .foregroundStyle(a.isDestructive ? Theme.dangerFG : Theme.ink)
-                        .padding(.horizontal, 12)
-                        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                        if rows[r].count == 1 {
+                            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                        }
                     }
-                    .buttonStyle(KeyStyle())
-                    .disabled(!a.isEnabled)
-                    .opacity(a.isEnabled ? 1 : 0.4)
                 }
             }
         }
+    }
+
+    private func key(_ a: POSAction) -> some View {
+        Button(action: a.perform) {
+            HStack(spacing: 7) {
+                if let icon = a.icon { HeroIcon(icon, size: 16) }
+                Text(a.title)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .minimumScaleFactor(0.85)
+            }
+            .font(.brand(14.5, .medium))
+            .foregroundStyle(a.isDestructive ? Theme.dangerFG : Theme.ink)
+            .padding(.horizontal, 12)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        }
+        .buttonStyle(KeyStyle())
+        .disabled(!a.isEnabled)
+        .opacity(a.isEnabled ? 1 : 0.4)
     }
 }
 

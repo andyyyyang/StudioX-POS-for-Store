@@ -24,15 +24,6 @@ enum LaunchArguments {
 
     static func has(_ key: String) -> Bool { ProcessInfo.processInfo.arguments.contains(key) }
 
-    /// 查問題用：-preselect 只做到哪一步（ticket＝只選單子、sheet＝再打開單子、沒有＝做完）
-    static var preselectStage: String? {
-        #if DEBUG
-        value("-preselectStage")
-        #else
-        nil
-        #endif
-    }
-
     /// 截圖用：頁面出現時先選起第一筆（只在 Debug）。各頁在 .onAppear／.task 裡看這個
     static var preselect: Bool {
         #if DEBUG

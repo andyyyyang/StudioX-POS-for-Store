@@ -239,23 +239,34 @@ struct KeypadDock: View {
     @ViewBuilder
     private var quickKeys: some View {
         if let quick = keypad.request?.spec.quickKeys, !quick.isEmpty {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: min(quick.count, 3)), spacing: 8) {
-                ForEach(quick) { q in
-                    Button {
-                        keypad.apply(q)
-                    } label: {
-                        Text(q.label)
-                            .font(.brand(15, .medium))
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .frame(maxWidth: .infinity, minHeight: 44)
+            // 一般的 Grid（不用 LazyVGrid）：手機的鍵盤在 sheet 裡，懶載入的量測可能跑在主執行緒以外（見 DockActionKeys）
+            let perRow = min(quick.count, 3)
+            let rows = stride(from: 0, to: quick.count, by: perRow).map { Array(quick[$0 ..< min($0 + perRow, quick.count)]) }
+            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+                ForEach(rows.indices, id: \.self) { r in
+                    GridRow {
+                        ForEach(rows[r]) { q in
+                            quickKey(q)
+                        }
                     }
-                    .buttonStyle(QuickKeyStyle(prominent: q.commits))
                 }
             }
             .padding(.top, 14)
         }
+    }
+
+    private func quickKey(_ q: KeypadSpec.QuickKey) -> some View {
+        Button {
+            keypad.apply(q)
+        } label: {
+            Text(q.label)
+                .font(.brand(15, .medium))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(QuickKeyStyle(prominent: q.commits))
     }
 
     // MARK: 鍵

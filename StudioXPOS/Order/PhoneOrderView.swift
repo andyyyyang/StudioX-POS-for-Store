@@ -418,7 +418,7 @@ struct PhoneOrderView: View {
                 model.selectedTicketId = t.id
             }
         }
-        guard model.selectedTicket != nil, LaunchArguments.preselectStage != "ticket" else { return }
+        guard model.selectedTicket != nil else { return }
         try? await Task.sleep(for: .milliseconds(600))
         openTicket()
     }

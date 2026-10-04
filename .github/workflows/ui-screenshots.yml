@@ -185,8 +185,6 @@ jobs:
           # 名稱|啟動參數|等幾秒（預設 7）
           phone=(
             "phone/01-order|$P -section order"
-            "phone/02a-ticket-selected|$P -section order -preselect -preselectStage ticket|9"
-            "phone/02b-ticket-sheet|$P -section order -preselect -preselectStage sheet|9"
             "phone/02-ticket|$P -section order -preselect|9"
             "phone/03-floor|$P -section floor"
             "phone/04-orders|$P -section orders"

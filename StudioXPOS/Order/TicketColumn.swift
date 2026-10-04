@@ -76,7 +76,7 @@ struct TicketColumn: View {
         }
         // 截圖：先選起第一行（只在 Debug、帶 -preselect）
         .task(id: model.selectedTicketId) {
-            if preselects && LaunchArguments.preselect && LaunchArguments.preselectStage == nil { preselectForScreenshot() }
+            if preselects && LaunchArguments.preselect { preselectForScreenshot() }
         }
         .sheet(item: $splitting) { t in
             SplitSheet(ticket: t)
