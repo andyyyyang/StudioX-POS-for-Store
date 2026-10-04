@@ -241,16 +241,7 @@ jobs:
             ( limit $(( ${wait:-7} + 8 )) xcrun simctl launch --console-pty "$dev" "$bundle" $args > "$log" 2>&1 ) &
             sleep "${wait:-7}"
             limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
-            # App 還在不在；不在的話系統記下的原因
-            if ! xcrun simctl spawn "$dev" launchctl list 2>/dev/null | grep -q "$bundle"; then
-              echo "   App 不在了"
-              limit 30 xcrun simctl spawn "$dev" log show --last 40s --style compact \
-                --predicate 'process == "StudioXPOS" OR eventMessage CONTAINS "tw.studiox.pos"' 2>/dev/null \
-                | grep -iE "terminat|crash|exit|kill|fatal|signal|jetsam|abort|exception|precondition" | tail -40 || true
-              echo "   ---- App 自己最後的紀錄（錯誤、fault）"
-              limit 30 xcrun simctl spawn "$dev" log show --last 40s --style compact --level debug \
-                --predicate 'process == "StudioXPOS" AND (messageType == error OR messageType == fault)' 2>/dev/null | tail -40 || true
-            fi
+            # 當掉的話下一步「當機報告」會印出位置；console-pty 收的輸出在 shots/logs/
             wait 2>/dev/null || true
           done
           limit 60 xcrun simctl shutdown "$dev" || true
@@ -320,10 +311,16 @@ jobs:
             for d in prints/*/; do n=$(basename "$d"); mkdir -p "docs/print-samples/$n"; cp "$d"*.png "docs/print-samples/$n/"; done
             cp prints/*.log docs/print-samples/ 2>/dev/null || true
           fi
-          git add docs/screenshots docs/print-samples 2>/dev/null || git add docs/screenshots
-          if git diff --cached --quiet; then echo "沒有變更"; exit 0; fi
-          git commit -m "UI 截圖（自動）[skip ci]"
+          # 接在分支最新的那一筆後面、只提交截圖與列印圖（不用 rebase：圖檔衝突解不開；分支上新的程式也不會被蓋掉）
           for i in 1 2 3; do
-            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && break
+            git fetch -q origin "$GITHUB_REF_NAME"
+            git reset -q "origin/$GITHUB_REF_NAME"
+            # 只加這一次真的重拍的（[phone-only] 時不會把舊的 iPad 截圖蓋回去）
+            ls shots/*.png >/dev/null 2>&1 && git add -A -- docs/screenshots ':!docs/screenshots/phone'
+            ls shots/phone/*.png >/dev/null 2>&1 && git add -A docs/screenshots/phone
+            ls prints/*/*.png >/dev/null 2>&1 && git add -A docs/print-samples
+            if git diff --cached --quiet; then echo "沒有變更"; exit 0; fi
+            git commit -q -m "UI 截圖（自動）[skip ci]"
+            git push origin "HEAD:$GITHUB_REF_NAME" && break
             sleep 5
           done
