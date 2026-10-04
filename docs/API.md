@@ -38,6 +38,25 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 - `deviceCode`：這家店還沒被使用中的裝置用掉的第一個字母（A–Z）。單號 = 字母＋當天流水號（A001）。
 - 錯 5 次鎖這個 IP 10 分鐘。
 
+### 個人手機：用 StudioX 帳號登入（不用配對碼、不用 PIN）
+
+店員用自己的手機點餐：在配對畫面按「用 StudioX 帳號登入」，和 StudioX App 同一個帳號（Apple、Email、邀請）。登入的人就是這支手機的門市人員，之後打開 App 直接是他（離開一陣子回來用 Face ID／手機密碼解鎖），不用打 PIN、不能換人。
+
+1. **登入 console**：OAuth 2.1＋PKCE，`{CONSOLE_URL}/api/oauth/authorize`，`client_id=studiox-pos`、`redirect_uri=studiox-pos://oauth`、`scope=pos:staff`；`POST /api/oauth/token` 換 `access`（1 小時）／`refresh`（30 天，輪替）。只拿來配對、換店，不拿來同步
+2. **哪幾家店**：`GET {CONSOLE_URL}/api/pos/sites`（Bearer）→ `{ "sites": [{ "id", "name", "icon", "level", "cmsUrl" }] }`：這個人是成員、而且開通了門市 POS 的網站。只有一家就直接用
+3. **配對**：`POST {CONSOLE_URL}/api/pos/personal-pair`（Bearer）`{ "siteId", "device": { name, model, systemVersion, appVersion } }`
+   → console 簽一張給那個網站的一次性通行證（ES256、`typ: "pos-personal"`、`sub`＝console 的使用者、`email`、`name`、`level`，60 秒），代轉到網站的 `POST /pair/personal`
+   ← 和 `POST /pair` 一樣的回應，另外多 `cmsUrl`、`siteName`、`personal: true`、`staff: { id, name, role }`
+4. **網站的 `POST /pair/personal`**（`Authorization: Bearer <通行證>`）：
+   - 用 `email` 找網站的使用者 → 綁著那個使用者的門市人員（`pos_staff.user_id`）；沒有就新增一位（名字用 `name`，角色照 console 的 `level`：負責人→`owner`、管理者→`manager`、其他→`server`；PIN 隨機、他用不到）
+   - 新增一台 `role: "handheld"`、`personal: true`、`staff_id` 綁那個人的裝置（後台「裝置」頁顯示「王小美的手機（個人）」，可以停用）
+   - 同一個人同一支手機（`device.name`＋`model`）再登入：停用舊的那台、發新的
+   - 門市人員被停用（`is_active=false`）：`403 staff_inactive`
+5. **之後**：和一般的裝置一樣用網站發的 token（`GET /bootstrap` 的 `device` 多了 `personal`、`staffId`）。個人手機：
+   - 開 App 直接登入 `staffId` 那位；鎖定畫面換成 Face ID／手機密碼
+   - 這位被停用、或裝置被停用（401）→ 回到配對畫面
+   - 設定 →「登出這支手機」：`POST /devices/self/revoke`（網站停用這台），清掉 console 的 token
+
 ## 開機資料
 
 ### `GET /bootstrap`
