@@ -1,0 +1,14 @@
+PrinterLab: 測試頁 虛擬 58（收據・證明聯・號碼牌）
+PrinterLab: 測試頁 虛擬 80（廚房）
+PrinterLab: 測試頁 虛擬 80 點陣圖（收據）
+IOSurfaceClientSetSurfaceNotify failed e00002c7
+PrinterLab: 交易明細 A018
+PrinterLab: 廚房單 A023
+PrinterLab: 結帳單 A023
+PrinterLab: 證明聯 XD12345677
+2026-10-04 12:18:44.625 StudioXPOS[54006:156082] The filter 'CIPortraitEffectSpillCorrection' is not implemented in the bundle at /Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot/System/Library/CoreImage/PortraitFilters.cifilter.
+PrinterLab: 號碼牌（預設版面）
+PrinterLab: 號碼牌（黑框背景）
+PrinterLab: 開錢櫃
+PrinterLab: done
+tw.studiox.pos: 54006
