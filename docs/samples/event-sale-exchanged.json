@@ -1,0 +1,12 @@
+{
+  "at" : "2026-09-21T14:13:20.000Z",
+  "data" : "{\"reason\":\"太小\",\"swaps\":[{\"fromSkuId\":\"sku-tee-blk-m\",\"lineId\":\"ln-tee\",\"quantity\":1,\"toProductVariantId\":\"pv-tee-blk-l\",\"toSkuId\":\"sku-tee-blk-l\",\"toVariantName\":\"黑・L\"}],\"ticketId\":\"tkt-apparel-1\"}",
+  "deviceId" : "dev-b",
+  "hash" : "da8f3202b4dad145ac8753ae7c4cd3aeeaed09fc6af555b88fa8b81fd4b86710",
+  "id" : "evt-1003",
+  "lamport" : 1302,
+  "prevHash" : "1607e7fe8ebffefef0e7ce3694315e2c581aa8ac1b5c4be8a2c02b05d08317e4",
+  "seq" : 3,
+  "staffId" : "staff-cameron",
+  "type" : "sale.exchanged"
+}

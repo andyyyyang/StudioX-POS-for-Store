@@ -63,6 +63,9 @@
     ]
   },
   "features" : {
+    "accounts" : true,
+    "appointments" : true,
+    "commission" : true,
     "invoice" : true,
     "kitchen" : true,
     "members" : true,
@@ -102,7 +105,8 @@
         "id" : "roll-1",
         "period" : "11510",
         "start" : 12345650,
-        "track" : "AB"
+        "track" : "AB",
+        "usedThrough" : 12345650
       }
     ],
     "sellerAddress" : "台南市中西區民族路二段1號",
@@ -128,6 +132,7 @@
   ],
   "store" : {
     "address" : "台南市中西區民族路二段1號",
+    "bookingSlotMinutes" : 15,
     "businessDayCutoffHour" : 4,
     "cashQuickAmounts" : [
       10000,
@@ -143,9 +148,11 @@
       1500,
       2000
     ],
+    "exchangeDays" : 7,
     "legalName" : "晨麥手作有限公司",
     "name" : "晨麥手作",
     "phone" : "06-2220000",
+    "prepaidInvoicing" : "atTopUp",
     "receiptFooter" : "謝謝光臨",
     "serviceChargeBps" : 1000,
     "serviceChargeOn" : [
@@ -155,7 +162,10 @@
       "tableService",
       "counter",
       "retail",
-      "cafe"
+      "cafe",
+      "apparel",
+      "salon",
+      "fitness"
     ],
     "tableTimeLimitMinutes" : 90,
     "taxId" : "04595257",

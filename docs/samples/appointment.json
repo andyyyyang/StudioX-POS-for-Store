@@ -1,0 +1,30 @@
+{
+  "createdAt" : "2026-09-21T14:13:20.000Z",
+  "durationMinutes" : 180,
+  "id" : "rsv-appt-1",
+  "kind" : "appointment",
+  "memberId" : "mem-1",
+  "name" : "王小美",
+  "note" : "",
+  "partySize" : 1,
+  "phone" : "0912345678",
+  "services" : [
+    {
+      "durationMinutes" : 60,
+      "itemId" : "itm-cut",
+      "name" : "剪髮"
+    },
+    {
+      "durationMinutes" : 120,
+      "itemId" : "itm-dye",
+      "name" : "染髮"
+    }
+  ],
+  "source" : "pos",
+  "staffId" : "staff-mori",
+  "startsAt" : "2026-09-21T14:13:20.000Z",
+  "status" : "booked",
+  "tableIds" : [
+
+  ]
+}

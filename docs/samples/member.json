@@ -1,0 +1,77 @@
+{
+  "member" : {
+    "accountEventIds" : [
+      "evt-1001"
+    ],
+    "birthday" : "10-12",
+    "id" : "mem-1",
+    "lastVisitAt" : "2026-09-21T14:13:20.000Z",
+    "lifetimeSpend" : 4820000,
+    "name" : "王小美",
+    "note" : "6N+7.1 1:1，頭皮敏感",
+    "passes" : [
+      {
+        "expiresAt" : "2027-09-20T16:00:00.000Z",
+        "id" : "ln-card",
+        "name" : "剪髮 10 次卡",
+        "remaining" : 10,
+        "spec" : {
+          "categoryIds" : [
+
+          ],
+          "checkIn" : false,
+          "itemIds" : [
+            "itm-cut"
+          ],
+          "kind" : "visits",
+          "validDays" : 365,
+          "visits" : 10
+        },
+        "startsAt" : "2026-09-21T14:13:20.000Z",
+        "status" : "active",
+        "ticketId" : "tkt-salon-1",
+        "unitValue" : 50000
+      },
+      {
+        "expiresAt" : "2026-10-20T16:00:00.000Z",
+        "id" : "ln-month",
+        "name" : "月卡",
+        "spec" : {
+          "categoryIds" : [
+
+          ],
+          "checkIn" : true,
+          "itemIds" : [
+
+          ],
+          "kind" : "period",
+          "validDays" : 30
+        },
+        "startsAt" : "2026-09-21T14:13:20.000Z",
+        "status" : "active",
+        "ticketId" : "tkt-gym-1",
+        "unitValue" : 150000
+      }
+    ],
+    "phone" : "0912345678",
+    "recentVisits" : [
+      {
+        "at" : "2026-09-21T14:13:20.000Z",
+        "items" : [
+          "剪髮",
+          "染髮",
+          "剪髮 10 次卡"
+        ],
+        "number" : "B007",
+        "staffNames" : [
+          "Mori"
+        ],
+        "ticketId" : "tkt-salon-1",
+        "total" : 750000
+      }
+    ],
+    "tierName" : "金卡",
+    "visits" : 23,
+    "wallet" : 850000
+  }
+}

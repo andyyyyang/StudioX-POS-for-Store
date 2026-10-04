@@ -1,0 +1,12 @@
+{
+  "at" : "2026-09-21T14:13:20.000Z",
+  "data" : "{\"checkIn\":{\"at\":\"2026-09-21T14:13:20.000Z\",\"by\":\"staff-cameron\",\"id\":\"chk-1\",\"member\":{\"id\":\"mem-1\",\"name\":\"王小美\",\"phone\":\"0912345678\",\"tierName\":\"金卡\"},\"note\":\"\",\"passId\":\"ln-month\",\"passName\":\"月卡\",\"sessionId\":\"cls-yoga-0921\",\"uses\":0}}",
+  "deviceId" : "dev-b",
+  "hash" : "1607e7fe8ebffefef0e7ce3694315e2c581aa8ac1b5c4be8a2c02b05d08317e4",
+  "id" : "evt-1002",
+  "lamport" : 1301,
+  "prevHash" : "58ab94be39de9fee7e53f683b37b97ca68b22fda2763b851bf7e5c76db28c571",
+  "seq" : 2,
+  "staffId" : "staff-cameron",
+  "type" : "member.checkedIn"
+}

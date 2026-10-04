@@ -1,0 +1,16 @@
+{
+  "classes" : [
+    {
+      "booked" : 9,
+      "capacity" : 15,
+      "dropInPrice" : 45000,
+      "durationMinutes" : 60,
+      "id" : "cls-yoga-0921",
+      "itemId" : "itm-yoga",
+      "name" : "流動瑜珈",
+      "room" : "B 教室",
+      "staffId" : "staff-jacob",
+      "startsAt" : "2026-09-21T14:13:20.000Z"
+    }
+  ]
+}

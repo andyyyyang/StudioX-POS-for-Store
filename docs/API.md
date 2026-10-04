@@ -47,13 +47,13 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 | 欄位 | 內容 |
 |---|---|
 | `version` | 設定的版本（菜單、桌位、人員、店家設定、號碼段任一個改了就變） |
-| `device` | 這台：`id, name, code, role, stations` |
-| `store` | `StoreProfile`：店名、統編、地址、服務費、營業日分界、折扣上限、找零快速鍵、`serviceModes`（開了哪些營業模式：`tableService`／`counter`／`retail`／`cafe`）與 `defaultServiceMode`。少給的欄位 iPad 用預設值 |
-| `features` | 開了哪些功能：`seating, kitchen, reservations, invoice, members, waitlistSMS` |
-| `catalog` | `categories`（`swatch` 是色塊名稱）、`items`（只給上架的；`isAvailable=false` 是今天賣完）、`modifierGroups` |
+| `device` | 這台：`id, name, code, role, stations`。`role` 是崗位（見下方「崗位」）；不認得的值 iPad 當作 `register` |
+| `store` | `StoreProfile`：店名、統編、地址、服務費、營業日分界、折扣上限、找零快速鍵、`serviceModes`（開了哪些營業模式：`tableService`／`counter`／`retail`／`cafe`／`apparel`／`salon`／`fitness`）與 `defaultServiceMode`、`prepaidInvoicing`（`atTopUp` 儲值時開發票［預設］／`atRedemption` 消費時開）、`exchangeDays`（幾天內可以換貨，預設 7、0＝不限）、`bookingSlotMinutes`（預約表一格幾分，預設 15）。少給的欄位 iPad 用預設值 |
+| `features` | 開了哪些功能：`seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission`。後三個沒給＝`false`（要後台有對應的資料表才開） |
+| `catalog` | `categories`（`swatch` 是色塊名稱）、`items`（只給上架的；`isAvailable=false` 是今天賣完；非餐飲的欄位見下方「品項的種類與規格」）、`modifierGroups` |
 | `floor` | `areas[].tables[]`，座標是 0–100 的格子 |
-| `staff` | 門市人員（只給啟用中的），含 PIN 雜湊：`PBKDF2-HMAC-SHA256(pin, pinSalt, pinIterations, 32 bytes)` 的十六進位。後台用 Node：`crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex')` |
-| `invoice` | `enabled, sellerTaxId, sellerName, sellerAddress, qrKey`（財政部的 QR Code 加密金鑰，32 個十六進位字）、`rolls`（**這台**還在用的號碼段） |
+| `staff` | 門市人員（只給啟用中的），含 PIN 雜湊：`PBKDF2-HMAC-SHA256(pin, pinSalt, pinIterations, 32 bytes)` 的十六進位。後台用 Node：`crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex')`。選填：`title`（職稱：設計師、教練）、`bookable`（排進預約表）、`commissionBps`（預設抽成，萬分比） |
+| `invoice` | `enabled, sellerTaxId, sellerName, sellerAddress, qrKey`（財政部的 QR Code 加密金鑰，32 個十六進位字）、`rolls`（**這台**還在用的號碼段；每段帶 `usedThrough`＝後台收到這一段用到的最後一號，iPad 一定從它的下一號開始，所以本機事件刪掉了也不會重號） |
 | `mesh` | 同一家店的 iPad 在區網互相同步用的金鑰（32 bytes 十六進位）與開關 |
 
 ## 事件（同步的核心）
@@ -96,6 +96,13 @@ POS 上每一件事都是一筆不可改的事件。iPad 斷網照樣記，連�
 5. 不認得的 `type` 照樣收（新版 App 的事件），只是不做投影。
 6. 收下：存進 `pos_events`（給一個遞增的 `serverSeq`），然後做**投影**（下一節）。整批在一個交易裡、照 seq 順序處理。
 
+### 本機只留最近兩天
+
+資料以後台為主：iPad 的事件日誌只留「快速開機、斷網照常營業」需要的——還沒送出的、最近兩天、還開著的單與班、這一期與上一期的發票事件；
+其他（已經送到後台的）會刪掉。更早的營業日用 `GET /history` 跟後台要。所以：
+- 後台是歷史資料的唯一來源（報表、退款紀錄、會員帳戶）
+- `invoice.rolls[].usedThrough` 一定要給（見上）
+
 ### `GET /events?after=<serverSeq>&limit=500`
 
 同一家店**所有裝置**的事件（含自己的；App 用 id 去重），照 `serverSeq` 排。
@@ -117,7 +124,12 @@ POS 上每一件事都是一筆不可改的事件。iPad 斷網照樣記，連�
 | `ticket.voided` | 只存事件（報表從事件算作廢）。|
 | `shift.closed` | 寫 `pos_shifts`（含 `data.report` 交班單）；推播給負責人：「櫃台 1 交班：營業額 NT$xx、現金短少 NT$yy」。|
 | `item.availability` | 更新 `pos_items.is_available`（後台與其他 iPad 都看到賣完）。|
-| 其他 | 只存。|
+| `sale.exchanged` | 同款換規格（換尺寸、換顏色，同價）：每個 `swaps[]` 把 `fromSkuId` 的庫存加回、`toSkuId` 扣掉（有 `toProductVariantId` 的扣網路商店的規格）。不動錢、不動發票。|
+| `member.checkedIn` | 寫 `pos_checkins`；`uses > 0` 時扣那張卡的次數（見「會員帳戶」）。|
+| `member.checkInVoided` | 標取消；還回次數。|
+| 其他 | 只存（新版 App 的事件也是：原樣存、原樣轉發）。|
+
+`ticket.closed`、`sale.refunded` 另外還要做「會員帳戶」與「庫存」的投影（見下）。
 
 ## 發票號碼段
 
@@ -133,9 +145,72 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 
 ## 會員
 
-- `GET /members?phone=0912345678` → `{ "member": { id, phone, name, tierName, lifetimeSpend, visits, lastVisitAt, note } }` 或 `{ "member": null }`
+- `GET /members?phone=0912345678` → `{ "member": { id, phone, name, tierName, lifetimeSpend, visits, lastVisitAt, note, wallet, passes, accountEventIds, recentVisits, photoURL, birthday } }` 或 `{ "member": null }`
   （和網路商店同一份會員；電話正規化成 `+886…` 再找）
+  - `wallet`：儲值金餘額（分）；`passes`：課程卡／會籍（`MemberPass`：`id, name, spec, remaining, startsAt, expiresAt, ticketId, unitValue, status`，含最近用完、過期的）
+  - `accountEventIds`：**最近 7 天**後台已經算進 `wallet`／`passes` 的 POS 事件 id。iPad 把自己記了、但不在這份清單裡的事件補算上去（斷網時也對）
+  - `recentVisits`：最近 10 次消費（門市＋網路）：`ticketId, number, at, total, items[], staffNames[], note`
+  - `birthday`：`MM-DD`
 - `POST /members` `{ phone, name }` → `{ member }`（現場加入會員；已存在就回原本的）
+- `PATCH /members/:id` `{ name?, note?, birthday? }` → `{ member }`（美業的配方、偏好記在 note）
+
+## 會員帳戶（儲值金、課程卡、會籍）
+
+帳戶的變動不另外傳：iPad 與後台照**同一套規則**從事件推出來（Swift 的 `AccountRules`，`Packages/POSKit/Sources/POSCore/Accounts.swift`）。只有 `sale.member.id` 有值的單才算。
+
+| 事件 | 帳戶變動 |
+|---|---|
+| `ticket.closed`，行的 `kind = storedValue` | 儲值金加 `(credit ?? unitPrice) × quantity` |
+| `ticket.closed`，行的 `kind = pass` | 每一個數量發一張卡：`id` = `lineId`（數量 1）或 `lineId#1`、`lineId#2`…；`remaining` = `pass.visits`（次數卡）；`startsAt` = `passStartsAt ?? closedAt`；`expiresAt` = `startsAt` 那天（台北）00:00 加 `validDays` 天；`unitValue` = 實收 ÷ 數量 ÷ 次數（整數元、四捨五入；期間會籍＝實收 ÷ 數量） |
+| `ticket.closed`，行有 `redeem` | 那張卡扣 `quantity` 次（`remaining` 到 0 → `usedUp`） |
+| `ticket.closed`，付款 `tender = prepaid` | 儲值金扣 `amount` |
+| `sale.refunded`，`tender = prepaid` | 儲值金加回 `refund.amount` |
+| `sale.refunded`，退了儲值的行 | 儲值金扣 `(credit ?? unitPrice) × 退的數量` |
+| `sale.refunded`，退了課程卡的行 | 從最後一張往前作廢（`cancelled`）退的數量 |
+| `sale.refunded`，退了有 `redeem` 的行 | 那張卡還回退的數量 |
+| `member.checkedIn`（`uses > 0`） | 那張卡扣 `uses` 次；`member.checkInVoided` 還回 |
+
+「退了哪些行」：`refund.lines` 有列就照列的；沒列而且 `refund.amount ≥ sale.total`＝全部；只退一部分金額（沒列品項）不動帳戶。
+扣成負的（兩台都斷網、各扣一次）照記，標出來給店長處理。
+
+## 品項的種類與規格（服飾、美業、健身）
+
+`catalog.items[]` 選填的欄位（沒有＝一般商品、沒有規格）：
+
+| 欄位 | |
+|---|---|
+| `kind` | `goods`（預設）、`service`（剪髮、私人教練一堂）、`pass`（課程卡、會籍）、`storedValue`（儲值） |
+| `optionNames` | 規格的維度：`["顏色","尺寸"]` |
+| `variants[]` | `id, options[]（照 optionNames 排：["黑","M"]）, sku, barcode, price（沒有＝品項價）, stock, isAvailable, productVariantId（網路商店的規格，扣同一份庫存）` |
+| `durationMinutes` | 服務多久（排預約） |
+| `pass` | `PassSpec`：`kind`（`visits` 次數卡／`period` 期間會籍）, `visits`, `validDays`, `itemIds[]`／`categoryIds[]`（能抵哪些服務）, `checkIn`（健身房入場用） |
+| `credit` | 儲值進去的金額（儲 10,000 送 1,000 → 1,100,000 分） |
+| `commissionBps` | 抽成（萬分比；沒有用服務人員的） |
+
+單子上的行（`lines.added` 的 `TicketLine`、`ticket.closed` 的 `SaleLine`）對應帶：`kind, skuId（門市規格 id）, variantName（「黑・M」）, staffId（業績算給誰：SaleLine 上已經決定好）, assistantId, durationMinutes, pass, passStartsAt, credit, redeem{passId,name,value}, commissionBps`。
+`ticket.opened` 選填：`serviceMode, member, salespersonId, exchange{ticketId, number, lines[], amount}, appointmentId`。
+
+**庫存**：`ticket.closed` 每一行有 `skuId` 的扣門市規格的庫存、有 `variantId`（網路商店規格）的扣網路商店的；退款反過來。
+
+**付款方式**多了 `prepaid`（儲值金）與 `exchange`（換貨抵用：退回的商品抵掉新買的；`change` > 0＝退差額，從錢櫃拿現金）。實收不算這兩種。
+
+**換貨**：結帳時同一批事件裡有原單的 `sale.refunded`（`tender = exchange`，照規則作廢或開折讓）與新單的 `ticket.closed`（`payments` 有一筆 `exchange`、`exchange` 欄位指向原單）。
+
+**發票與儲值**：`prepaidInvoicing = atTopUp` 時，用儲值金付的部分 iPad 已經從發票扣掉（發票上有一行「儲值金扣抵」）；`atRedemption` 時賣儲值那一行不開。課程卡抵用的行金額是 0，不列。
+
+## 崗位
+
+`device.role`（配對時決定，店長也可以在 iPad 上改；改了會在心跳的 `workstation` 回報）：
+
+| role | 名稱 | 側欄 | 收錢 | 錢櫃 |
+|---|---|---|---|---|
+| `register` | 結帳櫃台 | 全部 | ✓ | ✓ |
+| `handheld` | 前場點餐 | 點餐、桌位、預約、報到、訂單、會員、訂位 | 刷卡、電子支付 | |
+| `reception` | 報到接待 | 桌位（帶位）、預約、報到、會員、訂位、訂單 | | |
+| `kitchen` | 後廚 | 廚房、訂單 | | |
+| `expo` | 出餐口 | 廚房（所有出單站）、訂單 | | |
+
+會收錢的崗位（`register`、`handheld`）才要號碼段：`POST /invoice/rolls` 照裝置**目前**的崗位（心跳回報的 `workstation`，沒有就用配對時的）判斷，不是配對時的。
 
 ## 訂位與候位
 
@@ -146,7 +221,25 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 
 範例：`samples/reservation.json`。
 
+預約服務（美業、私人教練）與團體課報名也走這組 API：
+- `kind`：`reservation`（訂位）、`waitlist`（候位）、`appointment`（預約服務）、`classBooking`（團體課報名）
+- 選填：`staffId`（指定的設計師、教練）、`services[]`（`itemId, name, durationMinutes, staffId?, price?`）、`memberId`、`sessionId`（團體課）、`ticketId`（到店後開的單）
+- `GET /classes?date=2026-10-04` → `{ "classes": [ { id, name, staffId, startsAt, durationMinutes, capacity, booked, room, itemId, dropInPrice, note } ] }`（後台「課表」排的；`booked` 不含取消）
+
+## 歷史
+
+`GET /history?date=2026-10-01` → 那一個營業日所有裝置的資料（iPad 只留最近兩天，更早的跟後台要）：
+
+```json
+{ "businessDate": "2026-10-01",
+  "sales": [ …ticket.closed 的 data.sale 原樣… ],
+  "refunds": [ { "ticketId": "…", "refund": { …sale.refunded 的 data.refund… } } ],
+  "voidedTickets": [ { "ticketId": "…", "number": "A012", "items": 3, "amount": 27000, "reason": "客人走了" } ],
+  "invoiceNumbers": ["AB12345650", "…"], "voidedInvoiceNumbers": ["…"], "checkIns": 42 }
+```
+報表在 iPad 上用同一套 `SalesSummary` 算（後台不必重寫報表算法）。
+
 ## 其他
 
 - `PUT /floor` `{ areas, staffId }` → `{ floor, version }`：iPad 上改桌位圖（店長 PIN 授權）
-- `POST /heartbeat` `{ appVersion, outbox, lastSeq, printers[], battery, openTickets, staffId }` → `{ serverTime, configVersion, serverSeq }`：每分鐘一次；後台「裝置」頁顯示在線、未送出的事件數、出單機狀態
+- `POST /heartbeat` `{ appVersion, outbox, lastSeq, printers[], battery, openTickets, staffId, workstation }` → `{ serverTime, configVersion, serverSeq }`：每分鐘一次；後台「裝置」頁顯示在線、未送出的事件數、出單機狀態、目前的崗位
