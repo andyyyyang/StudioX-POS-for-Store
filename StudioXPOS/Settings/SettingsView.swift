@@ -1420,7 +1420,7 @@ private struct SettingsPrinterEditor: View {
     private var footer: some View {
         HStack(spacing: 0) {
             ActionBar(
-                primary: POSAction(isNew ? "加入" : "儲存", icon: "check", enabled: canSave, perform: save),
+                primary: POSAction(isNew ? "加入" : "儲存", icon: "check", enabled: canSave) { save() },
                 secondary: [POSAction("測試列印", icon: "printer", enabled: canConnect) { testPrint() }],
                 more: isNew ? [] : [POSAction("刪除這台出單機", icon: "trash", destructive: true) { confirmDelete = true }],
                 size: .lg,

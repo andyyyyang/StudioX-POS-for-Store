@@ -228,11 +228,10 @@ struct MembersRing: View {
 // MARK: - 課程卡
 
 /// 一張課程卡、會籍：圓環＋名字＋剩幾次／到哪天（顏色照狀態：有效、快到期、還沒開始、結束）。
-/// 卡片最多一個動作（快到期、過期、用完時的「續約」「再買一張」），平常沒有按鈕
+/// 只有狀態，沒有按鈕：續約、再買一張在右欄（「買卡」的面板）
 struct MembersPassCard: View {
     let pass: MemberPass
     let now: Date
-    var action: POSAction? = nil
 
     var body: some View {
         let state = MembersStyle.state(of: pass, at: now)
@@ -274,14 +273,6 @@ struct MembersPassCard: View {
                         .foregroundStyle(state == .expiring ? Theme.accentText : (finished ? Theme.muted : Theme.ink2))
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if let action {
-                    Button(action: action.perform) {
-                        Text(action.title).lineLimit(1)
-                    }
-                    .buttonStyle(.brand(.ghost, size: .sm))
-                    .disabled(!action.isEnabled)
-                    .padding(.top, 4)
-                }
             }
             Spacer(minLength: 0)
         }
@@ -295,8 +286,8 @@ struct MembersPassCard: View {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                 .strokeBorder(state == .expiring ? Theme.accent.opacity(0.45) : Theme.line, lineWidth: 1)
         }
-        .opacity(finished && action == nil ? 0.72 : 1)
-        .accessibilityElement(children: .contain)
+        .opacity(finished ? 0.72 : 1)
+        .accessibilityElement(children: .combine)
     }
 
     /// 圓環要畫多滿

@@ -828,10 +828,10 @@ private struct KitchenExpoCard: View {
     }
 
     private var callAction: POSAction {
-        POSAction(calledAt == nil ? "叫號" : "再叫一次", icon: "speaker-wave", perform: onCall)
+        POSAction(calledAt == nil ? "叫號" : "再叫一次", icon: "speaker-wave") { onCall() }
     }
 
     private var servedAction: POSAction {
-        POSAction("已出餐", icon: "check-circle", perform: onServed)
+        POSAction("已出餐", icon: "check-circle") { onServed() }
     }
 }

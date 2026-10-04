@@ -5,12 +5,12 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 一位會員的資料卡：大頭像與名字、等級與壽星、累積消費；一條動作列；今天的預約與開著的單；
+/// 一位會員的資料卡：大頭像與名字、等級與壽星、累積消費；今天的預約與開著的單；
 /// 儲值金（大數字）、課程卡與會籍（圓環卡片）；備註卡（美業的配方、健身的身體狀況）；來店時間軸。
 ///
-/// 按鈕照 docs/DESIGN.md 收成一條動作列：主要「開單」（已經有單就「繼續 A0xx」）、次要最多兩個（儲值；預約或報到）、
-/// 其他（改名字、改生日、買卡、重新查、收起）在「⋯」。課程卡快到期、過期、用完時卡片上才有一個「續約」「再買一張」。
-/// 儲值、生日都在右側鍵盤打（儲值方案是鍵盤上的快速鍵）。
+/// 左邊選、右邊做（docs/DESIGN.md）：這裡只有看的與要打字的（名字、備註），動作都在右欄——
+/// 最下面的大鍵「開單」（已經有單就「繼續 A0xx」），上面的動作鍵：儲值、預約或報到、買卡／續約（面板）、改名字、改生日、重新查。
+/// 儲值、生日在右側鍵盤打（儲值方案是鍵盤上的快速鍵）；右欄的 × 取消選取。
 ///
 /// 後台是真的資料：打開時先顯示這台記得的，同時向後台重查一次。儲值、買卡都是開一張這位會員的單、直接結帳。
 struct MembersProfile: View {
@@ -18,11 +18,9 @@ struct MembersProfile: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let focus: MembersFocus
-    /// 窄的工作區（直的 iPad）：資料卡佔滿，上面一個「名單」回去
+    /// 窄的工作區（直的 iPad）：資料卡佔滿（右欄的 × 回到名單）
     var compact = false
     var onClose: () -> Void
-    /// 右側鍵盤用完了（生日存好、儲值取消）：讓會員頁的鍵盤回去等電話
-    var onKeypadDone: () -> Void = {}
 
     enum Phase: Equatable {
         case loading
@@ -49,6 +47,8 @@ struct MembersProfile: View {
     @State private var enrollName = ""
     @State private var enrolling = false
     @State private var enrollProblem: String? = nil
+    /// 右欄的「買卡／續約」面板
+    @State private var choosingPass = false
     @FocusState private var editing: Field?
 
     private var vocab: MembersVocabulary { MembersVocabulary(mode: model.mode) }
@@ -61,25 +61,20 @@ struct MembersProfile: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            if compact {
-                Button(action: onClose) {
-                    Label { Text("名單") } icon: { HeroIcon("arrow-left", size: 14) }
-                }
-                .buttonStyle(.brand(.quiet, size: .sm))
-                .accessibilityLabel("回到名單")
-            }
-            Group {
-                if let m = member {
-                    card(m)
-                } else {
-                    switch phase {
-                    case .notFound: notFound
-                    case .failed(let why): failed(why)
-                    case .loading, .fresh, .offline: loading
-                    }
+        Group {
+            if let m = member {
+                card(m)
+            } else {
+                switch phase {
+                case .notFound: notFound
+                case .failed(let why): failed(why)
+                case .loading, .fresh, .offline: loading
                 }
             }
+        }
+        .dockSelection(dock)
+        .dockPanel(isPresented: $choosingPass, title: vocab.buyPass, subtitle: member.map { $0.name ?? $0.ref.maskedPhone }) {
+            passChoices
         }
         .task(id: focus.token) { await refresh() }
         .onChange(of: member) { _, m in sync(m) }
@@ -93,7 +88,7 @@ struct MembersProfile: View {
         let problem = entryProblem(account, now: now)
         return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                hero(m, account: account, now: now)
+                hero(m, now: now)
                     .reveal(0)
                 if let problem {
                     Banner(text: problem, tone: .warning)
@@ -116,14 +111,13 @@ struct MembersProfile: View {
 
     // MARK: 頭
 
-    private func hero(_ m: Member, account: MemberAccount?, now: Date) -> some View {
+    private func hero(_ m: Member, now: Date) -> some View {
         let open = model.openTickets(for: m)
         // 在店裡：單子開著，或預約已到店
         let inStore = !open.isEmpty || model.memberBookings(for: m).contains { $0.status == .arrived }
         return VStack(alignment: .leading, spacing: 20) {
             heroIdentity(m, now: now, inStore: inStore)
             stats(m, now: now)
-            actionBar(m, account: account, open: open, now: now)
         }
         .padding(compact ? 20 : 24)
         .background { heroBackground(seed: m.id) }
@@ -172,9 +166,9 @@ struct MembersProfile: View {
         }
     }
 
-    /// 改名字（從「⋯」打開）：一格字、存、取消
+    /// 改名字（右欄「改名字」打開）：一格字；存、取消在右欄（鍵盤上的「完成」也會存）
     private func nameEditor(_ m: Member) -> some View {
-        HStack(alignment: .center, spacing: 8) {
+        HStack(alignment: .center, spacing: 10) {
             TextField("輸入名字", text: $nameDraft)
                 .font(.brand(compact ? 24 : 28, .medium))
                 .textFieldStyle(.plain)
@@ -183,20 +177,12 @@ struct MembersProfile: View {
                 .submitLabel(.done)
                 .focused($editing, equals: .name)
                 .onSubmit { Task { await saveName(m) } }
-                .padding(.bottom, 4)
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Theme.accent).frame(height: 1.5)
-                }
                 .accessibilityLabel("會員名字")
-            Button {
-                Task { await saveName(m) }
-            } label: {
-                if savingName { ProgressView().controlSize(.small) } else { Text("存") }
-            }
-            .buttonStyle(.brand(.primary, size: .sm))
-            .disabled(savingName)
-            Button("取消") { cancelNameEdit() }
-                .buttonStyle(.brand(.quiet, size: .sm))
+            if savingName { ProgressView().controlSize(.small) }
+        }
+        .padding(.bottom, 4)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Theme.accent).frame(height: 1.5)
         }
     }
 
@@ -250,46 +236,134 @@ struct MembersProfile: View {
         }
     }
 
-    // MARK: 動作列（整張資料卡只有這一條）
+    // MARK: - 右欄（選起來的這一位：所有動作都在這裡）
 
-    private func actionBar(_ m: Member, account: MemberAccount?, open: [Ticket], now: Date) -> some View {
-        let topUps = account == nil ? [] : model.memberProducts(.storedValue)
-        var secondary: [POSAction] = []
-        if !topUps.isEmpty {
-            secondary.append(POSAction("儲值", icon: "banknotes") { topUp(m) })
+    /// 右欄的卡片與動作：看是資料卡、查不到、查詢中、出錯
+    private var dock: DockSelection {
+        let masked = MemberRef(phone: focus.phone).maskedPhone
+        if let m = member { return memberDock(m) }
+        switch phase {
+        case .notFound:
+            return DockSelection(id: "member-new-\(focus.phone)", kind: "新會員", title: Self.groupedPhone(focus.phone), detail: "還不是會員：稱呼可以在左邊先填",
+                                 primary: POSAction(enrolling ? "加入中…" : "加入會員", icon: "plus", enabled: !enrolling) { Task { await enroll() } },
+                                 accent: true, clear: { onClose() })
+        case .failed(let why):
+            return DockSelection(id: "member-failed-\(focus.phone)", kind: "會員", title: masked, detail: why,
+                                 badge: DockBadge("查不到", tone: .danger),
+                                 primary: POSAction("再試一次", icon: "arrow-path") { Task { await refresh() } }, accent: false,
+                                 clear: { onClose() })
+        case .loading, .fresh, .offline:
+            return DockSelection(id: "member-loading-\(focus.phone)", kind: "會員", title: focus.ref?.name ?? masked,
+                                 detail: "向後台查 \(masked)…", clear: { onClose() })
         }
-        let canCheckIn = model.mode.usesCheckIn && model.visibleSections.contains(.checkIn)
-        let canBook = model.visibleSections.contains(.appointments)
-        if canCheckIn {
-            secondary.append(POSAction("報到", icon: "qr-code") { model.go(.checkIn) })
-        }
-        if canBook {
-            // 健身房：報到優先，約教練擠到「⋯」（ActionBar 超過兩個次要的自動收進去）
-            secondary.append(POSAction(vocab.book, icon: "calendar") { model.go(.appointments) })
+    }
+
+    private func memberDock(_ m: Member) -> DockSelection {
+        let now = Date()
+        let account = model.account(for: m.ref)
+        let open = model.openTickets(for: m)
+        let name = (m.name?.isEmpty ?? true) ? m.ref.maskedPhone : (m.name ?? "")
+
+        var detail = [m.ref.maskedPhone]
+        if let tier = m.tierName { detail.append(tier) }
+        if let account, m.wallet != nil || account.wallet.cents != 0 { detail.append("儲值金 \(account.wallet.formatted)") }
+        let usable = account?.usablePasses(at: now).count ?? 0
+        if usable > 0 { detail.append("\(usable) 張卡能用") }
+
+        var badge: DockBadge? = nil
+        if !open.isEmpty || model.memberBookings(for: m).contains(where: { $0.status == .arrived }) {
+            badge = DockBadge("在店裡", tone: .gold)
+        } else if POSModel.isBirthdayMonth(m.birthday, now: now) {
+            badge = DockBadge("本月壽星", tone: .gold)
         }
 
-        var more: [POSAction] = []
+        // 改名字的時候：大鍵是「存名字」，動作只有「取消」
+        if editingName {
+            return DockSelection(id: "member-\(m.id)-name", kind: "改名字", title: name, detail: "在左邊改，按「存名字」（或鍵盤上的完成）",
+                                 primary: POSAction(savingName ? "存名字中…" : "存名字", icon: "check", enabled: !savingName) { Task { await saveName(m) } },
+                                 actions: [POSAction("取消改名字", icon: "x-mark") { cancelNameEdit() }],
+                                 clear: { cancelNameEdit() })
+        }
+
+        var actions: [POSAction] = []
+        if account != nil, !model.memberProducts(.storedValue).isEmpty {
+            actions.append(POSAction("儲值", icon: "banknotes") { topUp(m) })
+        }
+        if model.mode.usesCheckIn && model.visibleSections.contains(.checkIn) {
+            actions.append(POSAction("報到", icon: "qr-code") { model.go(.checkIn) })
+        }
+        if model.visibleSections.contains(.appointments) {
+            actions.append(POSAction(vocab.book, icon: "calendar") { model.go(.appointments) })
+        }
+        let passItems = account == nil ? [] : model.memberProducts(.pass)
+        if passItems.count == 1, let item = passItems.first {
+            let renew = account.map { renewableNames(m, account: $0, now: now).contains(item.name) } ?? false
+            actions.append(POSAction(renew ? "續約\(item.name)" : "買\(item.name)", icon: "ticket") { sell(item, to: m) })
+        } else if passItems.count > 1 {
+            actions.append(POSAction(vocab.buyPass, icon: "ticket") { choosingPass = true })
+        }
+        actions.append(POSAction("改名字", icon: "pencil-square") { startNameEdit() })
+        actions.append(POSAction("改生日", icon: "cake") { editBirthday(m) })
+        actions.append(POSAction("重新查", icon: "arrow-path") { Task { await refresh() } })
         for t in open.dropLast() {
-            more.append(POSAction("打開 \(t.number)", icon: "queue-list") { model.openExistingTicket(t) })
-        }
-        if account != nil {
-            let renewable = Set(cardActions(m, account: account, now: now).keys.compactMap { id in account?.passes.first { $0.id == id }?.name })
-            for item in model.memberProducts(.pass) where !renewable.contains(item.name) {
-                let start = model.renewalStart(of: item, for: m).map { "（接在 \(MembersStyle.monthDay($0)) 後）" } ?? ""
-                more.append(POSAction("買\(item.name) \(item.price.short)\(start)", icon: "ticket") { sell(item, to: m) })
-            }
-        }
-        more.append(POSAction("改名字", icon: "pencil-square") { startNameEdit() })
-        more.append(POSAction("改生日", icon: "cake") { editBirthday(m) })
-        more.append(POSAction("向後台重新查", icon: "arrow-path") { Task { await refresh() } })
-        if !compact {
-            more.append(POSAction("收起", icon: "x-mark") { onClose() })
+            actions.append(POSAction("打開 \(t.number)", icon: "queue-list") { model.openExistingTicket(t) })
         }
 
         let primary = POSAction(open.last.map { "繼續 \($0.number)" } ?? "開單", icon: open.isEmpty ? "plus" : "queue-list") {
             model.openMemberTicket(m)
         }
-        return ActionBar(primary: primary, secondary: secondary, more: more, size: .md)
+        return DockSelection(id: "member-\(m.id)", kind: "會員", title: name, detail: detail.joined(separator: "・"), badge: badge,
+                             primary: primary, accent: true, actions: actions, clear: { onClose() })
+    }
+
+    /// 右欄的「買卡／續約」面板：快到期、過期、用完的那幾種排前面（續約、再買一張），其他照菜單
+    @ViewBuilder
+    private var passChoices: some View {
+        if let m = member, let account = model.account(for: m.ref) {
+            let now = Date()
+            let renewable = renewableNames(m, account: account, now: now)
+            let items = model.memberProducts(.pass)
+            let ordered = items.filter { renewable.contains($0.name) } + items.filter { !renewable.contains($0.name) }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(ordered) { item in
+                    DockChoice(title: item.name, detail: choiceDetail(item, m: m, renewable: renewable), trailing: item.price.short) {
+                        choosingPass = false
+                        sell(item, to: m)
+                    }
+                }
+            }
+        }
+    }
+
+    private func choiceDetail(_ item: MenuItem, m: Member, renewable: Set<String>) -> String {
+        if let start = model.renewalStart(of: item, for: m) {
+            return "續約・接在 \(MembersStyle.monthDay(start)) 後"
+        }
+        if renewable.contains(item.name) {
+            return item.pass?.kind == .period ? "續約・今天開始" : "再買一張・上一張快用完或過期了"
+        }
+        return item.pass?.summary ?? item.itemKind.label
+    }
+
+    /// 該續約、再買的卡（快到期、過期、用完；同一種還有沒快到期的或還沒開始的就不算）
+    private func renewableNames(_ m: Member, account: MemberAccount, now: Date) -> Set<String> {
+        let byName = Dictionary(grouping: account.passes.filter { $0.status != .cancelled }, by: \.name)
+        var out = Set<String>()
+        for (name, group) in byName {
+            let covered = group.contains { p in
+                let s = MembersStyle.state(of: p, at: now)
+                return s == .active || s == .upcoming
+            }
+            if !covered { out.insert(name) }
+        }
+        return out
+    }
+
+    /// 0912 345 678
+    static func groupedPhone(_ phone: String) -> String {
+        let d = phone.filter(\.isNumber)
+        guard d.count == 10 else { return phone }
+        return "\(d.prefix(4)) \(d.dropFirst(4).prefix(3)) \(d.suffix(3))"
     }
 
     // MARK: 數字
@@ -454,7 +528,7 @@ struct MembersProfile: View {
         guard model.mode.usesCheckIn, let account, account.checkInPasses(at: now).isEmpty else { return nil }
         let entry = account.passes.filter { $0.spec.checkIn && $0.status != .cancelled }
         guard let latest = entry.max(by: { ($0.expiresAt ?? $0.startsAt) < ($1.expiresAt ?? $1.startsAt) }) else {
-            return "還沒有會籍或課程卡：入場要先買卡（「⋯」），或收單次入場"
+            return "還沒有會籍或課程卡：入場要先買卡（右邊的「\(vocab.buyPass)」），或收單次入場"
         }
         if let e = latest.expiresAt, e <= now {
             let days = max(1, Int((now.timeIntervalSince(e) / 86_400).rounded(.up)))
@@ -472,19 +546,18 @@ struct MembersProfile: View {
         let topUps = model.memberProducts(.storedValue)
         let showWallet = m.wallet != nil || account.wallet.cents != 0 || !topUps.isEmpty
         let passes = sortedPasses(account.passes, now: now)
-        let actions = cardActions(m, account: account, now: now)
         let pending = !model.state.pendingAccountMoves(memberId: m.id, excluding: Set(m.accountEventIds ?? [])).isEmpty
         return VStack(alignment: .leading, spacing: 22) {
             if showWallet {
                 walletCard(wallet: account.wallet, plans: topUps, pending: pending)
             }
             if !passes.isEmpty {
-                passesBlock(passes: passes, actions: actions, now: now)
+                passesBlock(passes: passes, now: now)
             }
         }
     }
 
-    /// 儲值金：深色的卡、大大的餘額（儲值在動作列；這裡寫店裡有哪些方案）
+    /// 儲值金：深色的卡、大大的餘額（儲值在右欄；這裡寫店裡有哪些方案）
     private func walletCard(wallet: Money, plans: [MenuItem], pending: Bool) -> some View {
         let fixed = plans.filter { !$0.openPrice }.map(POSModel.planLabel)
         return VStack(alignment: .leading, spacing: 10) {
@@ -494,7 +567,8 @@ struct MembersProfile: View {
                     .font(.brand(12.5, .medium))
                     .foregroundStyle(Theme.inverseMuted)
             }
-            MoneyText(money: wallet, role: .stat, color: wallet.isNegative ? Theme.dangerFG : Theme.onInverse)
+            // 深色的卡在淺色、深色模式都是深的：字一律用 onInverse（負的有「−」，紅字在深底上看不清楚）
+            MoneyText(money: wallet, role: .stat, color: Theme.onInverse)
             Text(pending ? "含這台今天的儲值、扣款（同步後和後台一樣）" : "後台的餘額")
                 .font(.brand(12, .regular))
                 .foregroundStyle(Theme.inverseMuted)
@@ -528,7 +602,7 @@ struct MembersProfile: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func passesBlock(passes: [MemberPass], actions: [String: POSAction], now: Date) -> some View {
+    private func passesBlock(passes: [MemberPass], now: Date) -> some View {
         let usable = passes.filter { $0.isUsable(at: now) }.count
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -539,7 +613,7 @@ struct MembersProfile: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], alignment: .leading, spacing: 12) {
                 ForEach(passes) { p in
-                    MembersPassCard(pass: p, now: now, action: actions[p.id])
+                    MembersPassCard(pass: p, now: now)
                 }
             }
         }
@@ -555,26 +629,6 @@ struct MembersProfile: View {
             .sorted { ($0.expiresAt ?? $0.startsAt) > ($1.expiresAt ?? $1.startsAt) }
             .prefix(3)
         return usable + upcoming + Array(done)
-    }
-
-    /// 卡片上的「續約」「再買一張」：快到期、過期、用完的才有；同一種卡只放在最新的那一張；
-    /// 已經續約過（同一種還有沒快到期的、或還沒開始的）就不放
-    private func cardActions(_ m: Member, account: MemberAccount?, now: Date) -> [String: POSAction] {
-        guard let account else { return [:] }
-        var out: [String: POSAction] = [:]
-        let byName = Dictionary(grouping: account.passes.filter { $0.status != .cancelled }, by: \.name)
-        for (_, group) in byName {
-            let covered = group.contains { p in
-                let s = MembersStyle.state(of: p, at: now)
-                return s == .active || s == .upcoming
-            }
-            guard !covered,
-                  let latest = group.max(by: { ($0.expiresAt ?? $0.startsAt) < ($1.expiresAt ?? $1.startsAt) }),
-                  let item = model.passItem(for: latest) else { continue }
-            let title = latest.spec.kind == .period ? "續約 \(item.price.short)" : "再買一張 \(item.price.short)"
-            out[latest.id] = POSAction(title, icon: "arrow-path") { sell(item, to: m) }
-        }
-        return out
     }
 
     // MARK: 備註（點一下就能改；改了才出現一個「存到後台」）
@@ -743,11 +797,9 @@ struct MembersProfile: View {
                     .focused($editing, equals: .enroll)
                     .submitLabel(.join)
                     .onSubmit { Task { await enroll() } }
-                ActionBar(
-                    primary: POSAction(enrolling ? "加入中…" : "加入會員", icon: "plus", enabled: !enrolling) { Task { await enroll() } },
-                    secondary: compact ? [] : [POSAction("不用了") { onClose() }],
-                    size: .lg, accent: true
-                )
+                Text("按右邊的「加入會員」；不加就按右上的 ×")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
                 if let enrollProblem {
                     Text(enrollProblem)
                         .textRole(.xs)
@@ -793,16 +845,10 @@ struct MembersProfile: View {
         .opacity(0.9)
     }
 
+    /// 查不到（出錯）：「再試一次」在右欄
     private func failed(_ why: String) -> some View {
-        VStack(spacing: 14) {
-            EmptyState(icon: "exclamation-triangle", title: "查不到 \(MemberRef(phone: focus.phone).maskedPhone)", message: why)
-                .frame(maxHeight: 220)
-            Button("再試一次") {
-                Task { await refresh() }
-            }
-            .buttonStyle(.brand(.ghost, size: .md))
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EmptyState(icon: "exclamation-triangle", title: "查不到 \(MemberRef(phone: focus.phone).maskedPhone)", message: why)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - 動作
@@ -835,24 +881,15 @@ struct MembersProfile: View {
     }
 
     private func topUp(_ m: Member) {
-        Task {
-            let started = await model.askTopUp(for: m)
-            if !started { onKeypadDone() }
-        }
+        Task { await model.askTopUp(for: m) }
     }
 
     private func sell(_ item: MenuItem, to m: Member) {
-        Task {
-            await model.sellPass(item, to: m)
-            if model.checkoutTicketId == nil { onKeypadDone() }
-        }
+        Task { await model.sellPass(item, to: m) }
     }
 
     private func editBirthday(_ m: Member) {
-        Task {
-            headerProblem = await model.askBirthday(for: m)
-            onKeypadDone()
-        }
+        Task { headerProblem = await model.askBirthday(for: m) }
     }
 
     private func startNameEdit() {

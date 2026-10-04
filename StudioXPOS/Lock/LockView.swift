@@ -33,7 +33,7 @@ struct LockView: View {
             Rule(vertical: true)
             hero
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            KeypadDock()
+            KeypadDock(showsCancel: false)
                 .frame(width: Metric.dock)
         }
         .background(Theme.page.ignoresSafeArea())

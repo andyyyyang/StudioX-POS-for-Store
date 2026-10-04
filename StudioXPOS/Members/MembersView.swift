@@ -7,16 +7,17 @@ import SwiftUI
 
 /// 會員頁（側欄「會員」）：左邊是今天的名單，右邊是一位會員的資料卡。
 ///
-///   ┌ Your regulars ─────────────────────────────── ● 右邊的鍵盤：打手機號碼 ┐
+///   ┌ Your regulars ──────────────────────────────────────────────────────────┐
 ///   │ ■ 今天預約              │ (怡君) 陳怡君  金卡會員 · 本月壽星 10/18                 │
 ///   │  怡君 陳怡君  14:00 …   │ 0911-***-333・後台的資料 14:05                          │
 ///   │ ■ 今天來過              │ 累積消費 │ 來店 │ 上次來 │ 生日                         │
-///   │  柏翰 黃柏翰  結帳 …    │ [⋯] [儲值] [預約] [ 開單 ──────────────── ]             │
-///   │ ■ 最近查過              │ 儲值金・次數卡（卡片自己的「續約」）・配方・來店紀錄     │
+///   │  柏翰 黃柏翰  結帳 …    │ 儲值金・次數卡・配方・來店紀錄（動作在右欄）              │
+///   │ ■ 最近查過              │                                                         │
 ///   └──────────────────────────────────────────────────────────────────────────┘
 ///
-/// 按鈕照 docs/DESIGN.md：名單的每一列沒有按鈕（點一下打開、再點一下收起）；動作都在資料卡的一條動作列
-/// （一個主要「開單」、最多兩個次要、其他收進「⋯」）。窄的時候（直的 iPad）名單與資料卡輪流佔滿。
+/// 左邊選、右邊做（docs/DESIGN.md）：名單的每一列沒有按鈕（點一下選起來、再點一下取消）；選起來的那一位，
+/// 所有動作（開單、儲值、預約、改名字…）都在右欄、和數字鍵在一起。沒選人時右欄的大鍵是「查會員」。
+/// 窄的時候（直的 iPad）名單與資料卡輪流佔滿；右欄的 × 回到名單。
 ///
 /// 查會員用右側鍵盤（打電話、或掃會員條碼：掃描器打的數字會進鍵盤）；不用系統的 sheet，鍵盤一直看得到。
 /// 後台是真的資料：打開一位就先顯示這台記得的，同時向後台重查一次（iPad 只留最近幾天的單）。
@@ -60,42 +61,19 @@ struct MembersView: View {
             .padding(.top, 22)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
+        // 沒選人的時候：右欄最下面的大鍵是「查會員」（鍵盤已經在等電話時就是鍵盤的「查詢」）
+        .dockSelection(.page("members", primary: POSAction("查會員", icon: "magnifying-glass") { armToken += 1 }))
         .task(id: armToken) { await searchLoop() }
+        .task { await preselectForScreenshot() }
         .onAppear { restore() }
         .onDisappear { releaseKeypad() }
     }
 
-    // MARK: - 上面
+    // MARK: - 上面（只有標題：查會員是右欄的大鍵）
 
-    /// 頁首右上只有一樣東西：鍵盤在等電話時是狀態，沒在等時是「查會員」（細框）
     private func header(_ board: MemberBoard, compact: Bool) -> some View {
-        HStack(alignment: .bottom, spacing: 12) {
-            PageTitle(title: "Your *regulars*", subtitle: subtitle(board))
-            Spacer(minLength: 12)
-            if waitingForPhone {
-                HStack(spacing: 10) {
-                    LiveDot(color: Theme.accent)
-                    Text(compact ? "右邊鍵盤打電話" : "右邊的鍵盤：打手機號碼或掃會員條碼")
-                        .font(.brand(13.5, .medium))
-                        .foregroundStyle(Theme.ink2)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 44)
-                .background(Theme.accentSoft, in: .capsule)
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                .accessibilityElement(children: .combine)
-            } else {
-                Button {
-                    armToken += 1
-                } label: {
-                    Label { Text("查會員") } icon: { HeroIcon("magnifying-glass", size: 16) }
-                }
-                .buttonStyle(.brand(.ghost, size: .md))
-                .transition(.opacity)
-            }
-        }
-        .animation(reduceMotion ? nil : Motion.fast, value: waitingForPhone)
+        PageTitle(title: "Your *regulars*", subtitle: subtitle(board))
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func subtitle(_ board: MemberBoard) -> String {
@@ -168,7 +146,7 @@ struct MembersView: View {
     @ViewBuilder
     private func detail(_ board: MemberBoard, compact: Bool) -> some View {
         if let focus {
-            MembersProfile(focus: focus, compact: compact, onClose: { close() }, onKeypadDone: { rearm() })
+            MembersProfile(focus: focus, compact: compact, onClose: { close() })
                 .id(focus.phone)
                 .transition(.opacity.combined(with: .move(edge: .trailing)))
         } else {
@@ -222,19 +200,19 @@ struct MembersView: View {
         select(MembersFocus(phone: phone, ref: s.ref))
     }
 
+    /// 選一位（右欄換成他的動作：鍵盤不再等電話）；取消選取（nil）就回去等下一位的電話
     private func select(_ f: MembersFocus?) {
         withAnimation(reduceMotion ? nil : Motion.ease) { focus = f }
         MembersMemory.remember(f, store: memoryKey)
+        if f != nil {
+            releaseKeypad()
+        } else if model.checkoutTicketId == nil, !keypad.isAsking {
+            armToken += 1
+        }
     }
 
     private func close() {
         select(nil)
-    }
-
-    /// 資料卡用完右側鍵盤（生日、儲值取消了）：鍵盤回來等下一位的電話（已經在結帳就不搶）
-    private func rearm() {
-        guard model.checkoutTicketId == nil, !keypad.isAsking else { return }
-        armToken += 1
     }
 
     /// 結帳（儲值、買卡）時這頁會換成付款畫面；回來時打開剛剛那一位（重新向後台查）
@@ -245,11 +223,26 @@ struct MembersView: View {
 
     private var memoryKey: String { "\(model.isDemo ? "demo" : "live")|\(model.store.name)" }
 
-    /// 右側鍵盤等電話：打完就打開那一位，接著等下一位（按 × 或去做別的就停，按「查會員」再叫出來）
+    /// 右側鍵盤等電話（沒選人的時候）：打完就打開那一位，右欄換成他的動作。
+    /// 按 × 或去做別的就停；右欄的「查會員」、或取消選取，再叫出來
     private func searchLoop() async {
-        while !Task.isCancelled {
-            guard let entry = await keypad.ask(POSModel.memberSearchSpec) else { return }
-            select(MembersFocus(phone: entry.digits, ref: nil))
+        guard focus == nil, !Task.isCancelled else { return }
+        guard let entry = await keypad.ask(POSModel.memberSearchSpec) else { return }
+        select(MembersFocus(phone: entry.digits, ref: nil))
+    }
+
+    /// 截圖用（Debug 的 -preselect）：先打開今天第一位有儲值金或課程卡的會員，右欄就是他的動作
+    private func preselectForScreenshot() async {
+        guard LaunchArguments.preselect, focus == nil else { return }
+        let board = model.memberBoard()
+        for s in board.visits + board.bookings + board.recent where !s.ref.phone.isEmpty {
+            guard focus == nil else { return }
+            guard case .found(let m) = await model.searchMember(phone: s.ref.phone) else { continue }
+            let account = model.account(for: m.ref)
+            if (account?.wallet.cents ?? 0) > 0 || !(account?.passes.isEmpty ?? true) {
+                select(MembersFocus(phone: m.phone, ref: m.ref))
+                return
+            }
         }
     }
 
@@ -334,10 +327,11 @@ struct MembersRosterRow: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(selected ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radius))
-            .overlay(alignment: .leading) {
+            .background(selected ? Theme.accentSoft : Color.clear, in: .rect(cornerRadius: Metric.radius))
+            .overlay {
+                // 選起來的那一位：橘色框（右欄的動作就是對他）
                 if selected {
-                    Capsule().fill(Theme.accent).frame(width: 3).padding(.vertical, 12)
+                    RoundedRectangle(cornerRadius: Metric.radius, style: .continuous).strokeBorder(Theme.accent, lineWidth: 1.5)
                 }
             }
             .contentShape(.rect)

@@ -68,7 +68,7 @@ struct PairingView: View {
             }
             .scrollIndicators(.hidden)
 
-            KeypadDock()
+            KeypadDock(showsCancel: false)
                 .frame(width: Metric.dock)
         }
         .background(Theme.page.ignoresSafeArea())
