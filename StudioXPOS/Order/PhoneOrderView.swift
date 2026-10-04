@@ -34,6 +34,8 @@ struct PhoneOrderView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            // 全外帶的店（叫號用在外帶取餐）：現在叫到幾號、叫下一號（Keypad/DockPinned.swift）
+            PhoneQueueCard()
             if query.isEmpty {
                 chips
             }
@@ -45,9 +47,10 @@ struct PhoneOrderView: View {
         .dockPanel(isPresented: $opening, title: "開單", subtitle: openSubtitle) {
             openChoices
         }
-        // 加料（甜度、冰塊）、規格（顏色 × 尺寸）：和 iPad 同一張卡，「加入」是下面的大鍵
+        // 加料（甜度、冰塊）、規格（顏色 × 尺寸）：和 iPad 同一張卡，「加入」是下面的大鍵。
+        // 這一張裡要打數字、選東西：鍵盤與面板從這一張的下面升起來（PhoneDockHost inSheet），不再疊一張 sheet
         .sheet(item: itemBinding) { item in
-            PhoneDockHost(isActive: true) {
+            PhoneDockHost(isActive: true, inSheet: true) {
                 if model.variantItem?.id == item.id {
                     VariantPanel(item: item)
                 } else {
@@ -55,8 +58,7 @@ struct PhoneOrderView: View {
                 }
             }
             .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Theme.page)
+            .phoneSheetStyle(Theme.page)
         }
         .onAppear {
             if categoryId == nil { categoryId = model.catalog.categories.first?.id }
@@ -271,16 +273,16 @@ struct PhoneOrderView: View {
             }
         }
         .animation(Motion.spring, value: model.selectedTicketId)
-        // 單子：點一行選起來（下面出現那一行的動作：數量、備註、折扣、刪除…）
+        // 單子：點一行選起來（鍵盤從這一張的下面升起來問它的數量，上面是那一行的動作：備註、折扣、刪除…）；左右滑加減、刪除。
+        // 鍵盤、面板不再疊一張 sheet（PhoneDockHost inSheet）；要更多地方時拉到全高
         .sheet(isPresented: Binding(get: { ui.ticketOpen && model.selectedTicket != nil }, set: { ui.ticketOpen = $0 })) {
-            PhoneDockHost(isActive: true, onSelectionChange: { isItem in
-                if isItem { ticketDetent = .large }
+            PhoneDockHost(isActive: true, inSheet: true, onNeedsRoom: { more in
+                if more { ticketDetent = .large }
             }) {
                 TicketColumn()
             }
             .presentationDetents([.medium, .large], selection: $ticketDetent)
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Theme.page)
+            .phoneSheetStyle(Theme.page)
         }
     }
 
@@ -338,17 +340,21 @@ struct PhoneOrderView: View {
 
     private var usesTables: Bool { model.visibleSections.contains(.floor) }
 
-    /// 還沒有單：開單（選空桌入座、外帶…）；美業、課程先找會員
-    private var openPage: DockSelection {
-        let type = model.mode.defaultOrderType
+    /// 還沒有單：點品項就會開一張預設的單（和 iPad 一樣，不放「開一張新單」這種一樣的鍵）。
+    /// 只放點品項做不到的：美業、課程先找會員；有桌位圖（選空桌入座）或還有其他用餐方式時的「開單」
+    private var openPage: DockSelection? {
         if model.mode.wantsCustomer {
-            return .page("phone-open", primary: POSAction("找會員開單", icon: "user-circle") { Task { await startWithMember() } },
-                         actions: [POSAction("開新單（不找會員）", icon: "plus-circle") { model.openTicket(type: type) }])
+            return .page("phone-open", primary: POSAction("找會員開單", icon: "user-circle") { Task { await startWithMember() } })
         }
-        if model.mode.showsOrderType || usesTables {
+        if usesTables || !model.otherOrderTypes.isEmpty {
             return .page("phone-open", primary: POSAction("開單", icon: "plus-circle") { opening = true })
         }
-        return .page("phone-open", primary: POSAction("開一張新單", icon: "plus-circle") { model.openTicket(type: type) })
+        return nil
+    }
+
+    /// 「開單」面板裡的用餐方式：預設的那一種＋其他的（全外帶的店只有外帶）
+    private var openTypes: [OrderType] {
+        [model.mode.defaultOrderType] + model.otherOrderTypes
     }
 
     private var openSubtitle: String {
@@ -379,7 +385,7 @@ struct PhoneOrderView: View {
                 Eyebrow("不選桌")
                     .padding(.top, 10)
             }
-            ForEach(OrderType.allCases, id: \.self) { type in
+            ForEach(openTypes, id: \.self) { type in
                 DockChoice(title: "開\(type.label)單", detail: type == .dineIn && usesTables ? "先點，等一下再帶位" : nil,
                            selected: type == model.mode.defaultOrderType && !usesTables) {
                     opening = false

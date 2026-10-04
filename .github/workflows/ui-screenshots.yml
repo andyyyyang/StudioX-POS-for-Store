@@ -1,4 +1,4 @@
-# UI 截圖：在 GitHub 的 Mac 上用 iPad 模擬器打開四家示範店（餐廳咖啡、服飾、美業、健身）的每個畫面，
+# UI 截圖：在 GitHub 的 Mac 上用 iPad 模擬器打開示範店（餐廳咖啡、服飾、美業、健身、夜市外帶＋叫號）的每個畫面，
 # 截圖縮小後提交回這個分支的 docs/screenshots/（深色）與 docs/screenshots/light/（淺色），也放在這次執行的 artifact。
 # 再用 iPhone 模擬器拍店員手上的點餐機（直的）：docs/screenshots/phone/。
 # 提交訊息有 [screenshots] 才跑（Mac 的分鐘數比較貴），也可以手動 Run workflow。
@@ -123,6 +123,10 @@ jobs:
             "56-salon-member-selected|-demo salon $L -section members -preselect"
             "57-fitness-checkin-selected|-demo fitness $L -section checkIn -preselect"
             "58-cafe-queue-selected|-demo cafe $L -section queue -preselect"
+            # 黃毛丫頭（夜市滷味攤，全外帶＋叫號）：右欄最上面的叫號卡、叫號頁的外帶單、廚房的大號碼
+            "60-yellowgirl-order|-demo yellowgirl $L -section order"
+            "61-yellowgirl-queue|-demo yellowgirl $L -section queue"
+            "62-yellowgirl-kitchen|-demo yellowgirl $L -section kitchen"
           )
           # 淺色再拍一輪（外觀預設跟著 iPad）
           light=(
@@ -137,6 +141,7 @@ jobs:
             "40-fitness-checkin|-demo fitness $L -section checkIn"
             "50-cafe-floor-selected|-demo cafe $L -section floor -preselect"
             "56-salon-member-selected|-demo salon $L -section members -preselect"
+            "60-yellowgirl-order|-demo yellowgirl $L -section order"
           )
           limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
           dev="$IPAD"
@@ -230,6 +235,8 @@ jobs:
             "phone/02-ticket|$P -section order -preselect|9"
             "phone/03-floor|$P -section floor"
             "phone/04-orders|$P -section orders"
+            # $P 是晨麥手作（-demo 只看第一個）：黃毛丫頭自己寫
+            "phone/05-yellowgirl-order|-demo yellowgirl -autologin 1234 -section order"
           )
           limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
           dev="$IPHONE"

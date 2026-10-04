@@ -161,6 +161,21 @@ struct ToastHost: View {
                         .font(.brand(15.5, .medium))
                         .foregroundStyle(Theme.onInverse)
                         .lineLimit(2)
+                    if let a = t.action {
+                        // 「復原」：按了就做、提示收起來
+                        Button {
+                            a.perform()
+                            withAnimation(Motion.ease) { model.toast = nil }
+                        } label: {
+                            Text(a.title)
+                                .font(.brand(15.5, .semibold))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.leading, 6)
+                                .frame(minHeight: 32)
+                                .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
@@ -171,7 +186,8 @@ struct ToastHost: View {
                 .transition(.move(edge: edge == .bottom ? .bottom : .top).combined(with: .opacity))
                 .id(t.id)
                 .task(id: t.id) {
-                    try? await Task.sleep(for: .seconds(2.6))
+                    // 有「復原」的久一點，來得及按
+                    try? await Task.sleep(for: .seconds(t.action == nil ? 2.6 : 4.5))
                     withAnimation(Motion.ease) { if model.toast?.id == t.id { model.toast = nil } }
                 }
                 .onTapGesture { model.toast = nil }

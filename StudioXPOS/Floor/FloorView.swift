@@ -549,9 +549,19 @@ struct FloorView: View {
         return tableDock(info(t, soon: model.reservedSoon, now: Date()))
     }
 
-    /// 沒選桌子：這一頁的動作
+    /// 沒選桌子：這一頁的動作（排隊等內用：排隊取號、叫號入座；排了幾組在右欄最上面那一行）
     private var pageDock: DockSelection? {
         var actions: [POSAction] = []
+        if model.queueForDineIn {
+            let can = model.queueCanAct
+            actions.append(POSAction("排隊取號", icon: "ticket", enabled: can && !model.queueCooling(.take)) {
+                Task { await model.askTakeDineIn() }
+            })
+            actions.append(POSAction(model.queueSeatNextTitle, icon: "users",
+                                     enabled: can && model.queue.state?.waiting.isEmpty == false && !model.queueCooling(.next)) {
+                Task { await model.callToSeat() }
+            })
+        }
         if model.visibleSections.contains(.reservations) {
             actions.append(POSAction("訂位與候位", icon: "calendar-days") { model.go(.reservations) })
         }

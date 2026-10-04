@@ -8,7 +8,7 @@ import UIKit
 
 /// 截圖與自動測試用的啟動參數（只在 Debug 有用）：
 ///
-///   -demo <cafe|apparel|salon|fitness>   示範店（示範模式自己處理）
+///   -demo <cafe|apparel|salon|fitness|yellowgirl>   示範店（示範模式自己處理）
 ///   -autologin <PIN>                     跳過鎖定畫面，用這個 PIN 的人登入
 ///   -section <頁>                        登入後打開這一頁（AppSection 的 rawValue：order、floor、appointments、checkIn、queue…）
 ///   -landscape                           請系統轉成橫的（iPad 收銀台的樣子）

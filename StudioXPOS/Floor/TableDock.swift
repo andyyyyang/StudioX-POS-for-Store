@@ -125,6 +125,8 @@ struct TableDock {
             if let r = i.reservation {
                 actions.append(POSAction("訂位入座：\(r.name)", icon: "calendar-days") { seatReservation(r, t) })
             }
+            // 排隊等內用：桌子空出來了，叫下一號直接坐這一桌
+            if let call = callNextAction(t) { actions.append(call) }
             var detail = "空桌・\(t.seats) 人桌"
             if let r = i.reservation { detail += "・\(r.startsAt.clockText) \(r.name) \(r.partySize) 位訂了這桌" }
             return DockSelection(id: id, kind: "桌位", title: t.name, detail: detail, badge: badge,
@@ -140,15 +142,30 @@ struct TableDock {
             return DockSelection(id: id, kind: "桌位", title: t.name, detail: "\(t.seats) 人桌", badge: badge,
                                  primary: POSAction("入座", icon: "users") { seat(t) }, clear: { deselect() })
         case .needsCleaning:
+            var actions = [POSAction("清好了，直接入座", icon: "users") { clean(t, true) }]
+            if let call = callNextAction(t, cleanFirst: true) { actions.append(call) }
             return DockSelection(id: id, kind: "桌位", title: t.name, detail: "結完帳了，桌面整理好就改回空桌", badge: badge,
                                  primary: POSAction("清桌", icon: "sparkles") { clean(t, false) },
-                                 actions: [POSAction("清好了，直接入座", icon: "users") { clean(t, true) }],
+                                 actions: actions,
                                  clear: { deselect() })
         case .seated, .ordering, .billing:
             guard let ticket = i.tickets.first(where: { $0.id == cardTicketId }) ?? i.tickets.first else {
                 return DockSelection(id: id, kind: "桌位", title: t.name, badge: badge, clear: { deselect() })
             }
             return occupied(i, ticket: ticket, badge: badge)
+        }
+    }
+
+    /// 排隊等內用：「叫號入座：31 號（4 位）」＝叫等候的第一組、直接坐這一桌（人數不知道的鍵盤先問）。
+    /// cleanFirst：待清的桌子先清好
+    private func callNextAction(_ t: DiningTable, cleanFirst: Bool = false) -> POSAction? {
+        let model = model
+        guard model.queueForDineIn, let n = model.queue.state?.waiting.first else { return nil }
+        let guests = model.queueEntry(n)?.guests
+        let title = (cleanFirst ? "清好了，叫號入座 \(n)" : "叫號入座：\(n) 號") + (guests.map { "（\($0) 位）" } ?? "")
+        return POSAction(title, icon: "megaphone", enabled: model.queueCanAct && !model.queueCooling(.next)) {
+            if cleanFirst { model.clean(table: t) }
+            Task { await model.callToSeat(n, table: t) }
         }
     }
 

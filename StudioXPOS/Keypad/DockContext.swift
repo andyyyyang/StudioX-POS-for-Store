@@ -8,8 +8,9 @@ import SwiftUI
 /// 右側鍵盤上面的那一塊：跟著現在在做的事變。鍵位永遠固定在下面，這裡放「這一刻最需要的資訊」。
 ///
 ///   正在打數字：收現金 → 即時的找零／還差；查會員 → 打幾碼就列出熟客（點一下帶入）；統編 → 今天用過的
-///   待機：點餐 → 今天熱賣（點一下加入，配合先打數量）；桌位 → 桌況與超時、下一組訂位；預約 → 接下來的；
-///         報到 → 今天的人次、下一堂課；廚房 → 待做與最久的；訂單 → 待結帳；交班 → 錢櫃應有；店長以上看得到今天的營業額
+///   待機：桌位 → 桌況與超時、下一組訂位；預約 → 接下來的；報到 → 今天的人次、下一堂課；廚房 → 待做與最久的；
+///         訂單 → 待結帳；交班 → 錢櫃應有；店長以上看得到今天的營業額。
+///         點餐頁是空的：品項在左邊、單子在中間，右欄只放這張單的動作（和叫號）
 struct DockContext: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -23,7 +24,7 @@ struct DockContext: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
-                        if model.currentStaff?.can(.viewReports) == true { DockToday() }
+                        if model.section != .order, model.currentStaff?.can(.viewReports) == true { DockToday() }
                         idle
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -55,7 +56,6 @@ struct DockContext: View {
     @ViewBuilder
     private var idle: some View {
         switch model.section {
-        case .order: DockQuickPicks()
         case .floor: DockFloorPulse()
         case .orders: DockOrdersPulse()
         case .kitchen: DockKitchenPulse()
@@ -64,7 +64,7 @@ struct DockContext: View {
         case .reservations: DockReservationsPulse()
         case .queue: DockQueuePulse()
         case .shift: DockDrawer()
-        case .members, .dashboard, .settings: EmptyView()
+        case .order, .members, .dashboard, .settings: EmptyView()
         }
     }
 }
@@ -263,65 +263,6 @@ private struct DockRecentTaxIds: View {
             seen.insert(id)
             out.append((id, title ?? inv.buyerName))
             if out.count == 5 { break }
-        }
-        return out
-    }
-}
-
-// MARK: - 點餐：今天熱賣
-
-private struct DockQuickPicks: View {
-    @Environment(POSModel.self) private var model
-    @Environment(KeypadController.self) private var keypad
-
-    var body: some View {
-        let picks = items
-        if !picks.isEmpty {
-            DockSection(title: keypad.multiplier.map { "今天熱賣・點一下加 ×\($0)" } ?? "今天熱賣・點一下加入") {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                    ForEach(picks) { item in
-                        Button {
-                            Task { await model.tap(item) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(item.shortName ?? item.name)
-                                    .font(.brand(13.5, .semibold))
-                                    .foregroundStyle(Theme.ink)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                                Text(item.hasVariants ? "選規格" : item.price.short)
-                                    .font(.brand(12, .regular))
-                                    .monospacedDigit()
-                                    .foregroundStyle(Theme.muted)
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 9)
-                            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
-                            .overlay { RoundedRectangle(cornerRadius: Metric.radius, style: .continuous).strokeBorder(Theme.line) }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("加入 \(item.name)")
-                    }
-                }
-            }
-        }
-    }
-
-    /// 今天賣最多的（還能賣的）；不夠六個用菜單前面的補
-    private var items: [MenuItem] {
-        let top = model.state.dailySummary(businessDate: model.businessDate).topItems
-        var out: [MenuItem] = []
-        for t in top {
-            guard let i = model.catalog.item(t.id), model.isAvailable(i), i.itemKind == .goods || i.itemKind == .service else { continue }
-            out.append(i)
-            if out.count == 6 { return out }
-        }
-        for c in model.catalog.categories {
-            for i in model.catalog.items(in: c.id) where model.isAvailable(i) && !out.contains(where: { $0.id == i.id }) && !i.itemKind.needsMember {
-                out.append(i)
-                if out.count == 6 { return out }
-            }
         }
         return out
     }

@@ -5,7 +5,7 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 示範的店：配對畫面「先看看示範」選一家（或啟動參數 `-demo`、`-demo apparel|salon|fitness`）。
+/// 示範的店：配對畫面「先看看示範」選一家（或啟動參數 `-demo`、`-demo apparel|salon|fitness|yellowgirl`）。
 enum DemoKind: String, CaseIterable, Identifiable, Hashable {
     /// 餐廳咖啡「晨麥手作」：桌位、廚房出單、訂位候位
     case cafe
@@ -15,6 +15,8 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
     case salon
     /// 健身「Pulse 健身」：入場報到、會籍與堂數、團課與私人教練
     case fitness
+    /// 夜市滷味攤「黃毛丫頭」：店裡真的菜單，全外帶，結帳自動取號、滷好了叫號
+    case yellowgirl
 
     var id: String { rawValue }
 
@@ -25,6 +27,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: "服飾選物"
         case .salon: "美髮沙龍"
         case .fitness: "健身會館"
+        case .yellowgirl: "夜市外帶＋叫號"
         }
     }
 
@@ -34,6 +37,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: "Lumi 選物"
         case .salon: "Mori Hair"
         case .fitness: "Pulse 健身"
+        case .yellowgirl: "黃毛丫頭"
         }
     }
 
@@ -44,6 +48,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: "顏色尺寸、掃吊牌條碼、會員折扣，業績算給每位店員"
         case .salon: "設計師的預約表、到店開單，儲值金與剪髮次數卡"
         case .fitness: "入場報到、月卡與堂數、團課名單與私人教練"
+        case .yellowgirl: "店裡的滷味菜單，全外帶：結帳完成自動取號、印號碼牌，滷好了在右欄叫號"
         }
     }
 
@@ -54,6 +59,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: ["規格", "條碼", "業績"]
         case .salon: ["預約", "儲值", "次數卡"]
         case .fitness: ["報到", "會籍", "課表"]
+        case .yellowgirl: ["外帶", "叫號", "號碼牌"]
         }
     }
 
@@ -64,6 +70,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .cafe, .apparel: return base
         case .salon: return base + "・Mia 5678"
         case .fitness: return base + "・Kevin 5678・Ivy 2468"
+        case .yellowgirl: return "阿珠 1234・小翔 2580・老闆娘 0000"
         }
     }
 
@@ -74,6 +81,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: .apparel
         case .salon: .salon
         case .fitness: .fitness
+        case .yellowgirl: .counter
         }
     }
 
@@ -84,6 +92,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: "swatch"
         case .salon: "scissors"
         case .fitness: "bolt"
+        case .yellowgirl: "ticket"
         }
     }
 
@@ -93,10 +102,12 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case .apparel: .sky
         case .salon: .rose
         case .fitness: .mint
+        case .yellowgirl: .peach
         }
     }
 
-    /// 啟動參數：沒有 `-demo` 是 nil；`-demo` 後面沒寫（或看不懂）是晨麥手作；`-demo salon` 開美業（也認 fashion、beauty、gym 這些說法）
+    /// 啟動參數：沒有 `-demo` 是 nil；`-demo` 後面沒寫（或看不懂）是晨麥手作；`-demo salon` 開美業（也認 fashion、beauty、gym 這些說法）；
+    /// `-demo yellowgirl` 開黃毛丫頭
     static func fromLaunchArguments() -> DemoKind? {
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "-demo") else { return nil }
@@ -110,15 +121,17 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         case "apparel", "fashion", "clothing", "retail": self = .apparel
         case "salon", "beauty", "hair": self = .salon
         case "fitness", "gym", "studio": self = .fitness
+        case "yellowgirl", "yg", "stall", "nightmarket", "takeout", "黃毛丫頭": self = .yellowgirl
         default: return nil
         }
     }
 }
 
-/// 示範模式：虛構的店，不用配對、資料只在這次開著的時候。四家（DemoKind）：
+/// 示範模式：不用配對、資料只在這次開著的時候。五家（DemoKind）：
 ///   - 餐廳咖啡「晨麥手作」（台南的咖啡、早午餐、甜點、麵包）：這個檔案
-///   - 服飾「Lumi 選物」、美業「Mori Hair」、健身「Pulse 健身」：DemoApparel、DemoSalon、DemoFitness
-/// 四家都有同樣的四個人、同樣的 PIN（README 寫的）：Leslie K.（店長，PIN 1234）、Cameron W.（收銀，PIN 2580）、
+///   - 服飾「Lumi 選物」、美業「Mori Hair」、健身「Pulse 健身」：DemoApparel、DemoSalon、DemoFitness（虛構的店）
+///   - 夜市滷味攤「黃毛丫頭」：DemoYellowgirl（菜單照店裡的價目表；銷售紀錄、人名是編的。人和 PIN 是自己的三位）
+/// 前四家都有同樣的四個人、同樣的 PIN（README 寫的）：Leslie K.（店長，PIN 1234）、Cameron W.（收銀，PIN 2580）、
 /// Jacob J.（領班，PIN 1111）、王小美（負責人，PIN 0000）；職稱照各行各業（總監、設計師、銷售、教練…）。
 /// 美業、健身多幾位排進預約表的人（都是收銀權限）：Mia 陳（設計師，PIN 5678）；Kevin 吳（教練，PIN 5678）、Ivy 黃（教練，PIN 2468）。
 /// 人名、電話、統編、地址都是編的。
@@ -133,6 +146,8 @@ struct DemoStore {
     let api: DemoAPI
     /// 開幕到昨天的「後台歷史」（DemoAPI.history 與昨天記進這台的單用同一份）
     let past: DemoHistory
+    /// 黃毛丫頭的今天（記進這台的單與示範後台的叫號用同一份）
+    let yellowgirl: YellowgirlToday?
 
     init() { self.init(kind: Self.kind) }
 
@@ -142,6 +157,7 @@ struct DemoStore {
         createdAt = now
         var reservations: [Reservation] = []
         var classes: [ClassSession] = []
+        var today: YellowgirlToday? = nil
         let members: [Member]
         switch kind {
         case .cafe:
@@ -160,9 +176,15 @@ struct DemoStore {
             classes = Self.fitnessClasses(now: now)
             reservations = Self.fitnessReservations(now: now, classes: classes)
             members = Self.fitnessMembers(now: now)
+        case .yellowgirl:
+            bootstrap = Self.yellowgirlBootstrap(now: now)
+            members = []
+            today = YellowgirlToday.make(now: now, catalog: bootstrap.catalog)
         }
+        yellowgirl = today
         past = DemoHistory(base: bootstrap, regulars: DemoHistory.regulars(members, catalog: bootstrap.catalog))
-        api = DemoAPI(bootstrap: bootstrap, reservations: reservations, members: members, classes: classes, history: past)
+        api = DemoAPI(bootstrap: bootstrap, reservations: reservations, members: members, classes: classes, history: past,
+                      queue: today.map { DemoQueue(yellowgirl: $0, now: now) })
     }
 
     /// 昨天的單（照後台歷史）＋今天已經發生的事（開班、打卡、結帳的單、正在服務的、報到）
@@ -177,6 +199,7 @@ struct DemoStore {
         case .apparel: try seedApparel(into: ledger)
         case .salon: try seedSalon(into: ledger)
         case .fitness: try seedFitness(into: ledger)
+        case .yellowgirl: try seedYellowgirl(into: ledger)
         }
     }
 
@@ -187,6 +210,7 @@ struct DemoStore {
         case .apparel: []
         case .salon: Self.salonReservations(now: createdAt)
         case .fitness: Self.fitnessReservations(now: createdAt, classes: Self.fitnessClasses(now: createdAt))
+        case .yellowgirl: []
         }
     }
 
@@ -511,14 +535,16 @@ actor DemoAPI: POSAPI {
     /// 叫號（後台開了才有）：號碼存在這裡，每 20 秒左右有人自己取號
     private var line: DemoQueue?
 
-    init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil) {
+    /// queue：這家示範的叫號一打開的樣子（黃毛丫頭的號碼對著今天的單）；沒給是晨麥手作那一套
+    init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil,
+         queue: DemoQueue? = nil) {
         base = bootstrap
         self.reservations = Dictionary(reservations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.members = Dictionary(members.map { ($0.phone, $0) }, uniquingKeysWith: { first, _ in first })
         timetable = classes
         today = TaipeiTime.businessDate(bootstrap.serverTime, cutoffHour: bootstrap.store.businessDayCutoffHour)
         past = history
-        line = bootstrap.features.queue ? DemoQueue(now: bootstrap.serverTime) : nil
+        line = bootstrap.features.queue ? (queue ?? DemoQueue(now: bootstrap.serverTime)) : nil
     }
 
     func bootstrap(ifNoneMatch version: String?) async throws -> Bootstrap {
@@ -670,14 +696,13 @@ actor DemoAPI: POSAPI {
             q.marked.removeAll { $0 == n }
         case .reset:
             q.reset(at: now)
-        case .takeOne(_, let requestId):
-            numbers = q.take(count: 1, requestId: requestId, at: now)
+        case .takeOne(let entry, let requestId):
+            numbers = q.take(count: 1, requestId: requestId, entry: entry, at: now)
         case .call(let n, _):
-            // 叫指定的號碼：排到最前面再叫
+            // 叫指定的號碼（外帶：先做好的先叫）；已經是現在叫的就不動
+            guard q.current != n else { break }
             guard q.waiting.contains(n) else { throw APIError.http(status: 404, code: "not_found", message: "\(n) 號不在等候中") }
-            q.waiting.removeAll { $0 == n }
-            q.waiting.insert(n, at: 0)
-            q.next(at: now)
+            q.call(n, at: now)
         }
         line = q
         var s = q.state(now: now)
@@ -715,9 +740,11 @@ actor DemoAPI: POSAPI {
     }
 }
 
-/// 示範店的叫號（晨麥手作）：和原本的叫號伺服器一樣的規則（取號加到最後、下一號、過號自動叫下一號、
-/// 返回前一號放回最前面、號碼到 1000 從 1 開始），另外記取號、叫號的時間，所以畫面上看得到等了幾分、今天服務幾位。
-/// 一打開：今天服務了 22 位，現在叫到 23，24–31 在等（26 標了星號），19、21 過號；之後每 20 秒左右有人取號（最多排 14 位）
+/// 示範店的叫號：和原本的叫號伺服器一樣的規則（取號加到最後、下一號、過號自動叫下一號、
+/// 返回前一號放回最前面、號碼到 1000 從 1 開始），另外記取號、叫號的時間與號碼的附帶資料（幾位、哪一張單），
+/// 所以畫面上看得到等了幾分、今天服務幾位；也可以叫指定的號碼（外帶：先做好的先叫）。
+/// - 晨麥手作一打開：今天服務了 22 位，現在叫到 23，24–31 在等（26 標了星號），19、21 過號；之後每 20 秒左右有人取號（最多排 14 位）
+/// - 黃毛丫頭：號碼對著今天結帳的外帶單（YellowgirlToday）；號碼只在收銀台結帳時取（不會自己多出來）
 nonisolated struct DemoQueue: Sendable {
     /// 示範用後台自己的號碼（看得到等候時間、今天的數字、過號可以再叫一次）；改成 .legacy 就是原本叫號伺服器的樣子
     static let mode: QueueMode = .native
@@ -735,6 +762,10 @@ nonisolated struct DemoQueue: Sendable {
     /// 取號的 requestId（重送不再取）
     var requests: [String: [Int]] = [:]
     var rng = SeededRandom(seed: 2310)
+    /// 號碼的附帶資料（幾位、哪一張單）
+    var entries: [Int: QueueEntry] = [:]
+    /// 店裡有客人自己取號（晨麥手作的號碼機）；黃毛丫頭的號碼只在結帳時取
+    var autoTake = true
 
     init(now: Date) {
         current = 23
@@ -749,21 +780,57 @@ nonisolated struct DemoQueue: Sendable {
         var taken: [Int: Date] = [:]
         for (n, m) in zip(waiting, minutesAgo) { taken[n] = now.addingTimeInterval(TimeInterval(-m * 60 - 20)) }
         takenAt = taken
+        // 排隊等內用的人數（晨麥手作的後台沒開 dineIn 時畫面不會用到）
+        let guests = [2, 4, 2, 3, 1, 2, 5, 2]
+        for (n, g) in zip(waiting, guests) { entries[n] = QueueEntry(guests: g) }
+    }
+
+    /// 黃毛丫頭：今天結帳的外帶單照順序取的號碼（現在叫的、等候中、過號都對著那張單）
+    init(yellowgirl plan: YellowgirlToday, now: Date) {
+        current = plan.current
+        calledAt = plan.calledAt
+        waiting = plan.waiting
+        missed = plan.missed
+        marked = []
+        nextNo = plan.nextNo
+        served = plan.served
+        lastAuto = now
+        autoTake = false
+        var taken: [Int: Date] = [:]
+        var info: [Int: QueueEntry] = [:]
+        for o in plan.orders {
+            taken[o.queue] = o.closedAt
+            info[o.queue] = QueueEntry(ticketId: o.id, label: o.label)
+        }
+        takenAt = taken
+        entries = info
     }
 
     /// 店裡有客人：每 16–24 秒有人取一張（排太長就先不取）
     mutating func tick(now: Date) {
+        guard autoTake else { return }
         while now.timeIntervalSince(lastAuto) >= 20 {
             lastAuto = lastAuto.addingTimeInterval(TimeInterval(16 + rng.next(9)))
             if waiting.count < 14 { append(1, at: lastAuto) }
         }
     }
 
-    mutating func take(count: Int, requestId: String, at now: Date) -> [Int] {
+    /// 取號；只取一張時可以帶附帶資料（幾位、哪一張單）
+    mutating func take(count: Int, requestId: String, entry: QueueEntry? = nil, at now: Date) -> [Int] {
         if let done = requests[requestId] { return done }
         let numbers = append(min(max(count, 1), 20), at: now)
         requests[requestId] = numbers
+        if let entry, numbers.count == 1, let n = numbers.first { entries[n] = entry }
         return numbers
+    }
+
+    /// 叫指定的號碼：等候中的那一號變成現在叫的（原本的算服務完了）
+    mutating func call(_ n: Int, at now: Date) {
+        guard waiting.contains(n) else { return }
+        finishCurrent()
+        waiting.removeAll { $0 == n }
+        current = n
+        calledAt = now
     }
 
     @discardableResult
@@ -823,6 +890,7 @@ nonisolated struct DemoQueue: Sendable {
         missed = []
         marked = []
         takenAt = [:]
+        entries = [:]
         nextNo = 1
         served = 0
         lastAuto = now
@@ -849,8 +917,16 @@ nonisolated struct DemoQueue: Sendable {
         let native = Self.mode == .native
         var taken: [String: Date] = [:]
         if native { for n in waiting { if let at = takenAt[n] { taken[String(n)] = at } } }
+        // 附帶資料：現在叫的、等候中、過號的（原本的叫號伺服器沒有）
+        var info: [String: QueueEntry] = [:]
+        if native {
+            for n in waiting + missed + (current.map { [$0] } ?? []) {
+                if let e = entries[n] { info[String(n)] = e }
+            }
+        }
         return QueueState(mode: Self.mode, current: current, waiting: waiting, missed: missed, marked: marked, nextNo: nextNo,
-                          calledAt: native ? calledAt : nil, updatedAt: now, takenAt: taken, servedToday: native ? served : nil)
+                          calledAt: native ? calledAt : nil, updatedAt: now, takenAt: taken, servedToday: native ? served : nil,
+                          entries: info)
     }
 }
 

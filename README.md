@@ -54,7 +54,7 @@ open StudioXPOS.xcodeproj
 
 專案用 Xcode 的「同步資料夾」：`StudioXPOS/` 底下新增的檔案自動加進專案。核心邏輯在本機的 Swift 套件 `Packages/POSKit`。
 
-**先看示範**：配對畫面按「先看看示範」選一家虛構的店（或啟動參數 `-demo cafe|apparel|salon|fitness`），今天的單、昨天與前 90 天的歷史都準備好了：
+**先看示範**：配對畫面按「先看看示範」選一家（或啟動參數 `-demo cafe|apparel|salon|fitness|yellowgirl`），今天的單、昨天與前 90 天的歷史都準備好了：
 
 | 示範店 | 看什麼 |
 |---|---|
@@ -62,9 +62,10 @@ open StudioXPOS.xcodeproj
 | 服飾「Lumi 選物」 | 顏色 × 尺寸、吊牌條碼、低庫存與賣完、店員業績、換貨 |
 | 美業「Mori Hair」 | 設計師的預約表、到店開單、儲值金與剪髮卡、助理與抽成、客人的配方備註 |
 | 健身「Pulse 健身」 | 入場報到（月卡、次數卡、過期的）、團體課名單與名額、私人教練、壽星 |
+| 夜市外帶「黃毛丫頭」 | 店裡真的滷味菜單（兩個價位的做成規格）、全外帶：結帳完成自動取號與印號碼牌、右欄的叫號卡、廚房的大號碼、滷好了先叫 |
 
-PIN（四家都一樣）：Leslie 1234（店長）、Cameron 2580（收銀）、Jacob 1111（領班）、王小美 0000（負責人）；
-美業多了 Mia 5678（設計師），健身多了 Kevin 5678、Ivy 2468（教練）。截圖與自動測試另外有 `-autologin <PIN>`、`-section <頁>`（只在 Debug）。
+PIN（前四家都一樣）：Leslie 1234（店長）、Cameron 2580（收銀）、Jacob 1111（領班）、王小美 0000（負責人）；
+美業多了 Mia 5678（設計師），健身多了 Kevin 5678、Ivy 2468（教練）。黃毛丫頭：阿珠 1234（店長）、小翔 2580（夾菜收銀）、老闆娘 0000（負責人）。截圖與自動測試另外有 `-autologin <PIN>`、`-section <頁>`（只在 Debug）。
 
 ### 測試與建置
 
@@ -89,7 +90,7 @@ GitHub 的 Mac 用 App Store Connect API 金鑰自己簽章（這一次專用的
 
 - 版號用 UTC 時間（`2610041530`＝26/10/04 15:30），版本改 `MARKETING_VERSION`
 - Secrets 還沒設定時整個流程跳過，不會失敗；這個 repo 是公開的，Mac 的分鐘數不另外計費
-- TestFlight 版一樣有「先看看示範」（四家示範店），不用後台也能試
+- TestFlight 版一樣有「先看看示範」（五家示範店），不用後台也能試
 - 上架需要的已經準備好：`ITSAppUsesNonExemptEncryption = NO`、隱私清單 `StudioXPOS/PrivacyInfo.xcprivacy`、沒有透明度的 App 圖示
 
 ## 和後台配對

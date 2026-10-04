@@ -33,6 +33,8 @@ struct PhoneShell: View {
             PhoneDockHost(isActive: rootIsActive) {
                 page
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // 叫號：點餐頁上面那張叫號卡點開的面板、叫到號之後選桌入座（和 iPad 同一份，這裡是 sheet）
+                    .queueDockPanels()
             }
             PhoneTabBar()
         }
@@ -108,12 +110,16 @@ final class PhoneUI {
 // MARK: - 上面選、下面做
 
 /// 收各畫面交上來的 DockKey（和 iPad 的右欄同一份），畫在下面：
-///   選起來的一筆＝下面一張卡；這一頁的動作＝浮在下面的大鍵＋「⋯」；問數字＝鍵盤 sheet；面板＝sheet。
-/// 每一層 sheet（單子、加料）自己也有一個，只有最上面那一層（isActive）出鍵盤、面板與提示
+///   選起來的一筆＝下面一張卡；這一頁的動作＝浮在下面的大鍵＋「⋯」；問數字＝鍵盤；面板＝不用打數字的選擇。
+/// 每一層（最底下的頁、單子的 sheet、加料的 sheet）自己也有一個，只有最上面那一層（isActive）出鍵盤、面板與提示。
+///   最底下那一層：鍵盤與面板是一張 sheet
+///   本身就是 sheet 的那一層（inSheet：單子、加料）：不再疊一張 sheet，鍵盤與面板從這一層的下面升起來（PhoneDock 的 drawer）
 struct PhoneDockHost<Content: View>: View {
     var isActive: Bool
-    /// 選起來的是「一筆」（true）還是這一頁的動作（false）：單子的 sheet 用來在選了一行時拉高
-    var onSelectionChange: ((Bool) -> Void)? = nil
+    /// 這一層本身是一張 sheet（單子、加料）
+    var inSheet = false
+    /// 下面要更多地方（選了一筆、鍵盤或面板升起來）：單子的 sheet 用來拉到全高
+    var onNeedsRoom: ((Bool) -> Void)? = nil
     @ViewBuilder var content: () -> Content
 
     @State private var dockHeight: CGFloat = 0
@@ -127,8 +133,10 @@ struct PhoneDockHost<Content: View>: View {
         }
         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { areaHeight = $0 })
         .overlayPreferenceValue(DockKey.self, alignment: .bottom) { dock in
-            PhoneDock(content: dock, isActive: isActive, maxCardHeight: max(areaHeight * 0.58, 220), onSelectionChange: onSelectionChange)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { dockHeight = $0 })
+            // 單子的 sheet 裡：卡片最多四成高，上面的單子至少看得到三行
+            PhoneDock(content: dock, isActive: isActive, inline: inSheet, areaHeight: areaHeight,
+                      maxCardHeight: max(areaHeight * (inSheet ? 0.42 : 0.58), 200),
+                      cardHeight: $dockHeight, onNeedsRoom: onNeedsRoom)
         }
         .overlay(alignment: .top) {
             if isActive { ToastHost(edge: .top) }
@@ -136,21 +144,83 @@ struct PhoneDockHost<Content: View>: View {
     }
 }
 
-/// 下面那一塊：選起來的一筆（卡片）或這一頁的動作（浮著的大鍵）；鍵盤、面板的 sheet 也從這裡出
+/// 手機上從下面升起來的 sheet：拖曳的橫條、圓角、底色都一樣（單子、加料用暖紙色；鍵盤、面板用右欄色）
+extension View {
+    func phoneSheetStyle(_ background: Color = Theme.dock) -> some View {
+        presentationDragIndicator(.visible)
+            .presentationCornerRadius(22)
+            .presentationBackground(background)
+    }
+}
+
+/// 下面那一塊：選起來的一筆（卡片）或這一頁的動作（浮著的大鍵）；鍵盤、面板也從這裡出
 private struct PhoneDock: View {
     @Environment(KeypadController.self) private var keypad
     let content: DockContent
     let isActive: Bool
+    /// 這一層本身是 sheet：鍵盤、面板從這一層的下面升起來（drawer），不疊 sheet
+    let inline: Bool
+    let areaHeight: CGFloat
     let maxCardHeight: CGFloat
-    var onSelectionChange: ((Bool) -> Void)?
+    /// 下面那張卡／大鍵的高度（內容要讓出來的）；鍵盤、面板蓋上去的不算
+    @Binding var cardHeight: CGFloat
+    var onNeedsRoom: ((Bool) -> Void)?
 
-    /// 現在開著的 sheet（關掉時晚一點點才收：連著問兩個數字、面板換成鍵盤時不會閃一下）
+    /// 現在放什麼（鍵盤或面板；關掉時晚一點點才收：連著問兩個數字時不會閃一下）。
+    /// 鍵盤與面板是「同一張」sheet（或同一個 drawer）、裡面換內容：面板裡的選擇要打數字時不會整張收起來又升上來，
+    /// 也不會因為換了一張 sheet 而被 SwiftUI 當成往下滑關掉（以前那樣會順手取消剛問的數字：鍵盤「跑掉」）
     @State private var presented: PhoneDockSheet?
+    /// drawer 往下拖了多少
+    @State private var dragY: CGFloat = 0
 
     var body: some View {
+        ZStack(alignment: .bottom) {
+            bar
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { cardHeight = $0 })
+            if inline, presented != nil {
+                // 後面的單子暗下來；點一下＝取消（和 sheet 往下滑一樣）
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .contentShape(.rect)
+                    .onTapGesture { dismissByUser() }
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+                drawer
+                    .offset(y: dragY)
+                    .transition(.move(edge: .bottom))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .animation(Motion.spring, value: content.selection?.id)
+        .animation(Motion.spring, value: presented == nil)
+        // drawer 開著時單子的 sheet 不能往下滑掉（往下滑的是 drawer 上面的橫條）
+        .interactiveDismissDisabled(inline && presented != nil)
+        .sheet(isPresented: inline ? .constant(false) : sheetShown) {
+            dockContent
+                .presentationDetents(detents)
+                .phoneSheetStyle()
+        }
+        .task(id: wanted?.id ?? "none") {
+            if let next = wanted {
+                presented = next
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(220))
+            if !Task.isCancelled { presented = nil }
+        }
+        .onChange(of: needsRoom) { _, more in
+            onNeedsRoom?(more)
+        }
+    }
+
+    /// 選起來的一筆（卡片）或這一頁的動作（浮著的大鍵）。
+    /// 單子的 sheet 裡鍵盤（或面板）升起來時卡片收起來：選起來那一行的小卡與動作鍵在鍵盤上面，不疊兩份；後面的單子照樣完整
+    private var bar: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: 0)
-            if let s = content.selection, s.isItem {
+            if inline && presented != nil {
+                EmptyView()
+            } else if let s = content.selection, s.isItem {
                 PhoneSelectionCard(selection: s, maxHeight: maxCardHeight)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if let s = content.selection, s.primary != nil || !s.actions.isEmpty {
@@ -159,82 +229,144 @@ private struct PhoneDock: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .animation(Motion.spring, value: content.selection?.id)
-        .sheet(item: sheetBinding) { which in
-            sheetContent(which)
-        }
-        .task(id: wanted?.id ?? "none") {
-            let next = wanted
-            if next != nil {
-                presented = next
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(220))
-            if !Task.isCancelled { presented = nil }
-        }
-        .onChange(of: content.selection?.isItem ?? false) { _, isItem in
-            onSelectionChange?(isItem)
-        }
     }
 
-    /// 現在該開哪一張：問數字＞面板（和 iPad 一樣：要打數字時面板讓開，打完再回來）
+    private var needsRoom: Bool {
+        (content.selection?.isItem ?? false) || (inline && presented != nil)
+    }
+
+    /// 現在該開什麼：面板開著就是面板（選起來那一行的數量也讓給面板）；面板裡的選擇要打數字、或沒有面板時問數字：鍵盤
     private var wanted: PhoneDockSheet? {
         guard isActive else { return nil }
+        if let p = content.panel, !keypad.isAskingOther { return .panel(p.id) }
         if keypad.isAsking { return .keypad }
-        if let p = content.panel { return .panel(p.id) }
         return nil
     }
 
-    /// 使用者往下滑關掉＝取消（問數字）／關掉（面板）
-    private var sheetBinding: Binding<PhoneDockSheet?> {
-        Binding(get: { presented }, set: { value in
-            guard value == nil, let was = presented else { return }
+    /// 使用者往下滑關掉＝取消（問數字）／關掉（面板）。
+    /// 自己收起來（presented 已經是 nil）時 SwiftUI 也可能寫一次 false：不做事；換內容的途中（要的已經不是這一張）也不算
+    private var sheetShown: Binding<Bool> {
+        Binding(get: { presented != nil }, set: { shown in
+            guard !shown, let was = presented else { return }
             presented = nil
-            switch was {
-            case .keypad:
-                keypad.cancel()
-            case .panel(let id):
-                if let p = content.panel, p.id == id { p.close() }
-            }
+            guard was == wanted else { return }
+            dismiss(was)
         })
     }
 
-    @ViewBuilder
-    private func sheetContent(_ which: PhoneDockSheet) -> some View {
+    /// drawer：點暗下來的地方、把橫條往下拉
+    private func dismissByUser() {
+        guard let was = presented, was == wanted else { return }
+        dismiss(was)
+    }
+
+    private func dismiss(_ which: PhoneDockSheet) {
         switch which {
         case .keypad:
-            // 鍵位和 iPad 右欄一模一樣，整個寬度；上面那一塊是這一刻的幫手（找零、熟客、用過的統編）
-            KeypadDock(content: DockContent(), showsCancel: true)
-                .presentationDetents([.height(keypadHeight), .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(Theme.dock)
-        case .panel:
-            Group {
-                if let p = content.panel {
-                    DockPanelChrome(item: p)
-                } else {
-                    Theme.dock
+            keypad.cancel()
+        case .panel(let id):
+            if let p = content.panel, p.id == id { p.close() }
+        }
+    }
+
+    /// 同一張 sheet（drawer）裡換內容（淡入淡出，不滑走）：
+    ///   鍵盤：鍵位和 iPad 右欄一模一樣；上面留著選起來的那一筆（或面板的標題），知道這個數字是給誰的
+    ///   面板：不用打數字的選擇；裡面的選擇要打數字時換成鍵盤，打完再換回來
+    private var dockContent: some View {
+        ZStack {
+            Theme.dock.ignoresSafeArea()
+            switch presented {
+            case .keypad?:
+                KeypadDock(content: DockContent(selection: content.selection, panel: content.panel), showsCancel: true, inSheet: true)
+                    .transition(.opacity)
+            case .panel(let id)?:
+                if let p = content.panel, p.id == id {
+                    DockPanelChrome(item: p, inSheet: true)
+                        .transition(.opacity)
                 }
+            case nil:
+                EmptyView()
             }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Theme.dock)
+        }
+        .animation(Motion.fast, value: presented)
+    }
+
+    /// 從這一層的下面升起來的鍵盤／面板（單子、加料的 sheet 裡）：圓角、上面一條可以往下拉的橫條
+    private var drawer: some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 18, topTrailingRadius: 18, style: .continuous)
+        return dockContent
+            .clipShape(shape)
+            .overlay(alignment: .top) {
+                // 拖曳的橫條（和系統的 sheet 一樣的位置）：往下拉＝取消／關掉
+                Capsule()
+                    .fill(Theme.faint)
+                    .frame(width: 36, height: 5)
+                    .padding(.top, 6)
+                    .frame(maxWidth: .infinity, minHeight: 22, alignment: .top)
+                    .contentShape(.rect)
+                    .gesture(
+                        DragGesture(minimumDistance: 6)
+                            .onChanged { v in dragY = max(v.translation.height, 0) }
+                            .onEnded { v in
+                                let close = v.translation.height > 70 || v.predictedEndTranslation.height > 180
+                                withAnimation(Motion.spring) { dragY = 0 }
+                                if close { dismissByUser() }
+                            }
+                    )
+                    .accessibilityHidden(true)
+            }
+            .frame(height: drawerHeight)
+            .frame(maxWidth: .infinity)
+            .background {
+                shape
+                    .fill(Theme.dock)
+                    .ignoresSafeArea(edges: .bottom)
+                    .shadow(color: .black.opacity(0.22), radius: 24, y: -4)
+            }
+            .overlay {
+                shape
+                    .stroke(Theme.line, lineWidth: 1)
+                    .ignoresSafeArea(edges: .bottom)
+                    .allowsHitTesting(false)
+            }
+    }
+
+    /// 鍵盤照它要的高度（放不下可以拉到全高）；面板一半
+    private var detents: Set<PresentationDetent> {
+        presented == .keypad ? [.height(keypadHeight), .large] : [.medium, .large]
+    }
+
+    /// drawer 的高度：鍵盤照鍵盤要的（選起來那一行的數量：再加它的小卡與一兩排動作鍵）；面板六成。都不超過這一層
+    private var drawerHeight: CGFloat {
+        let room = max(areaHeight - 8, 320)
+        switch presented {
+        case .keypad?:
+            var h = keypadHeight - 24
+            if keypad.keepsSelection, let s = content.selection {
+                h += CGFloat(min((s.actions.count + 1) / 2, 2)) * 60
+            }
+            return min(h, room)
+        case .panel?:
+            return min(max(areaHeight * 0.62, 340), room)
+        case nil:
+            return 0
         }
     }
 
     /// 鍵盤的高度：題目（兩行）、大字、四排 68 點的鍵、確認鍵都放得下（內容約 590，加上下面的橫條約 620）；
-    /// 有快速鍵、找零／熟客這些幫手時再高一點。放不下時可以拉到全高
+    /// 有快速鍵、找零／熟客這些幫手、上面留著選起來那一筆的小卡或面板的標題時再高一點。放不下時可以拉到全高
     private var keypadHeight: CGFloat {
         guard let r = keypad.request else { return 620 }
         let quick = r.spec.quickKeys.count
-        let quickRows = quick == 0 ? 0 : (quick + 2) / 3
+        let quickRows = quick == 0 ? 0 : (quick == 4 ? 1 : (quick + 2) / 3)
         var h: CGFloat = 620 + CGFloat(quickRows) * 52 + (quickRows > 0 ? 14 : 0)
         if r.spec.title == "收現金" || r.spec.title == "會員" || r.spec.kind == .phone || r.spec.kind == .taxId { h += 140 }
+        if content.selection?.isItem == true || content.panel != nil { h += 84 }
         return h
     }
 }
 
-/// 下面那一塊開的 sheet
+/// 下面那一塊放的東西
 private enum PhoneDockSheet: Identifiable, Equatable {
     case keypad
     case panel(String)
@@ -247,22 +379,25 @@ private enum PhoneDockSheet: Identifiable, Equatable {
     }
 }
 
-/// 選起來的一筆：種類、名字、說明、狀態、×（DockSelectionView，和 iPad 右欄同一個）、兩欄的動作鍵；主要動作是最下面的大鍵
+/// 選起來的一筆：種類、名字、說明、狀態、×（DockSelectionView，和 iPad 右欄同一個）、兩欄的動作鍵；主要動作是最下面的大鍵。
+/// 卡片照內容的高度（太高才捲），不會撐到 maxHeight 把上面的清單擠掉；單子的一行用小卡（selection.compact）
 private struct PhoneSelectionCard: View {
     let selection: DockSelection
     let maxHeight: CGFloat
+    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            // 動作很多時卡片本身可以捲，不蓋掉整個畫面
-            ViewThatFits(in: .vertical) {
-                DockSelectionView(selection: selection)
+            // 放得下就照內容的高度；太高（動作很多）才變成可以捲的、最高 maxHeight
+            if contentHeight > maxHeight {
                 ScrollView {
-                    DockSelectionView(selection: selection)
+                    measured
                 }
                 .scrollIndicators(.hidden)
+                .frame(height: maxHeight)
+            } else {
+                measured
             }
-            .frame(maxHeight: maxHeight)
             if let p = selection.primary {
                 PhonePrimaryButton(action: p, accent: selection.accent)
                     .id(selection.id)
@@ -284,6 +419,12 @@ private struct PhoneSelectionCard: View {
                 .ignoresSafeArea(edges: .bottom)
                 .allowsHitTesting(false)
         }
+    }
+
+    private var measured: some View {
+        DockSelectionView(selection: selection, compact: selection.compact)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
     }
 }
 

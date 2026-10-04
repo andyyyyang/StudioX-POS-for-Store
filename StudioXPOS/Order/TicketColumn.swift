@@ -9,11 +9,15 @@ import SwiftUI
 ///
 /// 左邊選、右邊做（docs/DESIGN.md）：這一欄只有看與選——
 ///   - 沒點某一行：整張單的動作在右欄（大鍵：送單／結帳；動作鍵：找會員、折扣、備註、更多…、作廢）
-///   - 點了某一行：右欄換成那一行（大鍵：數量；動作鍵：用卡抵、設計師、換規格、備註、折扣、刪除）；再點一下取消
+///   - 點了某一行：右欄換成那一行（卡片＋動作鍵：用卡抵、設計師、換規格、備註、折扣、刪除），
+///     右側鍵盤直接問它的數量（打數字＝改、−1／+1 一按就改、大鍵確認；0＝刪除）；再點一下取消
 ///   - 不用打數字的選擇（設計師、課程卡、規格、折扣的種類、用餐方式…）蓋住右欄（.dockPanel）
+///   - 手勢：往左滑＝刪除（還沒送出的滑到底直接刪；送出去的只露出「作廢…」）；往右滑＝−1、+1（滑到底＝+1）
+///   - 刪掉還沒送出的不留紀錄（lines.removed，下面可以「復原」）；送出去的作廢照樣記、印作廢單，但單子上不再列出來
 /// 服飾多了整張單的銷售人員與換貨；美業、課程多了會員條（儲值金、課程卡）、每一行的設計師／教練與助理、用課程卡抵。
 struct TicketColumn: View {
     @Environment(POSModel.self) private var model
+    @Environment(KeypadController.self) private var keypad
     /// 截圖（-preselect）時先選起第一行；看不到的那一份（直的 iPad、手機只為了交出整張單的動作）不要選
     var preselects = true
     @State private var splitting: Ticket?
@@ -32,6 +36,10 @@ struct TicketColumn: View {
     @State private var askingCustom = false
     @State private var customName = ""
     @State private var scanning = false
+    /// 往左右滑開著的那一行（一次只開一行）
+    /// 手機：按了「數量」才問（一選起來就升起整個鍵盤會把單子蓋掉；快速 −1／+1 用往右滑）
+    @State private var phoneQuantity = false
+    @State private var openSwipeId: String? = nil
 
     /// 蓋住右欄的選擇：這一行的（設計師、助理、課程卡、規格、折扣、座位）、整張單的（折扣、更多、銷售人員）
     private enum TicketPanel: String, Identifiable {
@@ -49,8 +57,10 @@ struct TicketColumn: View {
             }
         }
         .frame(maxHeight: .infinity)
-        .background(Theme.dock.opacity(0.55))
-        .overlay(alignment: .leading) { Rule(vertical: true) }
+        .background { ground.ignoresSafeArea(edges: model.isPhone ? .bottom : []) }
+        .overlay(alignment: .leading) {
+            if !model.isPhone { Rule(vertical: true) }
+        }
         .dockSelection(dock)
         .dockPanel(item: $panel, title: { panelTitle($0) }, subtitle: { panelSubtitle($0) }) { p in
             panelContent(p)
@@ -64,8 +74,23 @@ struct TicketColumn: View {
             selectedLineId = nil
             panel = nil
         }
-        .onChange(of: selectedLineId) { _, _ in
+        .onChange(of: selectedLineId) { old, new in
             if panel?.isLine == true { panel = nil }
+            openSwipeId = nil
+            phoneQuantity = false
+            // 不選這一行了（或換一行）：問它數量的鍵盤收起來；換一行的話馬上問新的那一行
+            if old != nil, keypad.keepsSelection { keypad.cancel() }
+        }
+        // 加了新的一行：焦點到新加的那一行，原本選起來的就不選了；選起來的那一行不見了（刪掉、作廢、別台改了）也不選了
+        .onChange(of: model.selectedTicket?.activeLines.count ?? 0) { old, new in
+            guard let id = selectedLineId else { return }
+            let stillThere = model.selectedTicket?.activeLines.contains(where: { $0.id == id }) ?? false
+            if new > old || !stillThere { selectedLineId = nil }
+        }
+        // 選了一行：右側鍵盤問它的數量（數量變了、跳視窗、別的題目來了：重新決定要不要問）
+        .task(id: quantityAsk) { await askQuantity() }
+        .onDisappear {
+            if selectedLineId != nil, keypad.keepsSelection { keypad.cancel() }
         }
         // 規格、加料的卡打開了：右欄換成那張卡，這一行就不選了
         .onChange(of: model.variantItem?.id) { _, id in
@@ -158,7 +183,7 @@ struct TicketColumn: View {
                 Text(emptyHint)
                     .textRole(.small)
                     .foregroundStyle(Theme.muted)
-                Text("開單、自訂品項、掃條碼在右邊")
+                Text(emptyActionsHint)
                     .textRole(.xs)
                     .foregroundStyle(Theme.faint)
             }
@@ -175,6 +200,14 @@ struct TicketColumn: View {
             return "點左邊的品項就會開一張\(model.mode.defaultOrderType.label)單（\(model.mode.label)：\(model.mode.summary)）"
         }
         return "點左邊的品項就會開一張新單（\(model.mode.label)：\(model.mode.summary)）"
+    }
+
+    /// 右欄有什麼（點品項就會開單，所以沒有「開外帶單」這種鍵）
+    private var emptyActionsHint: String {
+        var parts = model.otherOrderTypes.map { "開\($0.label)單" }
+        if model.mode.wantsCustomer { parts.insert("找會員開單", at: 0) }
+        parts += ["自訂品項", "掃條碼"]
+        return parts.joined(separator: "、") + "在右邊"
     }
 
 
@@ -196,7 +229,7 @@ struct TicketColumn: View {
                 .padding(.top, 18)
                 .padding(.bottom, 12)
             Rule()
-            if t.activeLines.isEmpty && t.lines.isEmpty {
+            if t.activeLines.isEmpty {
                 VStack(spacing: 8) {
                     Spacer()
                     Text("還沒點東西")
@@ -212,24 +245,41 @@ struct TicketColumn: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
+                        // 作廢的（送出去又不要的）不列：廚房、報表照樣有紀錄，單子上只看還要的
                         LazyVStack(spacing: 0) {
-                            ForEach(t.lines) { line in
-                                LineRow(line: line, ticket: t, editable: editable,
-                                        selected: editable && line.isActive && selectedLineId == line.id,
-                                        onSelect: { select(line) })
-                                    .id(line.id)
+                            ForEach(t.activeLines) { line in
+                                SwipeRow(id: line.id, openId: $openSwipeId,
+                                         leading: editable ? [minusKey(line), plusKey(line)] : [],
+                                         trailing: editable ? [deleteKey(line)] : [],
+                                         fullLeading: editable ? plusKey(line) : nil,
+                                         fullTrailing: editable && !line.isSent ? deleteKey(line) : nil,
+                                         enabled: editable) {
+                                    LineRow(line: line, ticket: t, editable: editable,
+                                            selected: editable && selectedLineId == line.id,
+                                            onSelect: { select(line) })
+                                        .background { lineBackdrop }
+                                }
+                                .id(line.id)
+                                .transition(.opacity)
                                 Rule(color: Theme.hair)
                             }
                         }
+                        .animation(Motion.fast, value: t.activeLines.map(\.id))
                     }
                     .scrollIndicators(.hidden)
-                    .onChange(of: t.lines.count) { _, _ in
-                        if let last = t.lines.last { withAnimation(Motion.ease) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                    .onChange(of: t.activeLines.count) { old, new in
+                        guard new > old, let last = t.activeLines.last else { return }
+                        withAnimation(Motion.ease) { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                     .onChange(of: selectedLineId) { _, id in
                         guard let id else { return }
                         withAnimation(Motion.ease) { proxy.scrollTo(id) }
                     }
+                    // 下面多了卡片（手機）、鍵盤上面多了題目：清單變矮了，選起來的那一行照樣捲到看得見
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { _ in
+                        guard let id = selectedLineId else { return }
+                        withAnimation(Motion.ease) { proxy.scrollTo(id) }
+                    })
                 }
             }
             Rule()
@@ -239,9 +289,21 @@ struct TicketColumn: View {
         .animation(Motion.spring, value: selectedLineId)
     }
 
-    /// 點一行：選起來（右欄換成那一行的動作）；再點一次取消
+    /// 單子欄的底（不透明）：iPad 是暖紙色上一層淡淡的右欄色；手機在 sheet 裡，和 sheet 同一個暖紙色
+    private var ground: some View {
+        ZStack {
+            Theme.page
+            if !model.isPhone { Theme.dock.opacity(0.55) }
+        }
+    }
+
+    /// 一行的底（和單子欄同一個顏色、不透明：往左右滑時後面的鍵不會透出來）
+    private var lineBackdrop: some View { ground }
+
+    /// 點一行：選起來（右欄換成那一行的動作，鍵盤問它的數量）；再點一次取消
     private func select(_ line: TicketLine) {
         guard model.checkoutTicketId == nil, line.isActive else { return }
+        openSwipeId = nil
         if selectedLineId == line.id {
             selectedLineId = nil
         } else {
@@ -262,11 +324,17 @@ struct TicketColumn: View {
         let editable = model.checkoutTicketId == nil
         return VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(t.title(floor: model.floor))
-                    .font(.brand(22, .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+                HStack(alignment: .center, spacing: 10) {
+                    Text(headerTitle(t))
+                        .font(.brand(22, .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Spacer(minLength: 0)
+                    if let q = t.queueNumber, q > 0 {
+                        queueBadge(q)
+                    }
+                }
                 HStack(spacing: 6) {
                     Text(t.number)
                     Text("・")
@@ -313,6 +381,29 @@ struct TicketColumn: View {
             }
         }
         .animation(Motion.fast, value: memberOpen)
+    }
+
+    /// 單子的標題；有叫號的號碼時號碼在右邊的標籤上，標題就不再寫一次（「外帶 A023」＋「24 號」）
+    private func headerTitle(_ t: Ticket) -> String {
+        guard t.queueNumber != nil else { return t.title(floor: model.floor) }
+        var plain = t
+        plain.queueNumber = nil
+        return plain.title(floor: model.floor)
+    }
+
+    /// 叫號的號碼（結帳時取的、排隊叫到的）：「24 號」
+    private func queueBadge(_ q: Int) -> some View {
+        Text("\(q) 號")
+            .font(.brand(15, .semibold))
+            .monospacedDigit()
+            .foregroundStyle(Theme.accentText)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(Theme.accentSoft, in: .capsule)
+            .overlay { Capsule().strokeBorder(Theme.accent.opacity(0.35)) }
+            .accessibilityLabel("叫號 \(q) 號")
     }
 
     /// 待結帳的標籤：印了結帳單、或送到結帳櫃台（櫃台看到的是「手機送來結帳」）
@@ -407,21 +498,25 @@ struct TicketColumn: View {
         let minutes = serviceMinutes(t)
         let redeemedCount = t.activeLines.filter { $0.redeem != nil }.reduce(0) { $0 + $1.quantity }
         let showsMinutes = minutes > 0 && (model.mode.staffPerLine || t.appointmentId != nil)
+        // 手機選了一行：下面有那一行的卡片，金額只留總計，單子上才看得到好幾行
+        let brief = model.isPhone && selectedLine(in: t) != nil
         return VStack(spacing: 7) {
-            ValueRow(label: "小計", value: x.subtotal.formatted)
-            if redeemedCount > 0 {
-                ValueRow(label: "課程卡抵用 \(redeemedCount) 項", value: "不收費", tone: Theme.accentText)
-            }
-            if x.orderDiscount.cents > 0 {
-                ValueRow(label: "折扣 \(t.discount?.label ?? "")", value: "−" + x.orderDiscount.formatted, tone: Theme.accentText)
-            }
-            if x.serviceCharge.cents > 0 {
-                ValueRow(label: "服務費 \(percentText(bps: t.serviceChargeBps))", value: x.serviceCharge.formatted)
-            }
-            if x.tip.cents > 0 { ValueRow(label: "小費", value: x.tip.formatted) }
-            if showsMinutes {
-                ServiceDurationBar(segments: durationSegments(t), total: minutes)
-                    .padding(.vertical, 2)
+            if !brief {
+                ValueRow(label: "小計", value: x.subtotal.formatted)
+                if redeemedCount > 0 {
+                    ValueRow(label: "課程卡抵用 \(redeemedCount) 項", value: "不收費", tone: Theme.accentText)
+                }
+                if x.orderDiscount.cents > 0 {
+                    ValueRow(label: "折扣 \(t.discount?.label ?? "")", value: "−" + x.orderDiscount.formatted, tone: Theme.accentText)
+                }
+                if x.serviceCharge.cents > 0 {
+                    ValueRow(label: "服務費 \(percentText(bps: t.serviceChargeBps))", value: x.serviceCharge.formatted)
+                }
+                if x.tip.cents > 0 { ValueRow(label: "小費", value: x.tip.formatted) }
+                if showsMinutes {
+                    ServiceDurationBar(segments: durationSegments(t), total: minutes)
+                        .padding(.vertical, 2)
+                }
             }
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -434,9 +529,9 @@ struct TicketColumn: View {
                 Spacer()
                 MoneyText(money: x.amountDue, role: .number)
             }
-            .padding(.top, 4)
+            .padding(.top, brief ? 0 : 4)
             // 換貨單（還沒進結帳）：退回的抵多少、要補還是要退
-            if let ex = t.exchange, t.exchangeApplied.cents == 0 {
+            if !brief, let ex = t.exchange, t.exchangeApplied.cents == 0 {
                 exchangePreview(ex, x)
             }
             if x.paid.cents > 0 {
@@ -491,23 +586,16 @@ struct TicketColumn: View {
         return ticketPage(t)
     }
 
-    /// 還沒有單：開單（照模式）、其他用餐方式、自訂品項、掃條碼
+    /// 還沒有單：點左邊的品項就會開一張預設的單，所以不放「開外帶單」這種大鍵（空的單子欄有提示）。
+    /// 右欄只放點品項做不到的：找會員開單（美業、課程）、其他用餐方式（全外帶的店沒有）、自訂品項、掃條碼
     private var emptyPage: DockSelection {
-        let type = model.mode.defaultOrderType
         var actions: [POSAction] = []
-        let primary: POSAction
+        var primary: POSAction? = nil
         if model.mode.wantsCustomer {
             primary = POSAction("找會員開單", icon: "user-circle") { Task { await startWithMember() } }
-            actions.append(POSAction("開新單（不找會員）", icon: "plus-circle") { model.openTicket(type: type) })
-        } else {
-            primary = POSAction(model.mode.showsOrderType ? "開\(type.label)單" : "開一張新單", icon: "plus-circle") {
-                model.openTicket(type: type)
-            }
         }
-        if model.mode.showsOrderType {
-            for other in OrderType.allCases where other != type {
-                actions.append(POSAction("開\(other.label)單", icon: "plus-circle") { model.openTicket(type: other) })
-            }
+        for other in model.otherOrderTypes {
+            actions.append(POSAction("開\(other.label)單", icon: "plus-circle") { model.openTicket(type: other) })
         }
         actions.append(POSAction("自訂品項…", icon: "pencil-square") { askingCustom = true })
         actions.append(POSAction("掃商品條碼…", icon: "qr-code") { scanning = true })
@@ -568,7 +656,8 @@ struct TicketColumn: View {
 
     // MARK: - 右欄：選起來的一行
 
-    /// 這一行：大鍵＝數量（右側鍵盤）；動作鍵照這一行挑（課程卡、設計師、助理、換規格、備註、折扣、座位、刪除）
+    /// 這一行：卡片＋動作鍵（課程卡、設計師、助理、換規格、備註、折扣、座位、刪除）。
+    /// iPad 沒有「數量」鍵：選起來時右側鍵盤就在問它的數量，大鍵是鍵盤的確認（「數量 2」「改成 3」）
     private func lineSelection(_ line: TicketLine, in t: Ticket) -> DockSelection {
         let passes = line.redeem == nil ? model.redeemablePasses(for: line, in: t) : []
         let title = model.mode.staffTitle
@@ -596,17 +685,145 @@ struct TicketColumn: View {
             actions.append(POSAction(line.isSent ? "座位…" : "座位・第幾道…", icon: "clock") { panel = .lineCourse })
         }
         if line.isSent {
-            actions.append(POSAction("作廢…", icon: "x-circle", destructive: true) { voidReasonFor = [line] })
+            actions.append(POSAction("作廢…", icon: "x-circle", destructive: true) { delete(line, in: t) })
         } else {
-            actions.append(POSAction("刪除", icon: "trash", destructive: true) {
-                selectedLineId = nil
-                Task { await model.void([line], in: t, reason: "點錯") }
-            })
+            actions.append(POSAction("刪除", icon: "trash", destructive: true) { delete(line, in: t) })
         }
-        let quantity = POSAction("數量 \(line.quantity)", icon: "calculator") { Task { await model.changeQuantity(line, in: t) } }
+        // 手機：大鍵是「數量」（按了才升起鍵盤）；卡片用小的（單子的 sheet 裡，鍵盤從下面升起來，上面還看得到單子）
+        let phonePrimary = model.isPhone ? POSAction("數量 \(line.quantity)", icon: "calculator") { phoneQuantity = true } : nil
         return DockSelection(id: "line-\(line.id)", kind: "這一行", title: line.displayName, detail: lineDetail(line),
-                             badge: lineBadge(line), primary: quantity, accent: false, actions: actions,
-                             clear: { selectedLineId = nil })
+                             badge: lineBadge(line), primary: phonePrimary, accent: false, actions: actions,
+                             compact: model.isPhone, clear: { selectedLineId = nil })
+    }
+
+    // MARK: - 右側鍵盤：選起來那一行的數量
+
+    /// 要不要問、問哪一行（變了就重新決定）
+    private struct QuantityAsk: Equatable {
+        var lineId: String?
+        var quantity = 0
+        var sent = false
+        /// 跳視窗、面板蓋著：先不問
+        var paused = false
+        /// 別的題目（改價、PIN、座位…）在問：讓它先問
+        var yielding = false
+    }
+
+    private var quantityAsk: QuantityAsk {
+        guard let id = selectedLineId, model.checkoutTicketId == nil, !model.isPhone || phoneQuantity,
+              let line = model.selectedTicket?.activeLines.first(where: { $0.id == id }) else { return QuantityAsk() }
+        return QuantityAsk(lineId: id, quantity: line.quantity, sent: line.isSent, paused: quantityPaused, yielding: keypad.isAskingOther)
+    }
+
+    /// 跳視窗（備註、作廢的原因）、蓋住右欄的面板、拆單、掃條碼：問數量的鍵盤先讓開，關掉再回來問
+    private var quantityPaused: Bool {
+        noteFor != nil || !voidReasonFor.isEmpty || panel != nil || ticketNote || voidingTicket
+            || askingCustom || scanning || splitting != nil
+    }
+
+    /// 點了一行：右側鍵盤直接問它的數量（帶入現在的數量，打數字＝換掉；−1、+1、2 個、3 個一按就改；大鍵確認）。
+    /// 改好了接著問同一行，直到不選這一行。0＝刪除（還沒送出的直接拿掉；送出去的要作廢）；沒改就按大鍵＝好了（不選了）。
+    /// 別的題目（改價、座位、PIN）來了就讓它先問，問完再回來；按取消（Esc、手機往下滑）＝不選這一行了
+    private func askQuantity() async {
+        while !Task.isCancelled {
+            guard let id = selectedLineId, model.checkoutTicketId == nil, !model.isPhone || phoneQuantity, let t = model.selectedTicket,
+                  let line = t.activeLines.first(where: { $0.id == id }) else { return }
+            if quantityPaused || keypad.isAskingOther {
+                if keypad.keepsSelection { keypad.cancel() }
+                return
+            }
+            let before = line.quantity
+            let entry = await keypad.ask(quantitySpec(line), keepsSelection: true, validate: { e in
+                quantityProblem(e.value ?? 0, line: line, in: t)
+            }, confirmTitle: { e in
+                TicketColumn.quantityLabel(e, line: line)
+            })
+            if Task.isCancelled { return }
+            guard let entry else {
+                // 被別的題目換掉：等它問完（yielding 變回來時重新問）。使用者按了取消（Esc、手機往下滑）：不選這一行了
+                // 手機：鍵盤收起來、回到這一行的卡（還選著）
+                if !keypad.isAsking && !quantityPaused && selectedLineId == id {
+                    if model.isPhone { phoneQuantity = false } else { selectedLineId = nil }
+                }
+                return
+            }
+            guard let current = model.selectedTicket?.activeLines.first(where: { $0.id == id }) else { return }
+            let q = entry.value ?? current.quantity
+            if q == current.quantity {
+                if model.isPhone { phoneQuantity = false } else { selectedLineId = nil }
+                return
+            }
+            if q == 0 {
+                delete(current, in: t)
+                return
+            }
+            await model.setQuantity(current, to: q, in: t)
+            // 改好了：數量變了會重新問（task 的 id 跟著變）；沒改成（主管沒授權、卡的次數不夠）就再問一次
+            if model.selectedTicket?.activeLines.first(where: { $0.id == id })?.quantity != before { return }
+        }
+    }
+
+    /// 數量的題目：現在的數量先帶入（打數字＝換掉）；快速鍵一按就改
+    private func quantitySpec(_ line: TicketLine) -> KeypadSpec {
+        let q = line.quantity
+        return KeypadSpec(kind: .count, title: "數量",
+                          subtitle: line.isSent ? "已經送廚房：減少要主管；打 0＝作廢" : "打數字＝改成幾個；打 0＝刪除",
+                          initial: String(q),
+                          quickKeys: [KeypadSpec.QuickKey("−1", digits: String(max(q - 1, 0)), commits: true),
+                                      KeypadSpec.QuickKey("+1", digits: String(min(q + 1, 999)), commits: true),
+                                      KeypadSpec.QuickKey("2 個", digits: "2", commits: true),
+                                      KeypadSpec.QuickKey("3 個", digits: "3", commits: true)],
+                          confirmLabel: "數量 \(q)", maxValue: 999)
+    }
+
+    /// 大鍵：沒改「數量 2」、改了「改成 3」、打 0「刪除」（送出去的「作廢…」）
+    private static func quantityLabel(_ e: KeypadEntry, line: TicketLine) -> String {
+        guard !e.isPristine, let v = e.value, v != line.quantity else { return "數量 \(line.quantity)" }
+        if v == 0 { return line.isSent ? "作廢…" : "刪除" }
+        return "改成 \(v)"
+    }
+
+    /// 用課程卡抵的：卡的次數不夠就不能加
+    private func quantityProblem(_ q: Int, line: TicketLine, in t: Ticket) -> String? {
+        guard q > line.quantity else { return nil }
+        return model.redeemProblem(line, quantity: q, in: t)
+    }
+
+    /// 刪掉這一行：還沒送出的直接拿掉（不留紀錄，下面可以「復原」）；送出去的要作廢（問原因、要主管、廚房印作廢單）
+    private func delete(_ line: TicketLine, in t: Ticket) {
+        if line.isSent {
+            voidReasonFor = [line]
+        } else {
+            if selectedLineId == line.id { selectedLineId = nil }
+            model.removeLines([line], in: t)
+        }
+    }
+
+    /// −1／+1（往右滑）：減到 0＝刪除
+    private func step(_ line: TicketLine, by delta: Int) {
+        guard let t = model.selectedTicket, let current = t.activeLines.first(where: { $0.id == line.id }) else { return }
+        if current.quantity + delta < 1 {
+            delete(current, in: t)
+        } else {
+            model.stepQuantity(current, in: t, by: delta)
+        }
+    }
+
+    // MARK: - 往左右滑的鍵
+
+    private func minusKey(_ line: TicketLine) -> SwipeAction {
+        SwipeAction("−1", tint: Theme.key, foreground: Theme.ink, keepsOpen: true) { step(line, by: -1) }
+    }
+
+    private func plusKey(_ line: TicketLine) -> SwipeAction {
+        SwipeAction("+1", tint: Theme.accent, foreground: Theme.onAccent, keepsOpen: true) { step(line, by: 1) }
+    }
+
+    /// 還沒送出的：刪除（滑到底直接刪）；送出去的：作廢…（問原因、要主管，滑到底也只是露出來）
+    private func deleteKey(_ line: TicketLine) -> SwipeAction {
+        SwipeAction(line.isSent ? "作廢…" : "刪除", icon: "trash", tint: Theme.dangerFG, foreground: Theme.page) {
+            if let t = model.selectedTicket { delete(line, in: t) }
+        }
     }
 
     /// 「×2・NT$240・半糖・少冰・Cameron」
@@ -873,7 +1090,8 @@ struct TicketColumn: View {
 // MARK: - 一行
 
 /// 單子上的一行：只顯示（數量、名字、規格、時間、設計師、卡抵、狀態），不放按鈕。
-/// 點一下選起來（品牌橘的框），右欄換成這一行的動作；再點一下取消
+/// 點一下選起來（品牌橘的框），右欄換成這一行的動作、鍵盤問它的數量；再點一下取消。左右滑在 TicketColumn（SwipeRow）。
+/// 作廢的行不會出現在這裡（單子欄只列還要的）
 struct LineRow: View {
     @Environment(POSModel.self) private var model
     let line: TicketLine
@@ -906,7 +1124,7 @@ struct LineRow: View {
                     .allowsHitTesting(false)
             }
         }
-        .accessibilityHint(editable && line.isActive ? (selected ? "再點一下取消選取" : "點一下，右邊出現這一行的動作") : "")
+        .accessibilityHint(editable && line.isActive ? (selected ? "再點一下取消選取" : "點一下，右邊的鍵盤改這一行的數量；左右滑可以加減、刪除") : "")
         .accessibilityAddTraits(selected ? .isSelected : [])
         .animation(Motion.spring, value: line.redeem)
         .animation(Motion.fast, value: selected)
@@ -922,7 +1140,6 @@ struct LineRow: View {
                 HStack(spacing: 6) {
                     Text(line.name)
                         .font(.brand(15.5, .medium))
-                        .strikethrough(!line.isActive)
                         .multilineTextAlignment(.leading)
                     if !line.isSent && line.isActive && isClassic {
                         Circle().fill(Theme.accent).frame(width: 6, height: 6)
@@ -954,7 +1171,6 @@ struct LineRow: View {
                     if line.course >= 2 { StatusBadge("第 \(line.course) 道", tone: .info) }
                     if let s = line.seat { StatusBadge("座 \(s)", tone: .neutral) }
                     if line.isSent && line.isActive { StatusBadge(line.kitchen.label, tone: kitchenTone) }
-                    if let v = line.voided { StatusBadge("作廢・\(v.reason)", tone: .danger) }
                 }
             }
             Spacer(minLength: 6)
@@ -1009,7 +1225,6 @@ struct LineRow: View {
                     .font(.brand(15.5, .medium))
                     .monospacedDigit()
                     .foregroundStyle(line.isActive ? Theme.ink : Theme.faint)
-                    .strikethrough(!line.isActive)
             }
         }
     }

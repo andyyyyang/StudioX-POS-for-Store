@@ -79,7 +79,8 @@
 
 `KeypadController` 是唯一的數字輸入：`await keypad.ask(spec)` 把鍵盤換成那個題目（`KeypadSpec`：數量、金額、PIN、統編、電話、
 愛心碼、代碼、張數），打完按確認才回傳；`validate` 不過（PIN 不對、超過可退金額）就留在鍵盤上、紅字搖一下。
-沒人要數字時，打的數字是「數量」（點品項時拿走）或「品號」。外接鍵盤、條碼掃描器打的數字也進同一個鍵盤。
+沒人要數字時，打的數字是「數量」（三碼以內，點品項時拿走）或「品號」。外接鍵盤、條碼掃描器打的數字也進同一個鍵盤。
+點了單子的一行，鍵盤就問那一行的數量（`ask(..., keepsSelection: true)`：那一行的卡片與動作鍵留在上面；別的題目來了先讓它問）。
 
 規則（POSCore/Keypad.swift）有測試；畫面（StudioXPOS/Keypad/KeypadDock.swift）照規則畫。
 

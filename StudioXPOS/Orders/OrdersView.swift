@@ -1951,6 +1951,12 @@ private struct OrdersSaleDetail: View {
                 Task { await model.issueLateInvoice(for: sale) }
             })
         }
+        // 外帶結帳時叫號連不上：補拿號碼（印號碼牌、掛在單子上）
+        if isEditable && model.canRetakeQueueNumber(sale) {
+            actions.append(POSAction("補取號", icon: "ticket", enabled: !model.queueCooling(.take)) {
+                Task { await model.retakeQueueNumber(for: sale) }
+            })
+        }
         // 退款：打開右欄的退款面板（送出前選方式、原因；要授權的在鍵盤問主管 PIN）
         if canRefund && refundable.cents > 0 {
             actions.append(POSAction("退款", icon: "receipt-refund", destructive: true) { open(.refund) })
@@ -2611,6 +2617,7 @@ extension SaleRecord {
             return "現場客人"
         }
         if let name = customerName, !name.isEmpty { return "\(orderType.label) \(name)" }
+        if let q = queueNumber { return "\(orderType.label) \(q) 號" }
         return orderType.label
     }
 

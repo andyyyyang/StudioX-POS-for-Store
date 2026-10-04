@@ -19,7 +19,7 @@ struct MenuView: View {
             header
                 .padding(.horizontal, 24)
                 .padding(.top, 18)
-                .padding(.bottom, 14)
+                .padding(.bottom, 6)
             // 規格（顏色、尺寸）與加料（甜度、冰塊）：浮在菜單上的一張卡，不佔滿整區（菜單還看得到）；點卡外面＝不加了
             ZStack(alignment: .bottom) {
                 ScrollView {
@@ -30,6 +30,9 @@ struct MenuView: View {
                         items
                     }
                     .padding(.horizontal, 24)
+                    // 第一排的選取框（分類方塊的框畫在方塊外 4 點）、品項卡的框與數量圓點：ScrollView 會切掉邊界外的，
+                    // 上面留 8 點才不會被切（頁首下面的間距跟著少 8，看起來一樣）
+                    .padding(.top, 8)
                     .padding(.bottom, 28)
                 }
                 .scrollIndicators(.hidden)
@@ -335,6 +338,11 @@ struct ItemCard: View {
 
     /// 服務：「60 分」；課程卡：「10 次・180 天內」；儲值：「儲 10,000 送 1,000」；服飾：「6 色 × 5 尺寸　庫存 42」
     private var meta: Meta? {
+        // 小吃的兩種價錢（黃毛丫頭的鴨胸 140／150）：直接寫出來
+        if item.hasVariants && VariantPanel.isSimple(item) {
+            let prices = item.activeVariants.map { item.price(of: $0).plain }.joined(separator: "／")
+            return Meta(icon: "tag", text: [prices, portion].compactMap { $0 }.joined(separator: "・"))
+        }
         if item.hasVariants {
             let stock = item.totalStock
             return Meta(icon: "swatch", text: VariantPanel.summary(of: item),
@@ -350,8 +358,13 @@ struct ItemCard: View {
         case .storedValue:
             return Meta(icon: "gift", text: storedValueText)
         case .goods:
-            return nil
+            return portion.map { Meta(icon: "cube", text: $0) }
         }
+    }
+
+    /// 份量（「3入」「1串」「5片」）：單位裡有數字才寫（「份」「杯」不用寫）
+    private var portion: String? {
+        item.unit.contains(where: \.isNumber) ? item.unit : nil
     }
 
     private var storedValueText: String {
@@ -510,6 +523,18 @@ struct LastSaleStrip: View {
                     .foregroundStyle(Theme.inverseMuted)
             }
             Spacer()
+            // 外帶叫號：取餐號碼最大（客人等一下看叫號螢幕就是這個號碼）
+            if let n = model.state.sales[sale.ticketId]?.queueNumber ?? sale.queueNumber {
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("取餐號碼")
+                        .font(.brand(12, .medium))
+                        .foregroundStyle(Theme.inverseMuted)
+                    Text("\(n) 號")
+                        .font(.brand(26, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.onInverse)
+                }
+            }
             if model.lastChange.cents > 0 {
                 VStack(alignment: .trailing, spacing: 0) {
                     Text("找零")

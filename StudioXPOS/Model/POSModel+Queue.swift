@@ -25,6 +25,16 @@ final class QueueBoard {
     var cooling: Set<QueueKey> = []
     /// 開著的叫號頁（頁面自己每 2 秒抓，背景的就不抓）
     var pageLoops = 0
+    /// 右欄最上面的叫號卡（DockPinned、手機點餐頁上面那張）開著：卡片自己每 3 秒抓
+    var pinnedLoops = 0
+    /// 蓋住右欄的「叫號」面板（叫號卡點開的）：外帶＝叫指定號碼；排隊等內用＝叫號入座。nil＝關著
+    var panel: QueueUsage?
+    /// 叫到號、等著選桌入座（排隊等內用）：右欄的選桌面板
+    var seating: QueueSeat?
+    /// 這台取號時帶的人數（原本的叫號伺服器不存附帶資料：入座時照這裡的人數，不用再問）
+    var localEntries: [Int: QueueEntry] = [:]
+    /// 剛結帳取到的號碼（右欄的叫號卡大大地顯示幾秒：「24 號」）
+    var justTaken: QueueJustTaken?
     /// 背景圖（號碼牌）
     let art = QueueTicketArt()
 
@@ -35,6 +45,7 @@ final class QueueBoard {
     @ObservationIgnored var lastWaiting: Set<Int>?
 
     var pageVisible: Bool { pageLoops > 0 }
+    var pinnedVisible: Bool { pinnedLoops > 0 }
 
     /// 換店、結束示範
     func reset() {
@@ -43,6 +54,10 @@ final class QueueBoard {
         syncedAt = nil
         cooling = []
         lastWaiting = nil
+        panel = nil
+        seating = nil
+        localEntries = [:]
+        justTaken = nil
         // 示範店的號碼不會存進這台（重新讀一次存著的）
         printed = QueuePrintLog.load()
     }
@@ -50,7 +65,38 @@ final class QueueBoard {
 
 /// 有冷卻時間的鍵（防連按）
 enum QueueKey: Hashable {
-    case take, next, miss
+    case take, next, miss, call
+}
+
+/// 剛結帳取到的號碼（「A023 已結帳・24 號」）
+struct QueueJustTaken: Equatable {
+    var number: Int
+    var ticketNumber: String
+    var at = Date()
+}
+
+/// 叫到號、等著選桌入座（排隊等內用）
+struct QueueSeat: Identifiable, Equatable {
+    var number: Int
+    var guests: Int
+    var id: Int { number }
+}
+
+/// 外帶結帳後取號的結果：取到了、連不上、等太久（號碼晚點到也照樣掛上、印出來）
+nonisolated enum TakeoutNumber: Sendable, Equatable {
+    case taken(Int)
+    case failed
+    case late
+}
+
+/// 結帳後取號：號碼回來、等太久，誰先到就用誰（只接一次）
+final class TakeoutGate {
+    var continuation: CheckedContinuation<TakeoutNumber, Never>?
+
+    func finish(_ result: TakeoutNumber) {
+        continuation?.resume(returning: result)
+        continuation = nil
+    }
 }
 
 /// 叫號頁不能按的原因
@@ -136,6 +182,86 @@ extension POSModel {
     /// 也印別台取的號碼（取代樹莓派）：要有號碼牌出單機才算開著
     var queuePrintsOthers: Bool { features.queue && settings.queuePrintsOthers && hasQueuePrinter }
 
+    // MARK: 用在哪裡（後台的 queue.usage）
+
+    /// 後台開的用法（沒開叫號是空的）
+    var queueUsage: Set<QueueUsage> { features.queue ? (queueConfig?.usage ?? []) : [] }
+
+    /// 外帶取餐：外帶單結帳完成時自動取號、做好了叫號。要是有外帶的營業模式（餐飲、攤位）
+    var queueForTakeout: Bool { queueUsage.contains(.takeout) && (mode.showsOrderType || mode == .retail) }
+
+    /// 排隊等內用：取號時打人數、叫到號選桌入座。要是有內用的營業模式（餐飲）
+    var queueForDineIn: Bool { queueUsage.contains(.dineIn) && mode.showsOrderType }
+
+    /// 右欄最上面的叫號卡放哪一種：外帶（點餐、訂單、廚房）、排隊等內用（桌位）；不放是 nil。
+    /// 結帳時收起來（右欄要給收款的鍵盤）
+    var queuePinned: QueueUsage? {
+        guard features.queue, phase == .ready, checkoutTicketId == nil else { return nil }
+        switch section {
+        case .order, .orders, .kitchen: return queueForTakeout ? .takeout : nil
+        case .floor: return queueForDineIn ? .dineIn : nil
+        default: return nil
+        }
+    }
+
+    /// 這個號碼的附帶資料：後台存的（native），沒有就是這台取號時記的
+    func queueEntry(_ n: Int) -> QueueEntry? {
+        queue.state?.entry(n) ?? queue.localEntries[n]
+    }
+
+    /// 這個號碼的單（外帶結帳時取的）：後台記的 ticketId，沒有就照今天的單子上掛的號碼找
+    func queueTicket(_ n: Int) -> Ticket? {
+        if let id = queueEntry(n)?.ticketId, let t = state.tickets[id] { return t }
+        let today = businessDate
+        return state.tickets.values.first { $0.queueNumber == n && $0.businessDate == today && $0.status != .voided }
+    }
+
+    /// 外帶單做好了沒（廚房的進度）：全部好了＝true、還在做＝false、沒有送廚房的品項＝nil
+    func queueTicketReady(_ t: Ticket) -> Bool? {
+        let sent = t.activeLines.filter(\.isSent)
+        guard !sent.isEmpty else { return nil }
+        return sent.allSatisfy { $0.kitchen == .ready || $0.kitchen == .served }
+    }
+
+    /// 號碼方塊上的小字：「4 位」（排隊等內用）、「好了」（外帶單做好了）
+    func queueTag(_ n: Int) -> String? {
+        if let g = queueEntry(n)?.guests { return "\(g) 位" }
+        if let t = queueTicket(n), queueTicketReady(t) == true { return "好了" }
+        return nil
+    }
+
+    /// 號碼的說明（右欄、面板）：「4 位」「A012・3 項・好了」
+    func queueDetail(_ n: Int) -> String? {
+        var parts: [String] = []
+        let entry = queueEntry(n)
+        if let g = entry?.guests { parts.append("\(g) 位") }
+        if let t = queueTicket(n) {
+            parts.append(entry?.label ?? queueLabel(t))
+            switch queueTicketReady(t) {
+            case .some(true): parts.append("好了")
+            case .some(false): parts.append("製作中")
+            case .none: break
+            }
+        } else if let label = entry?.label {
+            parts.append(label)
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "・")
+    }
+
+    /// 桌位頁的右欄：「排隊 5 組・下一號 31（4 位）」
+    var queueDineInSummary: String? {
+        guard let s = queue.state else { return nil }
+        guard let n = s.waiting.first else { return "沒有人在排隊" }
+        let guests = queueEntry(n)?.guests.map { "（\($0) 位）" } ?? ""
+        return "排隊 \(s.waiting.count) 組・下一號 \(n)\(guests)"
+    }
+
+    /// 「叫號入座 31（4 位）」
+    var queueSeatNextTitle: String {
+        guard let n = queue.state?.waiting.first else { return "叫號入座" }
+        return "叫號入座 \(n)" + (queueEntry(n)?.guests.map { "（\($0) 位）" } ?? "")
+    }
+
     // MARK: - 抓號碼
 
     /// 抓一次現在的號碼
@@ -164,11 +290,21 @@ extension POSModel {
         }
     }
 
-    /// 背景（每次回傳下一次要等幾秒）：叫號頁開著時頁面自己抓；「也印別台取的號碼」開著時每 2 秒（鎖定畫面也印）；
+    /// 右欄的叫號卡開著：每 3 秒抓一次（叫號頁開著時頁面已經在抓；卡片收起來時 task 取消，迴圈就停）
+    func queuePinnedLoop() async {
+        queue.pinnedLoops += 1
+        defer { queue.pinnedLoops -= 1 }
+        while !Task.isCancelled {
+            if !queue.pageVisible { await refreshQueue() }
+            try? await Task.sleep(for: .seconds(3))
+        }
+    }
+
+    /// 背景（每次回傳下一次要等幾秒）：叫號頁、右欄的叫號卡開著時它們自己抓；「也印別台取的號碼」開著時每 2 秒（鎖定畫面也印）；
     /// 其他時候每 15 秒（側欄的等候人數）
     func queueBackgroundTick() async -> Double {
         guard features.queue, api != nil, phase == .ready || phase == .locked else { return 15 }
-        if queue.pageVisible { return 2 }
+        if queue.pageVisible || queue.pinnedVisible { return 2 }
         if queuePrintsOthers {
             await refreshQueue()
             return 2
@@ -345,9 +481,10 @@ extension POSModel {
         show("叫號已歸零：下一張從 \(s.nextNo ?? 1) 號開始", tone: .info)
     }
 
-    /// 開單：客人的稱呼是號碼（「23 號」），跳到點餐
+    /// 開單：號碼掛在單子上（「外帶 23 號」；結帳時不會再取一張），跳到點餐
     func openQueueTicket(_ n: Int) {
-        guard let t = openTicket(type: mode.defaultOrderType, customerName: "\(n) 號") else { return }
+        guard let t = openTicket(type: mode.defaultOrderType) else { return }
+        record(.ticketUpdated(TicketUpdated(ticketId: t.id, queueNumber: n)))
         selectedTicketId = t.id
         if visibleSections.contains(.order) {
             go(.order)
@@ -358,6 +495,267 @@ extension POSModel {
 
     /// 這台可以幫叫到的號碼開單（有點餐頁的崗位）
     var queueCanOpenTicket: Bool { role.takesOrders && visibleSections.contains(.order) }
+
+    // MARK: - 叫指定的號碼
+
+    /// 打開右欄的叫號面板（右欄最上面那張卡點開的）
+    func openQueuePanel(_ usage: QueueUsage) {
+        touch()
+        keypad.cancel()
+        queue.seating = nil
+        queue.panel = usage
+    }
+
+    /// 叫這一號（外帶：先做好的先叫）。是等候的第一位就用「下一號」（哪一種伺服器都一樣）；
+    /// 不是第一位：後台存號碼的直接叫那一號，原本的叫號伺服器只能照順序叫，就說明要改成後台叫號。
+    /// 已經是現在叫的＝再唸一次；過號的＝再叫一次。回傳現在叫的是不是這一號
+    @discardableResult
+    func callQueue(_ n: Int) async -> Bool {
+        guard features.queue, let s = queue.state else { return false }
+        if s.current == n {
+            announceQueue(n, prefix: "再唸一次・", force: true)
+            return true
+        }
+        if s.missed.contains(n) {
+            guard queueMode.canRecall else {
+                show("\(n) 號過號了：原本的叫號伺服器不能再叫一次，請直接服務或請客人重新取號", tone: .warning)
+                return false
+            }
+            await recallQueue(n)
+            return queue.state?.current == n
+        }
+        guard let position = s.waiting.firstIndex(of: n) else {
+            show("\(n) 號不在等候中（可能已經叫過了）", tone: .warning)
+            return false
+        }
+        if position == 0 {
+            await nextQueue()
+            return queue.state?.current == n
+        }
+        guard queueMode == .native else {
+            show("原本的叫號伺服器只能照順序叫「下一號」：\(n) 號前面還有 \(position) 位。要叫指定的號碼，請在後台「叫號」把號碼改存在後台", tone: .warning)
+            return false
+        }
+        var called = false
+        await coolingDown(.call) {
+            guard let fresh = await sendQueue(.call(n, requestId: newID())) else { return }
+            applyQueue(fresh)
+            announceQueue(fresh.current ?? n)
+            called = fresh.current == n
+        }
+        return called
+    }
+
+    /// 這個號碼能不能直接叫（原本的叫號伺服器只能叫等候的第一位）
+    func queueCanCall(_ n: Int) -> Bool {
+        guard queueCanAct, let s = queue.state else { return false }
+        if s.current == n { return true }
+        if s.missed.contains(n) { return queueMode.canRecall }
+        guard let i = s.waiting.firstIndex(of: n) else { return false }
+        return i == 0 || queueMode == .native
+    }
+
+    // MARK: - 外帶：結帳完成時自動取號
+
+    /// 這張單結帳完成時要自動取號：叫號用在外帶取餐、不是內用（有桌子）的單、還沒有號碼（從叫號頁開的單已經有了）
+    func takesTakeoutNumber(_ t: Ticket) -> Bool {
+        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty && t.queueNumber == nil
+    }
+
+    /// 號碼帶的一句話（後台叫號頁、右欄的叫號面板看得到）：「A012・3 項」
+    func queueLabel(_ t: Ticket) -> String { "\(t.number)・\(t.itemCount) 項" }
+
+    /// 同一張單用同一個 requestId：結帳時沒回應、之後「補取號」，後台十分鐘內認得，給回同一個號碼（不會多取一張）
+    static func takeoutRequestId(_ ticketId: String) -> String { "take-\(ticketId)" }
+
+    /// 結帳後取號：最多等 seconds 秒（收據要印號碼）。等太久回 .late：號碼晚點到也照樣掛上單子、印出來（lateTakeout）
+    func takeTakeoutNumber(for t: Ticket, sale: SaleRecord, waitUpTo seconds: Double = 5) async -> TakeoutNumber {
+        let work = Task { await requestTakeoutNumber(t) }
+        let gate = TakeoutGate()
+        let result = await withCheckedContinuation { (c: CheckedContinuation<TakeoutNumber, Never>) in
+            gate.continuation = c
+            Task {
+                let n = await work.value
+                gate.finish(n.map { TakeoutNumber.taken($0) } ?? .failed)
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(seconds))
+                gate.finish(.late)
+            }
+        }
+        if result == .late {
+            Task {
+                let n = await work.value
+                printTakeoutSlips(t, sale: sale, number: n, kitchenLines: [], kitchenMode: .new)
+                if let n {
+                    flashTakeout(n, ticket: t)
+                    show("\(t.number) 取號了・取餐號碼 \(n) 號")
+                } else {
+                    show("\(t.number) 沒有取到號碼（叫號連不上）：收據已經印了，連上後到「訂單」這一筆按「補取號」", tone: .warning)
+                }
+            }
+        }
+        return result
+    }
+
+    /// 送出取號（帶這張單）：取到就掛在單子上（ticket.updated 的 queueNumber）、這台有號碼牌出單機就印。連不上回 nil
+    @discardableResult
+    func requestTakeoutNumber(_ t: Ticket) async -> Int? {
+        if let n = state.tickets[t.id]?.queueNumber { return n }
+        guard features.queue, let api else { return nil }
+        let entry = QueueEntry(ticketId: t.id, label: queueLabel(t))
+        do {
+            let s = try await api.queue(.takeOne(entry: entry, requestId: Self.takeoutRequestId(t.id)))
+            guard let n = s.numbers?.first ?? s.waiting.last else {
+                applyQueue(s)
+                return nil
+            }
+            applyQueue(s, taken: [n])
+            record(.ticketUpdated(TicketUpdated(ticketId: t.id, queueNumber: n)))
+            if hasQueuePrinter { printQueueTickets([n], waiting: s.waiting.count) }
+            return n
+        } catch {
+            let p = QueueProblem(error)
+            if p.blocksPage { queue.problem = p }
+            return nil
+        }
+    }
+
+    /// 取號之後才印的：收據（取餐號碼＝叫號的號碼）、廚房單（上面是號碼）。
+    /// 號碼牌印出來了（這台有號碼牌出單機）：收據照設定；沒有號碼牌、或沒取到號碼：收據就是客人手上那張，一定印
+    func printTakeoutSlips(_ t: Ticket, sale given: SaleRecord, number: Int?, kitchenLines: [TicketLine], kitchenMode: Templates.KitchenMode) {
+        let sale = state.sales[t.id] ?? given
+        let touchesAccount = sale.lines.contains { $0.redeem != nil || $0.kind == .pass || $0.kind == .storedValue }
+            || sale.payments.contains { $0.tender == .prepaid }
+        if number == nil || !hasQueuePrinter || touchesAccount {
+            printers.print(receipt(for: sale), role: .receipt)
+        } else {
+            switch settings.receiptMode {
+            case "always": printers.print(receipt(for: sale), role: .receipt)
+            case "ask": receiptOffer = sale
+            default: break
+            }
+        }
+        if !kitchenLines.isEmpty {
+            printKitchen(state.tickets[t.id] ?? t, lines: kitchenLines, mode: kitchenMode)
+        }
+    }
+
+    /// 剛取到的號碼：右欄的叫號卡（手機是點餐頁上面那張）大大地顯示幾秒
+    func flashTakeout(_ n: Int, ticket t: Ticket) {
+        queue.justTaken = QueueJustTaken(number: n, ticketNumber: t.number)
+    }
+
+    /// 「補取號」：結帳時叫號連不上的外帶單（訂單的這一筆）
+    func canRetakeQueueNumber(_ sale: SaleRecord) -> Bool {
+        guard queueUsage.contains(.takeout), sale.orderType != .dineIn, sale.tableIds.isEmpty, sale.businessDate == businessDate,
+              let t = state.tickets[sale.ticketId], t.status == .closed, t.queueNumber == nil else { return false }
+        return role.takesPayment || role.takesOrders
+    }
+
+    /// 補取號：同一張單十分鐘內重送拿回同一個號碼（結帳時其實取到了、只是沒回應）；取到就印號碼牌（沒有號碼牌出單機就補印收據）
+    func retakeQueueNumber(for sale: SaleRecord) async {
+        guard let t = state.tickets[sale.ticketId] else { return }
+        if let n = t.queueNumber {
+            show("\(t.number) 已經是 \(n) 號", tone: .info)
+            return
+        }
+        // 連不上的提示可能是舊的：照樣送一次（取到了提示就消失）
+        guard let n = await requestTakeoutNumber(t) else {
+            show(queue.problem?.message ?? "叫號連不上，等一下再試", tone: .warning)
+            return
+        }
+        if !hasQueuePrinter, let fresh = state.sales[t.id] {
+            printers.print(receipt(for: fresh, reprint: true), role: .receipt)
+        }
+        flashTakeout(n, ticket: t)
+        show("\(t.number) 補取號・取餐號碼 \(n) 號")
+    }
+
+    // MARK: - 廚房、出餐口叫號
+
+    /// 叫這張外帶單的號碼（廚房、出餐口的「叫號」）；沒有號碼的單回 false（照原本的唸取餐號碼）
+    func callTicketNumber(_ t: Ticket) async -> Bool {
+        guard features.queue, t.orderType != .dineIn, let n = t.queueNumber else { return false }
+        return await callQueue(n)
+    }
+
+    // MARK: - 排隊等內用
+
+    /// 排隊取號：右欄的鍵盤問幾位 → 取一張（帶人數）→ 印號碼牌
+    func askTakeDineIn() async {
+        let spec = KeypadSpec(kind: .count, title: "排隊取號", subtitle: "幾位？取號後印號碼牌",
+                              quickKeys: [1, 2, 3, 4, 6].map { .init("\($0) 位", digits: String($0)) }, confirmLabel: "取號", maxValue: 30, minValue: 1)
+        guard let guests = await keypad.askNumber(spec) else { return }
+        await takeQueue(entry: QueueEntry(guests: guests))
+    }
+
+    /// 取一張、帶附帶資料（人數）：這台有號碼牌出單機就印
+    @discardableResult
+    func takeQueue(entry: QueueEntry) async -> Int? {
+        var taken: Int?
+        await coolingDown(.take) {
+            guard let s = await sendQueue(.takeOne(entry: entry, requestId: newID())) else { return }
+            guard let n = s.numbers?.first ?? s.waiting.last else {
+                applyQueue(s)
+                return
+            }
+            queue.localEntries[n] = entry
+            applyQueue(s, taken: [n])
+            if hasQueuePrinter { printQueueTickets([n], waiting: s.waiting.count) }
+            let ahead = s.waiting.firstIndex(of: n) ?? max(s.waiting.count - 1, 0)
+            show("取號 \(n) 號" + (entry.guests.map { "・\($0) 位" } ?? "") + (ahead > 0 ? "・前面 \(ahead) 組" : "・下一組就是"))
+            taken = n
+        }
+        return taken
+    }
+
+    /// 叫號入座：叫這一號（沒給就叫下一號）→ 不知道幾位的先問 → 有桌子就直接入座，沒有就打開右欄的選桌
+    func callToSeat(_ number: Int? = nil, table: DiningTable? = nil) async {
+        guard let s = queue.state else { return }
+        guard let n = number ?? s.waiting.first else {
+            show("沒有人在排隊", tone: .info)
+            return
+        }
+        queue.panel = nil
+        guard await callQueue(n) else { return }
+        await seatCalled(n, table: table)
+    }
+
+    /// 叫到的號碼入座（現在叫的那一號）：不知道幾位的先在右欄的鍵盤問
+    func seatCalled(_ n: Int, table: DiningTable? = nil) async {
+        var guests = queueEntry(n)?.guests
+        if guests == nil {
+            guests = await keypad.askNumber(KeypadSpec(kind: .count, title: "人數", subtitle: "\(n) 號幾位？",
+                                                       quickKeys: [1, 2, 3, 4, 6].map { .init("\($0) 位", digits: String($0)) },
+                                                       confirmLabel: "下一步", maxValue: 99, minValue: 1))
+        }
+        guard let g = guests else { return }
+        let seat = QueueSeat(number: n, guests: g)
+        if let table {
+            seatQueue(seat, at: [table.id])
+        } else if !(features.seating && mode.usesTables) || floor.allTables.isEmpty {
+            // 沒有桌位圖：直接開內用單
+            seatQueue(seat, at: [])
+        } else {
+            queue.seating = seat
+        }
+    }
+
+    /// 入座：開內用單（人數、號碼掛上去），跳到點餐
+    func seatQueue(_ seat: QueueSeat, at tableIds: [String]) {
+        queue.seating = nil
+        guard let t = openTicket(type: .dineIn, tableIds: tableIds, guests: seat.guests) else { return }
+        record(.ticketUpdated(TicketUpdated(ticketId: t.id, queueNumber: seat.number)))
+        selectedTicketId = t.id
+        let place = tableIds.isEmpty ? "內用" : floor.tableNames(tableIds)
+        if visibleSections.contains(.order) {
+            go(.order)
+            show("\(seat.number) 號入座 \(place)・\(seat.guests) 位")
+        } else {
+            show("\(seat.number) 號入座 \(place)・\(seat.guests) 位・\(t.number) 已同步到結帳櫃台", tone: .info)
+        }
+    }
 
     // MARK: - 唸號碼
 

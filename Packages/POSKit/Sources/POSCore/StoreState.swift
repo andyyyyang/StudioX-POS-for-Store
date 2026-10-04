@@ -166,7 +166,11 @@ public struct StoreState: Codable, Sendable, Hashable {
             if let m = u.member { t.member = m }
             if let c = u.customerName { t.customerName = c.isEmpty ? nil : c }
             if let s = u.salespersonId { t.salespersonId = s.isEmpty ? nil : s }
-            if let q = u.queueNumber { t.queueNumber = q > 0 ? q : nil }
+            if let q = u.queueNumber {
+                t.queueNumber = q > 0 ? q : nil
+                // 外帶是結帳完成「之後」才拿到號碼：結帳那一刻的紀錄也跟著掛上（收據、訂單、報表看得到）
+                if sales[t.id] != nil { sales[t.id]?.queueNumber = t.queueNumber }
+            }
             tickets[t.id] = t
 
         case .ticketMoved(let m):

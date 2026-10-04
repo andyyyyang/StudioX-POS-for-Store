@@ -134,8 +134,10 @@ struct DemoSeeder {
                                       serviceChargeBps: t.serviceChargeBps, businessDate: t.businessDate, customerName: t.customerName,
                                       serviceMode: t.serviceMode, member: t.member, salespersonId: t.salespersonId, appointmentId: t.appointmentId)
             var bodies: [EventBody] = [.ticketOpened(opened), .linesAdded(LinesAdded(ticketId: t.id, lines: t.lines))]
-            if t.discount != nil || t.invoiceBuyer != .paper {
-                bodies.append(.ticketUpdated(TicketUpdated(ticketId: t.id, discount: t.discount, invoiceBuyer: t.invoiceBuyer == .paper ? nil : t.invoiceBuyer)))
+            if t.discount != nil || t.invoiceBuyer != .paper || t.queueNumber != nil {
+                // 叫號的號碼（黃毛丫頭）：結帳的紀錄也帶著
+                bodies.append(.ticketUpdated(TicketUpdated(ticketId: t.id, discount: t.discount, invoiceBuyer: t.invoiceBuyer == .paper ? nil : t.invoiceBuyer,
+                                                           queueNumber: t.queueNumber)))
             }
             try ledger.record(bodies, staffId: t.openedBy, at: t.openedAt)
             let by = t.closedBy ?? t.openedBy

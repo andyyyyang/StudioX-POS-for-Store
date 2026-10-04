@@ -9,8 +9,8 @@ import SwiftUI
 ///
 /// 右側鍵盤打後台「門市 POS → 裝置」產生的 8 位數配對碼（接 StudioX 的店家不用打網址：console 知道是哪一家），
 /// 或用相機掃那裡的 QR Code；自己架後台的店家在「進階」填網址。
-/// 也可以先看示範：四家虛構的店（餐廳咖啡、服飾、美髮、健身），在這頁直接展開四張卡片選一家（不用 sheet，右邊的鍵盤一直在）。
-/// 手機（寬度 compact）：上面是說明（可以捲），下面是整個寬度的鍵盤；示範的四家放在一張 sheet（選店不用打數字）
+/// 也可以先看示範：五家示範的店（餐廳咖啡、服飾、美髮、健身，和夜市外帶＋叫號的黃毛丫頭），在這頁直接展開卡片選一家（不用 sheet，右邊的鍵盤一直在）。
+/// 手機（寬度 compact）：上面是說明（可以捲），下面是整個寬度的鍵盤；示範的店放在一張 sheet（選店不用打數字）
 struct PairingView: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -19,7 +19,7 @@ struct PairingView: View {
     @State private var scanning = false
     @State private var working = false
     @State private var attempt = 0
-    /// 手機：示範的四家
+    /// 手機：示範的店
     @State private var showDemos = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -120,7 +120,7 @@ struct PairingView: View {
             } label: {
                 HStack(spacing: 8) {
                     HeroIcon("sparkles", size: 16)
-                    Text("先看看示範（四家虛構的店）")
+                    Text("先看看示範（五家店）")
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -238,12 +238,12 @@ struct PairingView: View {
 
     // MARK: 示範
 
-    /// 四家示範的店：一家一張卡（整張可以點；行業的圖示與色塊、店名、看得到什麼、適合哪些店）
+    /// 示範的店：一家一張卡（整張可以點；行業的圖示與色塊、店名、看得到什麼、適合哪些店）
     private var demoPicker: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Eyebrow("或先看看示範")
-                Text("四家虛構的店，資料只在這次開著的時候。點一家就打開")
+                Text("五家示範的店（黃毛丫頭是店裡真的菜單），資料只在這次開著的時候。點一家就打開")
                     .textRole(.xs)
                     .foregroundStyle(Theme.muted)
             }

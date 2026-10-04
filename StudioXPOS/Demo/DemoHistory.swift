@@ -13,6 +13,8 @@ import SwiftUI
 nonisolated struct DemoHistory: Sendable {
     /// 示範的店開了幾天（更早的日子沒有資料）
     static let openedDays = 90
+    /// 黃毛丫頭的開機資料版本（和晨麥手作一樣是「櫃台、咖啡」類的模式，靠這個分出夜市攤的單）
+    static let yellowgirlVersion = "demo-yellowgirl"
 
     let base: Bootstrap
     /// 示範打開那天（營業日）
@@ -70,10 +72,11 @@ nonisolated struct DemoHistory: Sendable {
         var voidReason: String? = nil
     }
 
-    nonisolated private enum Kind { case cafe, apparel, salon, fitness }
+    nonisolated private enum Kind { case cafe, apparel, salon, fitness, yellowgirl }
 
     private var kind: Kind {
-        switch base.store.defaultServiceMode {
+        if base.version == Self.yellowgirlVersion { return .yellowgirl }
+        return switch base.store.defaultServiceMode {
         case .apparel, .retail: .apparel
         case .salon: .salon
         case .fitness: .fitness
@@ -99,6 +102,8 @@ nonisolated struct DemoHistory: Sendable {
         case .apparel: hours = (12, 21.5); counts = (13, 17, 26)
         case .salon: hours = (10, 20); counts = (15, 19, 25)
         case .fitness: hours = (6.5, 22.5); counts = (30, 28, 24)
+        // 夜市：傍晚五點到半夜十二點，週末最多
+        case .yellowgirl: hours = (17, 24); counts = (55, 75, 95)
         }
         let target = weekend ? counts.weekend : (friday ? counts.friday : counts.weekday)
         let n = max(Int((Double(target) * ramp).rounded()) + rng.next(7) - 3, 3)
@@ -114,6 +119,7 @@ nonisolated struct DemoHistory: Sendable {
             case .apparel: draft = apparel(id, date: date, at: at, rng: &rng)
             case .salon: draft = salon(id, date: date, at: at, rng: &rng)
             case .fitness: draft = fitness(id, date: date, at: at, rng: &rng)
+            case .yellowgirl: draft = yellowgirl(id, date: date, at: at, rng: &rng)
             }
             if let draft { drafts.append(draft) }
         }
@@ -127,6 +133,7 @@ nonisolated struct DemoHistory: Sendable {
             case .apparel: apparel(id, date: date, at: at, rng: &rng)
             case .salon: salon(id, date: date, at: at, rng: &rng)
             case .fitness: fitness(id, date: date, at: at, rng: &rng)
+            case .yellowgirl: yellowgirl(id, date: date, at: at, rng: &rng)
             }
             if var v = made, !v.ticket.activeLines.isEmpty {
                 v.voidReason = rng.pick(["客人取消", "點錯了", "重複開單"]) ?? "客人取消"
@@ -140,6 +147,7 @@ nonisolated struct DemoHistory: Sendable {
         for (i, d) in drafts.enumerated() {
             finish(d, number: "\(base.device.code)\(String(format: "%03d", i + 1))", index: i, dayIndex: dayIndex, rng: &rng, into: &out)
         }
+        if kind == .yellowgirl { numberQueue(&out) }
         addRefund(to: &out, kind: kind, rng: &rng)
         if kind == .fitness {
             out.checkIns = checkIns(date: date, midnight: midnight, weekday: weekday, ramp: ramp, rng: &rng)
@@ -205,18 +213,32 @@ nonisolated struct DemoHistory: Sendable {
         day.sales.append(sale)
     }
 
+    /// 黃毛丫頭：結帳完成時取號，號碼每天從 1 開始、照結帳的順序（作廢的單沒結帳、沒有號碼）
+    private func numberQueue(_ day: inout Day) {
+        let order = day.sales.indices.sorted { day.sales[$0].closedAt < day.sales[$1].closedAt }
+        var numbers: [String: Int] = [:]
+        for (k, i) in order.enumerated() {
+            day.sales[i].queueNumber = k + 1
+            numbers[day.sales[i].ticketId] = k + 1
+        }
+        for i in day.tickets.indices {
+            if let n = numbers[day.tickets[i].id] { day.tickets[i].queueNumber = n }
+        }
+    }
+
     private func closeMinutes(rng: inout SeededRandom) -> Int {
         switch kind {
         case .cafe: 25 + rng.next(50)
         case .apparel: 4 + rng.next(10)
         case .salon: 50 + rng.next(100)
         case .fitness: 1 + rng.next(4)
+        case .yellowgirl: 1 + rng.next(3)
         }
     }
 
     /// 偶爾退一張（整張退＝發票作廢；退一件＝折讓）；動到會員帳戶的單不退（儲值、課程卡、儲值金付的）
     private func addRefund(to day: inout Day, kind: Kind, rng: inout SeededRandom) {
-        guard rng.chance(kind == .cafe ? 12 : 22) else { return }
+        guard rng.chance(kind == .cafe || kind == .yellowgirl ? 12 : 22) else { return }
         let candidates = day.sales.filter { s in
             s.total.cents > 0 && !s.payments.contains { $0.tender == .prepaid }
                 && !s.lines.contains { $0.redeem != nil || $0.kind == .pass || $0.kind == .storedValue }
@@ -230,6 +252,7 @@ nonisolated struct DemoHistory: Sendable {
         case .apparel: ["尺寸不合", "商品瑕疵", "客人改變心意"]
         case .salon: ["客人不滿意", "商品過敏", "重複刷卡"]
         case .fitness: ["重複刷卡", "商品瑕疵", "客人改變心意"]
+        case .yellowgirl: ["夾錯了", "客人不要了", "重複收款"]
         }
         let reason = rng.pick(reasons) ?? "客人不滿意"
         let refund: Refund
@@ -315,6 +338,20 @@ nonisolated struct DemoHistory: Sendable {
         let t = ticket(id, date: date, at: at, by: cashier, type: dineIn ? .dineIn : .takeout, tables: tables, guests: guests, lines: lines,
                        member: member, buyer: buyer(rng: &rng))
         let tender = rng.weighted([(Tender.cash, 40), (.card, 20), (.linePay, 15), (.jkoPay, 10), (.pxPay, 8), (.easyWallet, 7)]) ?? .cash
+        return Draft(at: at, ticket: t, tender: tender)
+    }
+
+    // 黃毛丫頭：全外帶，一籃 3–8 樣、NT$150–500 左右；現金為主，LINE Pay、街口
+    private func yellowgirl(_ id: String, date: String, at: Date, rng: inout SeededRandom) -> Draft? {
+        let cashier = rng.weighted([("s-yg-xiang", 6), ("s-yg-zhu", 3), ("s-yg-boss", 1)]) ?? "s-yg-xiang"
+        let picks = YellowgirlToday.basket(catalog, rng: &rng)
+        var lines: [TicketLine] = []
+        for (k, p) in picks.enumerated() {
+            if let l = line(id, k, p.itemId, p.quantity, variant: p.variantId, by: cashier, at: at, served: true) { lines.append(l) }
+        }
+        guard !lines.isEmpty else { return nil }
+        let t = ticket(id, date: date, at: at, by: cashier, type: .takeout, lines: lines)
+        let tender = rng.weighted([(Tender.cash, 60), (.linePay, 22), (.jkoPay, 18)]) ?? .cash
         return Draft(at: at, ticket: t, tender: tender)
     }
 

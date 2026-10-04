@@ -118,14 +118,21 @@ struct QueueView: View {
                 icon: "ticket",
                 title: taken > 0 ? "現在沒有人在等" : "還沒有人取號",
                 message: taken > 0
-                    ? "今天已經取了 \(taken) 張\(s.servedToday.map { "、服務了 \($0) 位" } ?? "")。客人來了按右邊的「取號」。"
-                    : "客人來了按右邊的「取號」（一次多張按「取幾張…」）；這台有號碼牌出單機就會馬上印出來。"
+                    ? "今天已經取了 \(taken) 張\(s.servedToday.map { "、服務了 \($0) 位" } ?? "")。\(howToTake)"
+                    : "\(howToTake)這台有號碼牌出單機就會馬上印出來。"
             )
             .frame(maxHeight: 360)
             if model.queueMode == .native, taken > 0 {
                 stats(s, now: Date())
             }
         }
+    }
+
+    /// 怎麼取號（看叫號用在哪裡）
+    private var howToTake: String {
+        if model.queueForDineIn { return "客人來了按右邊的「排隊取號」（鍵盤問幾位）。" }
+        if model.queueForTakeout { return "外帶單結帳完成時會自動取號；也可以按右邊的「取號」。" }
+        return "客人來了按右邊的「取號」（一次多張按「取幾張…」）。"
     }
 
     private func board(_ s: QueueState, now: Date) -> some View {
@@ -181,7 +188,7 @@ struct QueueView: View {
                         let minutes = native ? s.waitMinutes(n, now: now) : nil
                         QueueTile(
                             number: n,
-                            caption: waitingCaption(index: i, minutes: minutes),
+                            caption: waitingCaption(index: i, minutes: minutes, tag: model.queueTag(n)),
                             style: i == 0 ? .next : .waiting,
                             late: (minutes ?? 0) >= 20,
                             marked: s.isMarked(n),
@@ -197,11 +204,17 @@ struct QueueView: View {
         }
     }
 
-    /// 「下一號・等 6 分」「等 12 分」；舊伺服器沒有取號時間：「第 3 位」
-    private func waitingCaption(index: Int, minutes: Int?) -> String {
+    /// 「下一號・等 6 分」「等 12 分」；舊伺服器沒有取號時間：「第 3 位」。
+    /// 排隊等內用的人數、外帶單做好了放最前面：「4 位・等 6 分」「好了・等 3 分」
+    private func waitingCaption(index: Int, minutes: Int?, tag: String?) -> String {
         let wait = minutes.map { $0 == 0 ? "剛取" : "等 \($0) 分" }
-        if index == 0 { return wait.map { "下一號・\($0)" } ?? "下一號" }
-        return wait ?? "第 \(index + 1) 位"
+        let base: String
+        if index == 0 {
+            base = tag == nil ? (wait.map { "下一號・\($0)" } ?? "下一號") : "下一號"
+        } else {
+            base = wait ?? "第 \(index + 1) 位"
+        }
+        return tag.map { "\($0)・\(base)" } ?? base
     }
 
     // MARK: 過號
@@ -297,11 +310,31 @@ struct QueueView: View {
         }
     }
 
-    /// 沒選東西：大鍵「下一號 24」（品牌橘）；取號、取幾張…、過號、返回前一號、歸零
+    /// 沒選東西：大鍵「下一號 24」（品牌橘）；取號、取幾張…、過號、返回前一號、歸零。
+    /// 排隊等內用：大鍵「叫號入座 31（4 位）」、取號是「排隊取號」（鍵盤問幾位）
     private func pageDock(_ s: QueueState?) -> DockSelection {
         let can = model.queueCanAct
         let next = s?.waiting.first
         let calling = s?.current != nil
+        if model.queueForDineIn {
+            return DockSelection.page(
+                "queue",
+                primary: POSAction(model.queueSeatNextTitle, icon: "users", enabled: can && next != nil && !model.queueCooling(.next)) {
+                    Task { await model.callToSeat() }
+                },
+                accent: true,
+                actions: [
+                    POSAction("排隊取號", icon: "ticket", enabled: can && !model.queueCooling(.take)) { Task { await model.askTakeDineIn() } },
+                    POSAction(next.map { "只叫號 \($0)" } ?? "只叫號", icon: "megaphone", enabled: can && next != nil && !model.queueCooling(.next)) {
+                        Task { await model.nextQueue() }
+                    },
+                    POSAction("取幾張…", icon: "rectangle-stack", enabled: can && !model.queueCooling(.take)) { Task { await model.askTakeQueue() } },
+                    POSAction("過號", icon: "minus-circle", enabled: can && calling && !model.queueCooling(.miss)) { Task { await model.missQueue() } },
+                    POSAction("返回前一號", icon: "arrow-uturn-left", enabled: can && calling) { Task { await model.previousQueue() } },
+                    POSAction("歸零", icon: "arrow-path", destructive: true, enabled: can) { confirmReset = true },
+                ]
+            )
+        }
         return DockSelection.page(
             "queue",
             primary: POSAction(next.map { "下一號 \($0)" } ?? "下一號", icon: "megaphone",
@@ -319,19 +352,24 @@ struct QueueView: View {
         )
     }
 
-    /// 現在叫到的：大鍵「過號」（墨色）；返回前一號、標記、開單、再唸一次
+    /// 現在叫到的：大鍵「過號」（墨色）；返回前一號、標記、開單（已經有單的外帶號碼不用）、入座（排隊等內用）、再唸一次
     private func currentDock(_ n: Int, _ s: QueueState) -> DockSelection {
         let can = model.queueCanAct
         let marked = s.isMarked(n)
+        let ticket = model.queueTicket(n)
         var actions = [
             POSAction("返回前一號", icon: "arrow-uturn-left", enabled: can) { Task { await model.previousQueue() } },
             POSAction(marked ? "取消標記" : "標記", icon: "star", enabled: can) { Task { await model.toggleQueueMark(n) } },
         ]
-        if model.queueCanOpenTicket {
+        if model.queueForDineIn && ticket == nil {
+            actions.append(POSAction("入座", icon: "users") { Task { await model.seatCalled(n) } })
+        }
+        if model.queueCanOpenTicket && ticket == nil {
             actions.append(POSAction("開單", icon: "shopping-bag") { model.openQueueTicket(n) })
         }
         actions.append(POSAction("再唸一次", icon: "speaker-wave") { model.announceQueue(n, prefix: "再唸一次・", force: true) })
         var parts: [String] = []
+        if let d = model.queueDetail(n) { parts.append(d) }
         if let at = s.calledAt { parts.append("\(at.clockText) 叫的（\(Self.ago(at))）") }
         parts.append(s.waiting.isEmpty ? "後面沒有人在等" : "後面還有 \(s.waiting.count) 位")
         return DockSelection(
@@ -344,15 +382,27 @@ struct QueueView: View {
         )
     }
 
-    /// 等候中的：只有標記（叫號照順序，用「下一號」）
+    /// 等候中的：大鍵「叫這一號」（外帶：先做好的先叫）或「叫號入座」（排隊等內用）；標記。
+    /// 原本的叫號伺服器只能照順序叫：不是第一位的沒有大鍵，說明要改成後台叫號
     private func waitingDock(_ n: Int, _ s: QueueState) -> DockSelection {
         let marked = s.isMarked(n)
         let position = (s.waiting.firstIndex(of: n) ?? 0) + 1
+        let canCall = model.queueCanCall(n) && !model.queueCooling(.call) && !model.queueCooling(.next)
         var parts = [position == 1 ? "下一個就是他" : "前面還有 \(position - 1) 位"]
+        if let d = model.queueDetail(n) { parts.insert(d, at: 0) }
         if let at = s.takenTime(of: n) { parts.append("\(at.clockText) 取號（等了 \(Self.minutes(since: at)) 分）") }
+        if position > 1 && model.queueMode != .native { parts.append("原本的叫號伺服器只能照順序叫：要叫指定的號碼請在後台把號碼改存在後台") }
+        let seats = model.queueForDineIn && model.queueTicket(n) == nil
+        let primary: POSAction? = position == 1 || model.queueMode == .native
+            ? (seats
+                ? POSAction("叫號入座", icon: "users", enabled: canCall) { Task { await model.callToSeat(n) } }
+                : POSAction("叫這一號", icon: "megaphone", enabled: canCall) { Task { await model.callQueue(n) } })
+            : nil
         return DockSelection(
             id: "queue-waiting-\(n)", kind: "等候中・第 \(position) 位", title: "\(n) 號", detail: parts.joined(separator: "・"),
             badge: marked ? DockBadge("★ 標記", tone: .gold) : (position == 1 ? DockBadge("下一號", tone: .info) : nil),
+            primary: primary,
+            accent: true,
             actions: [POSAction(marked ? "取消標記" : "標記", icon: "star", enabled: model.queueCanAct) { Task { await model.toggleQueueMark(n) } }],
             clear: { select(nil) }
         )

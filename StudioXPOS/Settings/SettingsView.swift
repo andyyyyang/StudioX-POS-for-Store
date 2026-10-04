@@ -1053,23 +1053,7 @@ private struct SettingsPrintPreview: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Eyebrow("列印預覽")
-                    Text(job.title)
-                        .textRole(.h4)
-                        .foregroundStyle(Theme.ink)
-                }
-                Spacer(minLength: 8)
-                Button {
-                    dismiss()
-                } label: {
-                    HeroIcon("x-mark", size: 16)
-                }
-                .buttonStyle(SquareIconButtonStyle(size: 38))
-                .accessibilityLabel("關閉")
-            }
-            .padding(20)
+            SheetHeader(title: job.title, subtitle: "列印預覽", close: { dismiss() })
             Rule()
             ScrollView {
                 VStack(spacing: 20) {
@@ -1092,7 +1076,8 @@ private struct SettingsPrintPreview: View {
                     }
                     if let r = job.receipt {
                         ReceiptPaper(receipt: r, paper: paper)
-                            .frame(width: paper == .mm58 ? 300 : 380)
+                            // 手機比 80 mm 的紙窄：最寬到那麼寬、不撐出畫面
+                            .frame(maxWidth: paper == .mm58 ? 300 : 380)
                             .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
                             .overlay {
                                 RoundedRectangle(cornerRadius: Metric.radius)
@@ -1105,12 +1090,13 @@ private struct SettingsPrintPreview: View {
                             .foregroundStyle(Theme.muted)
                     }
                 }
-                .padding(24)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 24)
                 .frame(maxWidth: .infinity)
             }
         }
         .background(Theme.sheet)
-        .presentationDetents([.large])
+        .posSheet()
     }
 }
 
@@ -1879,11 +1865,22 @@ private struct SettingsQueueSection: View {
         let ticket = model.queueConfig?.ticket ?? .standard
         return VStack(alignment: .leading, spacing: 12) {
             ValueRow(label: "號碼存在", value: model.queueMode.label, strong: true)
+            ValueRow(label: "用在", value: usageText)
             ValueRow(label: "號碼牌的 QR", value: model.queueConfig?.customerUrl == nil ? "沒有設定（不印 QR）" : "客人掃了看現在叫到幾號")
             ValueRow(label: "版面", value: layoutText(ticket))
             ValueRow(label: "一個號碼印", value: "\(ticket.copies) 張")
         }
         .panel(padding: 22)
+    }
+
+    /// 叫號用在哪裡（後台的設定，這裡只能看）：「外帶取餐（結帳完成時自動取號）」
+    private var usageText: String {
+        let usage = model.queueConfig?.usage ?? []
+        guard !usage.isEmpty else { return "只有叫號頁（店員自己取號、叫號）" }
+        return QueueUsage.allCases.filter(usage.contains).map { u -> String in
+            let how = u == .takeout ? "結帳完成時自動取號" : "取號問人數、叫號入座"
+            return "\(u.label)（\(how)）"
+        }.joined(separator: "、")
     }
 
     private func layoutText(_ t: QueueTicketLayout) -> String {

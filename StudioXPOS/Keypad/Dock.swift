@@ -14,13 +14,13 @@ import SwiftUI
 //   │ A2・4 位            │
 //   │ [換桌]  [併桌]      │  它的動作：和數字鍵同一種鍵
 //   │ [印結帳單][作廢]    │
-//   │ 人數          ×     │  題目與大字：要打數字時才出現，緊貼在鍵的上面
+//   │ 人數          ×     │  題目與大字：要打數字時才出現，緊貼在鍵的上面（選起來的那一筆照樣留在上面）
 //   │ 1  2  3             │
 //   │ …                   │  鍵位永遠一樣
 //   │ [      入座      ]  │  最下面那顆大鍵＝下一步：問數字時是確認，選了東西時是它的主要動作
 //   └─────────────────────┘
 //
-//   不用打數字的選擇（選桌子、選設計師、退款的選項）：.dockPanel 蓋住整欄；要打數字時讓開，打完再回來。
+//   不用打數字的選擇（選桌子、選設計師、退款的選項）：.dockPanel 蓋住整欄；要打數字時讓開（上面留一條面板的標題），打完再回來。
 
 /// 選起來的那一筆：右欄最上面的卡片＋動作鍵；主要動作是鍵盤最下面那顆大鍵
 nonisolated struct DockSelection {
@@ -37,12 +37,14 @@ nonisolated struct DockSelection {
     var actions: [POSAction]
     /// 卡片下面的一小塊資訊（單子的幾行、會員的餘額…），少用
     var extra: AnyView?
+    /// 手機上用小的卡片（單子 sheet 裡選了一行：下面的卡片不能把單子擠掉）。iPad 的右欄不管這個
+    var compact: Bool
     /// 取消選取（右上的 ×）。nil＝這一頁沒選東西時的動作（例如「新增訂位」），沒有卡片、只有動作鍵
     var clear: (@MainActor () -> Void)?
 
     init(id: String, kind: String, title: String, detail: String? = nil, badge: DockBadge? = nil,
          primary: POSAction? = nil, accent: Bool = true, actions: [POSAction] = [], extra: AnyView? = nil,
-         clear: (@MainActor () -> Void)?) {
+         compact: Bool = false, clear: (@MainActor () -> Void)?) {
         self.id = id
         self.kind = kind
         self.title = title
@@ -52,6 +54,7 @@ nonisolated struct DockSelection {
         self.accent = accent
         self.actions = actions
         self.extra = extra
+        self.compact = compact
         self.clear = clear
     }
 
@@ -152,10 +155,18 @@ struct DockSelectionView: View {
     let selection: DockSelection
     /// 右欄有面板蓋著時不要搶 Esc
     var takesEscape = true
+    /// 小的卡片（手機的鍵盤 sheet：上面的空間只夠兩行）
+    var compact = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if selection.isItem { card }
+        VStack(alignment: .leading, spacing: compact ? 12 : 16) {
+            if selection.isItem {
+                if compact {
+                    DockSelectionHeader(selection: selection, showsClear: true)
+                } else {
+                    card
+                }
+            }
             DockActionKeys(actions: selection.actions)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -196,6 +207,77 @@ struct DockSelectionView: View {
         }
         .id(selection.id)
         .transition(.opacity.combined(with: .offset(y: 6)))
+    }
+}
+
+/// 問數字時，上面留著選起來的那一筆（小小的一張）：一看就知道這個數字是給誰的（「這一行・拿鐵・×2・NT$240」）
+struct DockSelectionHeader: View {
+    let selection: DockSelection
+    /// 右上的 ×（手機的鍵盤 sheet 裡，選起來那一行的數量：× 取消選取）
+    var showsClear = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Eyebrow(selection.kind, color: Theme.muted)
+                    if let b = selection.badge { StatusBadge(b.text, tone: b.tone) }
+                }
+                Text(selection.title)
+                    .font(.brand(17, .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let d = selection.detail {
+                    Text(d)
+                        .font(.brand(12.5, .regular))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink2)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 6)
+            if showsClear, let clear = selection.clear {
+                Button(action: clear) {
+                    HeroIcon("x-mark", size: 14)
+                }
+                .buttonStyle(SquareIconButtonStyle(size: 30))
+                .accessibilityLabel("取消選取")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: Metric.radius, style: .continuous).strokeBorder(Theme.line) }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// 面板裡的選擇要打數字（退款金額、自訂折扣）：面板讓開給鍵盤，上面留一條面板的標題，打完面板再回來
+struct DockPanelStrip: View {
+    let item: DockPanelItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Eyebrow(item.title, color: Theme.ink2)
+            if let s = item.subtitle {
+                Text(s)
+                    .font(.brand(12.5, .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: Metric.radius, style: .continuous).strokeBorder(Theme.line) }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -255,42 +337,93 @@ struct DockActionKeys: View {
 
 // MARK: - 蓋住右欄的面板
 
-/// 面板的外框：和右側鍵盤同一個底色、同樣的邊距；左上標題、右上關掉
+/// 面板的外框：和右側鍵盤同一個底色、同樣的邊距；左上標題、右上關掉。
+/// 手機（inSheet）：在 sheet 裡，沒有左邊的分隔線；標題大一點、緊貼在拖曳的橫條下面，內容捲到底也避開下面的橫條
 struct DockPanelChrome: View {
     let item: DockPanelItem
+    var inSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Eyebrow(item.title, color: Theme.ink2)
-                    if let s = item.subtitle {
-                        Text(s)
-                            .textRole(.small)
-                            .foregroundStyle(Theme.muted)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                Spacer(minLength: 8)
-                Button(action: item.close) {
-                    HeroIcon("x-mark", size: 16)
-                }
-                .buttonStyle(SquareIconButtonStyle(size: 34))
-                .accessibilityLabel("關掉")
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(.bottom, 18)
+            if inSheet { sheetTitle } else { dockTitle }
             ScrollView {
                 item.content
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .scrollIndicators(.hidden)
+            .contentMargins(.bottom, inSheet ? 20 : 0, for: .scrollContent)
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.top, inSheet ? 22 : 20)
+        .padding(.bottom, inSheet ? 0 : 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(Theme.dock.ignoresSafeArea())
-        .overlay(alignment: .leading) { Rule(vertical: true).ignoresSafeArea() }
+        .overlay(alignment: .leading) {
+            if !inSheet { Rule(vertical: true).ignoresSafeArea() }
+        }
+    }
+
+    private var dockTitle: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 4) {
+                Eyebrow(item.title, color: Theme.ink2)
+                if let s = item.subtitle {
+                    Text(s)
+                        .textRole(.small)
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            closeButton(size: 34)
+        }
+        .padding(.bottom, 18)
+    }
+
+    /// 手機：「整張單的折扣」大字標題＋小字，右邊一顆圓的關掉
+    private var sheetTitle: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                    .font(.brand(19, .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                if let s = item.subtitle {
+                    Text(s)
+                        .font(.brand(13.5, .regular))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            Button(action: item.close) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.ink2)
+                    .frame(width: 30, height: 30)
+                    .background(Theme.key, in: .circle)
+                    .contentShape(.circle)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("關掉")
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.bottom, 16)
+    }
+
+    private func closeButton(size: CGFloat) -> some View {
+        Button(action: item.close) {
+            HeroIcon("x-mark", size: 16)
+        }
+        .buttonStyle(SquareIconButtonStyle(size: size))
+        .accessibilityLabel("關掉")
+        .keyboardShortcut(.cancelAction)
     }
 }
 

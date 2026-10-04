@@ -23,6 +23,10 @@ import SwiftUI
 /// 收掉的 10 分鐘內留在上面那條「剛出餐」，點一張選起來，右欄可以復原（改回可出餐）。
 ///
 /// 出餐口（崗位）：看所有出單站；整張都好了的單浮到最上面，大大的取餐號碼；選起來後大鍵是「叫號」（唸出來），叫過是「已出餐」。
+///
+/// 叫號用在外帶取餐（結帳時取了號碼、掛在單子上）：卡片最上面是大大的號碼；全好了大鍵是「叫號 24」（廚房也是），
+/// 出餐口還沒全好時大鍵是「好了・叫號 24」（一次按完）。叫號走叫號系統：後台存號碼的直接叫那一號（先做好的先叫），
+/// 原本的叫號伺服器只能叫排第一的（不是的話跳一句說明）。
 struct KitchenView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -126,7 +130,7 @@ struct KitchenView: View {
                         pickup: pickupLabel(c.ticket),
                         title: c.ticket.title(floor: model.floor),
                         now: now,
-                        calledAt: called[c.ticket.id],
+                        calledAt: calledTime(c.ticket),
                         selected: selected == .card(c.id),
                         onSelect: { toggle(.card(c.id)) }
                     )
@@ -136,21 +140,50 @@ struct KitchenView: View {
         }
     }
 
-    /// 櫃台、咖啡模式的外帶單用取餐號碼（A023 → 23）；內用、其他模式用桌號或單名
+    /// 外帶單有叫號的號碼（結帳時取的）就用它；否則櫃台、咖啡模式的外帶單用取餐號碼（A023 → 23）；內用、其他模式用桌號或單名
     private func pickupLabel(_ t: Ticket) -> String? {
+        if let q = t.queueNumber, t.orderType != .dineIn { return String(q) }
         guard model.mode.printsPickupNumber, t.tableIds.isEmpty else { return nil }
         return Templates.pickupNumber(t.number)
     }
 
-    /// 叫號：唸出來（「二十三號，請取餐」），記下叫過了
+    /// 這張單掛著叫號的號碼（外帶結帳時取的）：叫號走叫號系統（叫號螢幕、客人的手機一起跳）
+    private func queueNumber(_ t: Ticket) -> Int? {
+        guard model.features.queue, t.orderType != .dineIn else { return nil }
+        return t.queueNumber
+    }
+
+    /// 叫過了：這台按過，或叫號系統上現在叫的就是它（別台叫的也算）
+    private func calledTime(_ t: Ticket) -> Date? {
+        if let at = called[t.id] { return at }
+        if let n = queueNumber(t), model.queue.state?.current == n { return model.queue.state?.calledAt ?? Date() }
+        return nil
+    }
+
+    /// 叫號：有叫號的號碼＝叫那一號（先做好的先叫；原本的叫號伺服器只能叫排第一的，不是的話跳一句說明）；
+    /// 沒有＝唸出來（「二十三號，請取餐」）。記下叫過了
     private func call(_ c: KitchenCardModel) {
         let t = c.ticket
+        if queueNumber(t) != nil {
+            Task {
+                if await model.callTicketNumber(t) {
+                    withAnimation(anim) { called[t.id] = Date() }
+                }
+            }
+            return
+        }
         let label = pickupLabel(t).map { "\($0) 號" } ?? t.title(floor: model.floor)
         withAnimation(anim) { called[t.id] = Date() }
         model.show("叫號 \(label)")
         let utterance = AVSpeechUtterance(string: "\(label)，請取餐")
         utterance.voice = AVSpeechSynthesisVoice(language: "zh-TW")
         speaker.speak(utterance)
+    }
+
+    /// 出餐口：整張好了＋叫號一次按完（叫號的外帶單）
+    private func readyAndCall(_ c: KitchenCardModel) {
+        setAll(.ready, c)
+        call(c)
     }
 
     private func served(_ c: KitchenCardModel) {
@@ -188,33 +221,46 @@ struct KitchenView: View {
         }
     }
 
-    /// 大鍵：還沒全好 →「好了」；全好了 →「已上菜」（出餐口：還沒叫 →「叫號」、叫過 →「已出餐」）
+    /// 大鍵：還沒全好 →「好了」；全好了 →「已上菜」（出餐口：還沒叫 →「叫號」、叫過 →「已出餐」）。
+    /// 叫號的外帶單（掛著號碼）：全好了還沒叫 →「叫號 24」（廚房也是）；出餐口的「好了」順便叫號
     private func cardDock(_ c: KitchenCardModel, now: Date) -> DockSelection {
         let title = c.ticket.title(floor: model.floor)
         let isExpo = model.role == .expo
-        let calledAt = called[c.ticket.id]
+        let calledAt = calledTime(c.ticket)
         let pickup = pickupLabel(c.ticket)
+        let queued = queueNumber(c.ticket)
         let count = c.lines.reduce(0) { $0 + $1.quantity }
         let readyCount = c.lines.filter { $0.kitchen == .ready }.reduce(0) { $0 + $1.quantity }
         let minutes = c.minutes(at: now)
         let servedAction = POSAction(isExpo ? "已出餐" : "已上菜", icon: "check-circle") { served(c) }
-        let callAction = POSAction(calledAt == nil ? "叫號" : "再叫一次", icon: "speaker-wave") { call(c) }
+        let callTitle = calledAt == nil ? (queued.map { "叫號 \($0)" } ?? "叫號") : "再叫一次"
+        // 原本的叫號伺服器叫不了排在後面的號碼：照樣按得下去，跳一句說明（POSModel.callQueue）
+        let callAction = POSAction(callTitle, icon: "megaphone") { call(c) }
         let waiting = c.lines.filter { $0.kitchen == .sent }
         let readyLines = c.lines.filter { $0.kitchen == .ready }
 
         let primary: POSAction
         var actions: [POSAction] = []
+        // 大鍵已經是叫號：動作鍵不重複
+        var callIsPrimary = false
         if !c.allReady {
-            primary = POSAction("好了", icon: "check") { setAll(.ready, c) }
+            if isExpo, let q = queued, calledAt == nil {
+                // 出餐口：好了就叫號（一次按完）
+                primary = POSAction("好了・叫號 \(q)", icon: "megaphone") { readyAndCall(c) }
+                callIsPrimary = true
+            } else {
+                primary = POSAction("好了", icon: "check") { setAll(.ready, c) }
+            }
             actions.append(servedAction)
-        } else if isExpo && calledAt == nil {
+        } else if calledAt == nil && (isExpo || queued != nil) {
             primary = callAction
+            callIsPrimary = true
             actions.append(servedAction)
         } else {
             primary = servedAction
         }
-        // 叫號：出餐口、或有取餐號碼的外帶單（大鍵已經是叫號就不重複）
-        if (isExpo || pickup != nil) && !(isExpo && c.allReady && calledAt == nil) {
+        // 叫號：出餐口、或有取餐號碼的外帶單
+        if (isExpo || pickup != nil) && !callIsPrimary {
             actions.append(callAction)
         }
         actions.append(POSAction("全部開始做", icon: "fire", enabled: !waiting.isEmpty) { setLines(.preparing, waiting, c) })
@@ -224,6 +270,10 @@ struct KitchenView: View {
         var parts = ["\(count) 份", "好了 \(readyCount)", "等了 \(minutes) 分"]
         if let pickup { parts.insert("取餐 \(pickup) 號", at: 0) }
         if let calledAt { parts.append("\(calledAt.clockText) 叫過") }
+        if let q = queued, calledAt == nil, !model.queueCanCall(q), model.queue.state?.waiting.contains(q) == true {
+            // 原本的叫號伺服器只能照順序叫
+            parts.append("前面還有人：叫號照順序")
+        }
         let badge: DockBadge
         if c.allReady {
             badge = DockBadge("可出餐", tone: .active)
@@ -615,9 +665,20 @@ private struct KitchenTicketCard: View {
 
     private var title: String { card.ticket.title(floor: model.floor) }
 
+    /// 叫號的號碼（外帶結帳時取的）：卡片上面最大的字
+    private var queueNumber: Int? {
+        card.ticket.orderType == .dineIn ? nil : card.ticket.queueNumber
+    }
+
     private var subtitle: String {
         let t = card.ticket
         var parts: [String] = []
+        if queueNumber != nil {
+            // 上面已經是號碼：這裡是「外帶・A023・已結帳」
+            parts = [t.orderType.label, t.number]
+            if t.status == .closed { parts.append("已結帳") }
+            return parts.joined(separator: "・")
+        }
         if !title.contains(t.number) { parts.append(t.number) }
         if t.orderType == .dineIn && t.guests > 0 { parts.append("\(t.guests) 位") }
         if t.orderType != .dineIn && !title.hasPrefix(t.orderType.label) { parts.append(t.orderType.label) }
@@ -647,11 +708,26 @@ private struct KitchenTicketCard: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.brand(26, .semibold))
+                if let q = queueNumber {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("\(q)")
+                            .font(.brand(40, .semibold))
+                            .tracking(-1)
+                            .monospacedDigit()
+                        Text("號")
+                            .font(.brand(18, .semibold))
+                    }
                     .foregroundStyle(Theme.ink)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(q) 號")
+                } else {
+                    Text(title)
+                        .font(.brand(26, .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                }
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.brand(14, .medium))

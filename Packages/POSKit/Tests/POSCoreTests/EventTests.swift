@@ -208,6 +208,90 @@ struct StoreStateTests {
         #expect(s.status(of: "t1") == .billing)
     }
 
+    /// 外帶結帳完成後才取號：`ticket.updated` 的 queueNumber 掛在已經結帳的單上，結帳的紀錄（sales）也跟著有號碼；0＝拿掉
+    @Test func queueNumberAfterClose() throws {
+        var d = Device("A")
+        var ev = [d.emit(.ticketOpened(TicketOpened(ticketId: "t1", number: "A012", orderType: .takeout, serviceChargeBps: 0, businessDate: "2026-09-21")))]
+        ev.append(d.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l1", "鴨翅", 40, qty: 3)]))))
+        let opened = try #require(StoreState.replay(ev).tickets["t1"])
+        let pay = Payment(id: "p1", tender: .cash, amount: opened.totals.amountDue, at: d.clock, by: "s1")
+        ev.append(d.emit(.paymentAdded(PaymentAdded(ticketId: "t1", payment: pay))))
+        let paid = try #require(StoreState.replay(ev).tickets["t1"])
+        let sale = SaleRecord(ticket: paid, closedOn: "A", shiftId: nil, closedAt: d.clock, closedBy: "s1", staffName: "x", floor: .empty)
+        ev.append(d.emit(.ticketClosed(TicketClosed(ticketId: "t1", sale: sale))))
+        #expect(StoreState.replay(ev).sales["t1"]?.queueNumber == nil)
+
+        ev.append(d.emit(.ticketUpdated(TicketUpdated(ticketId: "t1", queueNumber: 24))))
+        var s = StoreState.replay(ev)
+        #expect(s.tickets["t1"]?.status == .closed)
+        #expect(s.tickets["t1"]?.queueNumber == 24)
+        #expect(s.sales["t1"]?.queueNumber == 24)
+        #expect(s.tickets["t1"]?.title(floor: .empty) == "外帶 24 號")
+        #expect(s.unresolvedConflicts.isEmpty)
+
+        // 改別的欄位不動號碼；0＝拿掉
+        ev.append(d.emit(.ticketUpdated(TicketUpdated(ticketId: "t1", note: "少辣"))))
+        #expect(StoreState.replay(ev).sales["t1"]?.queueNumber == 24)
+        ev.append(d.emit(.ticketUpdated(TicketUpdated(ticketId: "t1", queueNumber: 0))))
+        s = StoreState.replay(ev)
+        #expect(s.tickets["t1"]?.queueNumber == nil)
+        #expect(s.sales["t1"]?.queueNumber == nil)
+    }
+
+    /// 刪掉還沒送出的品項（lines.removed）：直接從單子拿掉、不留作廢紀錄；已經送廚房的不動（那要用 lines.voided）
+    @Test func linesRemovedDropsOnlyUnsentLines() throws {
+        var d = Device("A")
+        var ev = [open(&d)]
+        ev.append(d.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l1", "珍奶", 60, qty: 2), Fixture.line("l2", "雞排", 80, category: "fried")]))))
+        ev.append(d.emit(.linesSent(LinesSent(ticketId: "t1", lineIds: ["l2"]))))
+        ev.append(d.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l3", "紅茶", 30)]))))
+        // 一次要拿掉三行：l1、l3 還沒送出（拿掉），l2 已經送廚房（留著、沒有作廢）
+        ev.append(d.emit(.linesRemoved(LinesRemoved(ticketId: "t1", lineIds: ["l1", "l2", "l3"]))))
+        let s = StoreState.replay(ev)
+        let t = try #require(s.tickets["t1"])
+        #expect(t.lines.map(\.id) == ["l2"])
+        #expect(t.lines.first?.isActive == true)
+        #expect(t.lines.first?.voided == nil)
+        #expect(t.itemCount == 1)
+        #expect(t.totals.subtotal == Money(dollars: 80))
+        #expect(s.unresolvedConflicts.isEmpty)
+    }
+
+    /// 拿掉的不算作廢：結帳後的紀錄、日報都沒有那一行；送出去又作廢的照樣算（廚房、報表要知道）
+    @Test func removedLinesLeaveNoRecord() throws {
+        var d = Device("A")
+        var ev = [open(&d)]
+        ev.append(d.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l1", "珍奶", 60), Fixture.line("l2", "雞排", 80, category: "fried"), Fixture.line("l3", "紅茶", 30)]))))
+        ev.append(d.emit(.linesSent(LinesSent(ticketId: "t1", lineIds: ["l2", "l3"]))))
+        ev.append(d.emit(.linesRemoved(LinesRemoved(ticketId: "t1", lineIds: ["l1"]))))
+        ev.append(d.emit(.linesVoided(LinesVoided(ticketId: "t1", lineIds: ["l2"], reason: "客人取消", authorizedBy: "mgr"))))
+        ev.append(d.emit(.shiftOpened(ShiftOpened(shiftId: "sh1", openingCash: .zero, businessDate: "2026-09-21"))))
+        let before = try #require(StoreState.replay(ev).tickets["t1"])
+        #expect(before.lines.map(\.id) == ["l2", "l3"])
+        #expect(before.activeLines.map(\.id) == ["l3"])
+        let pay = Payment.cash(id: "p1", tendered: before.totals.amountDue, due: before.totals.amountDue, at: d.clock, by: "s1", shiftId: "sh1")
+        ev.append(d.emit(.paymentAdded(PaymentAdded(ticketId: "t1", payment: pay))))
+        let paid = try #require(StoreState.replay(ev).tickets["t1"])
+        let sale = SaleRecord(ticket: paid, closedOn: "A", shiftId: "sh1", closedAt: d.clock, closedBy: "s1", staffName: "Leslie", floor: Fixture.floor)
+        #expect(sale.lines.map(\.lineId) == ["l3"])
+        #expect(sale.voidedItems == 1)
+        ev.append(d.emit(.ticketClosed(TicketClosed(ticketId: "t1", sale: sale))))
+        let summary = StoreState.replay(ev).dailySummary(businessDate: "2026-09-21")
+        #expect(summary.voidedItems == 1)
+        #expect(summary.topItems.contains { $0.name == "珍奶" } == false)
+    }
+
+    /// 結帳、作廢後的單：lines.removed 不動（只有開著的單可以刪）
+    @Test func linesRemovedIgnoredOnClosedTicket() throws {
+        var d = Device("A")
+        var ev = [open(&d)]
+        ev.append(d.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l1", "珍奶", 60)]))))
+        ev.append(d.emit(.ticketVoided(TicketVoided(ticketId: "t1", reason: "開錯單"))))
+        ev.append(d.emit(.linesRemoved(LinesRemoved(ticketId: "t1", lineIds: ["l1"]))))
+        let t = try #require(StoreState.replay(ev).tickets["t1"])
+        #expect(t.lines.map(\.id) == ["l1"])
+    }
+
     @Test func splitAndMerge() throws {
         var d = Device("A")
         var ev = [open(&d)]

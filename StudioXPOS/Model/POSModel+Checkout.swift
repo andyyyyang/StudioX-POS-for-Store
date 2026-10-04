@@ -189,6 +189,11 @@ extension POSModel {
         if let invoice, invoice.printed {
             printers.printInvoice(InvoiceProof(invoice: invoice, storeName: store.name, qrKey: invoiceSettings.qrKey), detail: sale, store: store)
         }
+        // 叫號用在外帶取餐：結帳完成時自動取號，取餐號碼就是叫號的號碼（不用單號，免得和叫號螢幕上的搞混）
+        if takesTakeoutNumber(t) {
+            await completeTakeout(t, sale: sale, unsent: unsent, toKitchen: toKitchen)
+            return
+        }
         // 櫃台、咖啡：客人要拿取餐號碼等叫號，一定印（號碼印在最上面、很大）
         let pickup = mode.printsPickupNumber && t.tableIds.isEmpty ? Templates.pickupNumber(t.number) : nil
         // 會員帳戶有變（儲值、扣卡、用儲值金付）：收據一定印，讓客人看到餘額
@@ -218,11 +223,44 @@ extension POSModel {
         Task { await topUpInvoiceRolls() }
     }
 
-    /// 交易明細：服務人員的名字、會員帳戶的餘額（儲值金、還能用的課程卡）
+    /// 外帶單結帳完成（叫號用在外帶取餐）：畫面先回到點餐（下一位客人可以點了）→ 取號（最多等 5 秒）→
+    /// 號碼掛在單子上、印號碼牌、收據的取餐號碼是叫號的號碼、右欄的叫號卡大大地顯示「24 號」。
+    /// 叫號連不上也照樣結帳：收據照印（沒有取餐號碼），之後在「訂單」這一筆按「補取號」
+    private func completeTakeout(_ t: Ticket, sale: SaleRecord, unsent: [TicketLine], toKitchen: Bool) async {
+        let kitchenLines = !unsent.isEmpty && toKitchen && settings.printKitchenTickets ? unsent : []
+        let kitchenMode: Templates.KitchenMode = t.lines.contains(where: \.isSent) ? .add : .new
+        lastSale = sale
+        checkoutTicketId = nil
+        selectedTicketId = nil
+        if t.exchange != nil, lastChange.cents > 0, settings.openDrawerOnCash { printers.openDrawer() }
+        let change = lastChange.cents > 0 ? (t.exchange != nil ? "・退差額 \(lastChange.formatted)" : "・找零 \(lastChange.formatted)") : ""
+        Task { await topUpInvoiceRolls() }
+
+        let result = await takeTakeoutNumber(for: t, sale: sale)
+        if lastSale?.ticketId == t.id, let fresh = state.sales[t.id] { lastSale = fresh }
+        switch result {
+        case .taken(let n):
+            printTakeoutSlips(t, sale: sale, number: n, kitchenLines: kitchenLines, kitchenMode: kitchenMode)
+            flashTakeout(n, ticket: t)
+            show("已結帳 \(t.number) \(sale.total.formatted)・取餐號碼 \(n) 號\(change)")
+        case .failed:
+            printTakeoutSlips(t, sale: sale, number: nil, kitchenLines: kitchenLines, kitchenMode: kitchenMode)
+            show("已結帳 \(t.number) \(sale.total.formatted)\(change)・叫號連不上，沒有取到號碼：連上後到「訂單」這一筆按「補取號」", tone: .warning)
+        case .late:
+            // 廚房先做；收據、號碼牌等號碼回來再印（takeTakeoutNumber 接手）
+            if !kitchenLines.isEmpty { printKitchen(t, lines: kitchenLines, mode: kitchenMode) }
+            show("已結帳 \(t.number) \(sale.total.formatted)\(change)・叫號比較慢，號碼取到了會自動印出來", tone: .info)
+        }
+    }
+
+    /// 交易明細：服務人員的名字、會員帳戶的餘額（儲值金、還能用的課程卡）。
+    /// 外帶單有叫號的號碼（結帳後才取到的也算）：取餐號碼印叫號的號碼
     func receipt(for sale: SaleRecord, reprint: Bool = false, pickupNumber: String? = nil) -> Receipt {
         var names: [String: String] = [:]
         for s in staff { names[s.id] = s.name }
-        return Templates.saleReceipt(sale, store: store, reprint: reprint, pickupNumber: pickupNumber, staffNames: names,
+        let queued = sale.orderType == .dineIn ? nil
+            : (state.sales[sale.ticketId]?.queueNumber ?? state.tickets[sale.ticketId]?.queueNumber ?? sale.queueNumber)
+        return Templates.saleReceipt(sale, store: store, reprint: reprint, pickupNumber: queued.map { String($0) } ?? pickupNumber, staffNames: names,
                                      accountLines: reprint ? [] : accountLines(for: sale.member))
     }
 

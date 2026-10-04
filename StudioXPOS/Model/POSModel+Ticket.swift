@@ -46,6 +46,16 @@ extension POSModel {
         if visibleSections.contains(.order) { section = .order }
     }
 
+    /// 開單時還可以選的其他用餐方式（點品項就會開預設的那一種，所以不用再放「開外帶單」）。
+    /// 沒有用餐方式的模式（服飾、美業、課程）、全外帶的店（叫號用在外帶取餐、沒有排隊等內用）：沒有其他的
+    var otherOrderTypes: [OrderType] {
+        guard mode.showsOrderType else { return [] }
+        let usage = queueConfig?.usage ?? []
+        let takeoutOnly = mode.defaultOrderType == .takeout && usage.contains(.takeout) && !usage.contains(.dineIn)
+        guard !takeoutOnly else { return [] }
+        return OrderType.allCases.filter { $0 != mode.defaultOrderType }
+    }
+
     /// 目前這張單；沒有就照營業模式開一張（櫃台、零售：外帶；餐廳、咖啡：內用，不選桌直接點）
     func ensureTicket() -> Ticket? {
         if let t = selectedTicket { return t }
@@ -158,25 +168,29 @@ extension POSModel {
 
     // MARK: 改一行
 
-    func changeQuantity(_ line: TicketLine, in t: Ticket) async {
-        if line.isSent {
-            // 已經送廚房的：減少要主管（等於作廢一部分）
-            guard let q = await keypad.askNumber(.quantity(name: line.name, current: line.quantity), validate: { $0 < 1 ? "數量至少 1；不要了請按「作廢」" : self.redeemProblem(line, quantity: $0, in: t) }) else { return }
-            if q < line.quantity {
-                guard let auth = await authorize(.voidSentItem, detail: "\(line.name) 已出單") else { return }
-                _ = auth
-            }
-            record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, quantity: q)))
+    /// 這一行改成 q 個（右側鍵盤問的；q ≥ 1，0 是刪除／作廢，由單子欄決定怎麼問）。
+    /// 已經送廚房的：減少要主管（等於作廢一部分）。用課程卡抵的：卡的次數不夠就不改
+    func setQuantity(_ line: TicketLine, to q: Int, in t: Ticket) async {
+        guard q >= 1, q != line.quantity else { return }
+        if let problem = redeemProblem(line, quantity: q, in: t) {
+            show(problem, tone: .warning)
             return
         }
-        guard let q = await keypad.askNumber(.quantity(name: line.name, current: line.quantity), validate: { $0 < 1 ? "數量至少 1；不要了請按「刪除」" : self.redeemProblem(line, quantity: $0, in: t) }) else { return }
+        if line.isSent && q < line.quantity {
+            guard await authorize(.voidSentItem, detail: "\(line.name) 已出單") != nil else { return }
+        }
         record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, quantity: q)))
     }
 
+    /// −1／+1（單子上往右滑、菜單卡的「少一份」）：減到 0＝刪除（還沒送出的直接拿掉；送出去的要作廢、要主管）
     func stepQuantity(_ line: TicketLine, in t: Ticket, by delta: Int) {
         let q = line.quantity + delta
         if q < 1 {
-            Task { await void([line], in: t) }
+            if line.isSent {
+                Task { await void([line], in: t) }
+            } else {
+                removeLines([line], in: t)
+            }
             return
         }
         // 用課程卡抵的：卡的次數不夠就不能再加
@@ -225,19 +239,45 @@ extension POSModel {
         record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, seat: seat)))
     }
 
-    /// 刪除／作廢：還沒送出的直接刪；送出去的要原因、要主管
+    /// 刪除／作廢：還沒送出的直接拿掉（不留紀錄）；送出去的要原因、要主管，廚房印作廢單
     func void(_ lines: [TicketLine], in t: Ticket, reason: String? = nil) async {
-        let sent = lines.filter(\.isSent)
-        var auth: Authorization = .allowed
-        if !sent.isEmpty {
-            guard let a = await authorize(.voidSentItem, detail: sent.map(\.name).joined(separator: "、")) else { return }
-            auth = a
-        }
-        let why = reason ?? (sent.isEmpty ? "點錯" : "客人取消")
-        record(.linesVoided(LinesVoided(ticketId: t.id, lineIds: lines.map(\.id), reason: why, authorizedBy: auth.authorizerId)))
-        if !sent.isEmpty, settings.printKitchenTickets {
+        let unsent = lines.filter { $0.isActive && !$0.isSent }
+        let sent = lines.filter { $0.isActive && $0.isSent }
+        if !unsent.isEmpty { removeLines(unsent, in: t) }
+        guard !sent.isEmpty else { return }
+        guard let auth = await authorize(.voidSentItem, detail: sent.map(\.name).joined(separator: "、")) else { return }
+        record(.linesVoided(LinesVoided(ticketId: t.id, lineIds: sent.map(\.id), reason: reason ?? "客人取消", authorizedBy: auth.authorizerId)))
+        if settings.printKitchenTickets {
             printKitchen(t, lines: sent, mode: .void)
         }
+    }
+
+    /// 刪掉還沒送出的品項：直接從單子拿掉，不留紀錄（lines.removed；廚房還不知道有這一項，報表也不算作廢）。
+    /// 下面跳一句「已刪除 拿鐵・復原」：按「復原」原樣加回去
+    func removeLines(_ lines: [TicketLine], in t: Ticket) {
+        let unsent = lines.filter { $0.isActive && !$0.isSent }
+        guard !unsent.isEmpty else { return }
+        guard record(.linesRemoved(LinesRemoved(ticketId: t.id, lineIds: unsent.map(\.id)))) else { return }
+        let name = unsent.count == 1 ? unsent[0].displayName : "\(unsent.count) 項"
+        let ticketId = t.id
+        toast = Toast(text: "已刪除 \(name)", tone: .neutral, action: ToastAction(title: "復原") { [weak self] in
+            self?.restoreLines(unsent, to: ticketId)
+        })
+    }
+
+    /// 復原剛剛刪掉的：照原樣（數量、加料、備註、折扣）加回同一張單的最後面（用新的 id，和刪掉的那一筆分開）
+    func restoreLines(_ lines: [TicketLine], to ticketId: String) {
+        guard let t = state.tickets[ticketId], t.isOpen else {
+            show("這張單已經結帳或作廢，復原不了", tone: .warning)
+            return
+        }
+        let copies = lines.map { l -> TicketLine in
+            var c = l
+            c.id = newID()
+            return c
+        }
+        guard record(.linesAdded(LinesAdded(ticketId: ticketId, lines: copies))) else { return }
+        selectedTicketId = ticketId
     }
 
     // MARK: 整張單

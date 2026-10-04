@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 import POSCore
 import POSInvoice
@@ -10,6 +11,7 @@ import SwiftUI
 /// 整個 App 只有這一個數字鍵盤，永遠在畫面最右邊、一樣的大小、一樣的鍵位：
 /// - 有人要數字（數量、收現金、PIN、統編…）：`await keypad.ask(spec)`，鍵盤換成那個題目，打完按確認才回傳
 /// - 沒人要數字（待機）：打的數字當「數量」——打 3 再點珍奶＝3 杯；或打品號按「品號」直接加
+/// - 選了單子的一行：鍵盤直接問那一行的數量（`keepsSelection`：那一行的卡片與動作鍵照樣留在上面）
 ///
 /// 不用系統鍵盤：系統鍵盤會蓋住單子、位置會跳、還會被誤觸成中文輸入。
 @Observable
@@ -23,7 +25,15 @@ final class KeypadController {
         var validate: (KeypadEntry) -> String?
         /// PIN 這類打錯要清掉重打
         var clearsOnError: Bool
+        /// 選起來的那一筆照樣留在上面（卡片＋動作鍵）：點了單子的一行，鍵盤就問那一行的數量。
+        /// 這種題目會讓位給別的題目（改價、PIN…）：別人問完，那一行再接著問
+        var keepsSelection: Bool
+        /// 大鍵的字跟著打的數字變（「數量 2」「改成 3」）；nil＝題目的 confirmLabel
+        var confirmTitle: ((KeypadEntry) -> String)?
         var continuation: CheckedContinuation<KeypadEntry?, Never>
+
+        /// 最下面那顆大鍵的字
+        var confirmLabel: String { confirmTitle?(entry) ?? spec.confirmLabel }
     }
 
     private(set) var request: Request?
@@ -38,12 +48,22 @@ final class KeypadController {
 
     var isAsking: Bool { request != nil }
 
-    /// 問一個數字。cancel、或被下一個問題取代時回 nil
-    func ask(_ spec: KeypadSpec, error: String? = nil, clearsOnError: Bool = false,
-             validate: @escaping (KeypadEntry) -> String? = { _ in nil }) async -> KeypadEntry? {
+    /// 正在問的是「選起來那一行的數量」（卡片與動作鍵留在上面）
+    var keepsSelection: Bool { request?.keepsSelection == true }
+
+    /// 正在問別的（改價、PIN、人數…）：選起來那一行的數量要先讓開
+    var isAskingOther: Bool { request.map { !$0.keepsSelection } ?? false }
+
+    /// 問一個數字。cancel、或被下一個問題取代時回 nil。
+    /// keepsSelection：選起來的那一筆（卡片、動作鍵）照樣留在鍵盤上面，見 Request.keepsSelection。
+    /// confirmTitle 放在 validate 後面：`ask(spec) { e in … }` 的尾隨閉包照舊是 validate
+    func ask(_ spec: KeypadSpec, error: String? = nil, clearsOnError: Bool = false, keepsSelection: Bool = false,
+             validate: @escaping (KeypadEntry) -> String? = { _ in nil },
+             confirmTitle: ((KeypadEntry) -> String)? = nil) async -> KeypadEntry? {
         cancel()
         return await withCheckedContinuation { c in
-            request = Request(spec: spec, entry: KeypadEntry(spec), error: error, validate: validate, clearsOnError: clearsOnError, continuation: c)
+            request = Request(spec: spec, entry: KeypadEntry(spec), error: error, validate: validate, clearsOnError: clearsOnError,
+                              keepsSelection: keepsSelection, confirmTitle: confirmTitle, continuation: c)
             if error != nil { errorTick += 1 }
         }
     }
@@ -121,10 +141,10 @@ final class KeypadController {
 
     // MARK: 待機
 
-    /// 待機打的數量（沒打是 nil）
+    /// 待機打的數量（沒打是 nil）。四碼以上是品號，不當數量
     var multiplier: Int? {
-        guard let v = idle.value, v > 0 else { return nil }
-        return min(v, 999)
+        guard idle.digits.count <= 3, let v = idle.value, v > 0 else { return nil }
+        return v
     }
 
     /// 點品項時拿走數量（沒打就是 1），鍵盤歸零

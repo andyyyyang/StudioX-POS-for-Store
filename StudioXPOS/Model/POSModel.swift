@@ -48,11 +48,22 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-/// 畫面下方跳出來的一句話（「已結帳 A023・找零 NT$302」）
+/// 畫面下方跳出來的一句話（「已結帳 A023・找零 NT$302」）；可以帶一顆小按鈕（「已刪除 拿鐵・復原」）
 struct Toast: Identifiable, Equatable {
     let id = UUID()
     var text: String
     var tone: Tone = .active
+    var action: ToastAction? = nil
+
+    static func == (a: Toast, b: Toast) -> Bool {
+        a.id == b.id && a.text == b.text && a.tone == b.tone && a.action?.title == b.action?.title
+    }
+}
+
+/// 提示上的小按鈕（「復原」）
+struct ToastAction {
+    var title: String
+    var perform: @MainActor () -> Void
 }
 
 /// 授權：自己有權限，或某位主管在右側鍵盤輸入了 PIN

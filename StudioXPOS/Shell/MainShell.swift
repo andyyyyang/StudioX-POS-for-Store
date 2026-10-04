@@ -1,3 +1,4 @@
+import Foundation
 import POSCore
 import POSInvoice
 import POSPrinting
@@ -7,8 +8,8 @@ import SwiftUI
 /// 收銀台：側欄｜工作區｜單子｜右側固定鍵盤
 ///
 ///   ┌────┬──────────────────────┬────────────┬──────────┐
-///   │ 點餐│  分類大方塊             │ A2・4 位    │ 數量・品號 │
-///   │ 桌位│  品項（點一下＝加一份）   │ 拿鐵 ×2  …  │   × 3    │
+///   │ 點餐│  分類大方塊             │ A2・4 位    │ 這張單的  │
+///   │ 桌位│  品項（點一下＝加一份）   │ 拿鐵 ×2  …  │ 動作      │
 ///   │ 訂單│                        │            │ 1  2  3  │
 ///   │ …  │                        │ 總計 NT$…  │ 4  5  6  │
 ///   │ 人員│                        │ [送單][結帳]│ …        │
@@ -38,6 +39,8 @@ struct MainShell: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         // 別台（手機、報到接待）送來結帳的單：每一頁都在右欄等著「去結帳」（這一頁自己選了東西時讓開）
                         .checkoutHandoffDock()
+                        // 叫號：右欄最上面那張叫號卡點開的面板、叫到號之後選桌入座（Queue/QueuePanels.swift）
+                        .queueDockPanels()
                 }
                 // 直的 iPad 單子收起來時，單子欄照樣在（看不到）：整張單的動作（送單、結帳…）才會出現在右欄
                 .background {
@@ -224,7 +227,11 @@ struct MainShell: View {
         case .return:
             let code = scan
             scan = ""
-            if keypad.isAsking {
+            if keypad.keepsSelection, code.count >= 6, model.section == .order {
+                // 選了單子的一行（鍵盤在問它的數量）時掃到條碼：不是數量，是要加的品項
+                keypad.cancel()
+                model.lookup(code: code)
+            } else if keypad.isAsking {
                 keypad.commit()
             } else if code.hasPrefix("/"), let t = model.checkoutTicket {
                 keypad.clearIdle()
