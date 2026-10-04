@@ -79,6 +79,43 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 | `staff` | 門市人員（只給啟用中的），含 PIN 雜湊：`PBKDF2-HMAC-SHA256(pin, pinSalt, pinIterations, 32 bytes)` 的十六進位。後台用 Node：`crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex')`。選填：`title`（職稱：設計師、教練）、`bookable`（排進預約表）、`commissionBps`（預設抽成，萬分比） |
 | `invoice` | `enabled, sellerTaxId, sellerName, sellerAddress, qrKey`（財政部的 QR Code 加密金鑰，32 個十六進位字）、`rolls`（**這台**還在用的號碼段；每段帶 `usedThrough`＝後台收到這一段用到的最後一號，iPad 一定從它的下一號開始，所以本機事件刪掉了也不會重號） |
 | `mesh` | 同一家店的 iPad 在區網互相同步用的金鑰（32 bytes 十六進位）與開關 |
+| `printStyle` | 單據樣式（見下方「單據樣式」）；沒給＝預設 |
+
+### 單據樣式（`printStyle`）：先畫成圖片再印
+
+所有單據（交易明細、結帳單、廚房單、取餐號碼；號碼牌照舊用 `queue.ticket`）預設**整張畫成圖片**再送出單機（ESC/POS `GS v 0`）：
+每台機器印出來一模一樣（不挑機器的字型、不會缺字），也可以疊上店家自己的圖。出單機設定裡可以改回「文字」（舊機器、藍牙很慢時）。
+
+開機資料多一個 `printStyle`（沒給＝預設樣式）：
+
+```json
+"printStyle": {
+  "mode": "image",
+  "font": "sans",
+  "scale": 1.0,
+  "docs": {
+    "receipt": {
+      "header": { "url": "https://…/logo.png", "width": 0.6, "align": "center" },
+      "footer": { "url": "https://…/ig-qr.png", "width": 0.45, "align": "center" },
+      "background": { "url": "https://…/paper-art.png", "fit": "top", "lighten": 0.75 },
+      "overlays": [{ "url": "https://…/stamp.png", "x": 0.72, "y": 0.04, "width": 0.22, "anchor": "top" }],
+      "headerLines": ["黃毛丫頭・夜市滷味"],
+      "footerLines": ["謝謝光臨・IG @yellowgirl"]
+    },
+    "kitchen": { "scale": 1.3 },
+    "bill": {},
+    "pickup": {}
+  }
+}
+```
+
+- `mode`：`image`（預設）｜`text`。每台出單機自己的設定優先（`auto`＝照這裡）
+- `font`：`sans`｜`serif`｜`rounded`；`scale`：字的大小（0.8–1.6），每種單據可以自己再給
+- 圖（`header` 店標、`footer` 頁尾、`background` 底圖、`overlays` 貼圖）：`width`、`x`、`y` 都是紙寬的比例（0–1）；`y` 從 `anchor`（`top`｜`bottom`）算。
+  iPad 開機時下載、存在本機（斷網照樣印）；熱感紙只有黑白：照片、插畫用擴散網點（Floyd–Steinberg），字用門檻（150）——字永遠是清楚的黑。
+  `background.lighten`（0–1）先把底圖變淡再打網點，疊在字下面也看得清楚；`fit`：`top`（貼在上面）｜`tile`（整張重複）｜`stretch`
+- `headerLines`、`footerLines`：店家自己的字（地址、電話、統編照樣自動印）
+- 電子發票證明聯格式是財政部規定的：只吃 `font`，不疊圖
 
 ## 事件（同步的核心）
 
