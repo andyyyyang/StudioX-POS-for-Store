@@ -123,12 +123,15 @@ nonisolated final class BLELink: NSObject, CBCentralManagerDelegate, CBPeriphera
     private var serial = 0
 
     /// 常見的藍牙出單機寫入通道（找到這些優先，其次是任何可以寫入的）
-    private static let preferred: [CBUUID] = [
-        CBUUID(string: "2AF1"),                                     // 很多 58 mm 機器：服務 18F0
-        CBUUID(string: "FF02"), CBUUID(string: "FFE1"), CBUUID(string: "FFF2"),
-        CBUUID(string: "49535343-8841-43F4-A8D4-ECBE34729BB3"),     // Microchip（ISSC）透通
-        CBUUID(string: "BEF8D6C9-9C21-4C9E-B632-BD58C1009F9F"),
+    /// （CBUUID 不是 Sendable，存成字串；比對用 `uuidString`，16 位元的是四個大寫十六進位字）
+    private static let preferred: Set<String> = [
+        "2AF1",                                     // 很多 58 mm 機器：服務 18F0
+        "FF02", "FFE1", "FFF2",
+        "49535343-8841-43F4-A8D4-ECBE34729BB3",     // Microchip（ISSC）透通
+        "BEF8D6C9-9C21-4C9E-B632-BD58C1009F9F",
     ]
+
+    private static func isPreferred(_ uuid: CBUUID) -> Bool { preferred.contains(uuid.uuidString.uppercased()) }
 
     private func ensureCentral() {
         if central == nil {
@@ -309,9 +312,8 @@ nonisolated final class BLELink: NSObject, CBCentralManagerDelegate, CBPeriphera
             let canWrite = ch.properties.contains(.write)
             guard canNoResponse || canWrite else { continue }
             let type: CBCharacteristicWriteType = canNoResponse ? .withoutResponse : .withResponse
-            let isPreferred = Self.preferred.contains(ch.uuid)
             // 第一個可以寫的先記著；之後找到常見的出單機通道就換成它
-            if targets[id] == nil || (isPreferred && !Self.preferred.contains(targets[id]!.0.uuid)) {
+            if targets[id] == nil || (Self.isPreferred(ch.uuid) && !Self.isPreferred(targets[id]!.0.uuid)) {
                 targets[id] = (ch, type)
             }
         }
