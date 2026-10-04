@@ -68,7 +68,9 @@ struct DockContext: View {
         case .reservations: DockReservationsPulse()
         case .queue: DockQueuePulse()
         case .shift: DockDrawer()
-        case .order, .members, .dashboard, .settings: EmptyView()
+        // 點餐：外帶叫號的店把右欄空著的地方拿來列等候中的號碼（點一個就叫他）；其他店空著（品項在左邊、單子在中間）
+        case .order: if model.queuePinned == .takeout { DockQueueWaiting() }
+        case .members, .dashboard, .settings: EmptyView()
         }
     }
 }
@@ -556,5 +558,39 @@ private struct DockDrawer: View {
                     .foregroundStyle(Theme.muted)
             }
         }
+    }
+}
+
+
+// MARK: - 點餐頁：等候中的號碼（外帶叫號）
+
+/// 右欄上面那張叫號卡下面：等候中的號碼一列一個——「28 號　A031・3 項・製作中　5 分」，點了叫他（先做好的先叫）。
+/// 和叫號卡點開的面板同一份資料；放不下就捲
+private struct DockQueueWaiting: View {
+    @Environment(POSModel.self) private var model
+
+    var body: some View {
+        if let s = model.queue.state, !s.waiting.isEmpty {
+            TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                VStack(alignment: .leading, spacing: 8) {
+                    Eyebrow("等候中・點一個號碼叫他", color: Theme.muted)
+                    ForEach(s.waiting, id: \.self) { n in
+                        DockChoice(title: "\(n) 號", detail: detail(n, s), trailing: wait(n, s, now: ctx.date),
+                                   enabled: model.queueCanCall(n)) {
+                            Task { _ = await model.callQueue(n) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func detail(_ n: Int, _ s: QueueState) -> String? {
+        let parts = [s.waiting.first == n ? "下一號" : nil, model.queueDetail(n)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "・")
+    }
+
+    private func wait(_ n: Int, _ s: QueueState, now: Date) -> String? {
+        s.waitMinutes(n, now: now).map { $0 == 0 ? "剛取" : "\($0) 分" }
     }
 }

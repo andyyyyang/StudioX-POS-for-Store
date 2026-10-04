@@ -98,23 +98,17 @@ struct MenuView: View {
     /// 頁首：標題｜搜尋。自訂品項、掃條碼、開新單、用餐方式都在右欄（單子的動作）
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
+            // 單子的名字在中間那一欄已經有了：這裡只寫現在看的是哪一類（省下一整行給品項）
             Group {
-                if let t = model.selectedTicket {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Eyebrow(t.number)
-                        Headline(t.title(floor: model.floor), role: .h3)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    }
+                if !query.isEmpty {
+                    Eyebrow("搜尋「\(query)」")
+                } else if let c = categoryId.flatMap({ model.catalog.category($0) }) {
+                    Eyebrow("\(c.name)・\(model.catalog.items(in: c.id).count) 項")
                 } else {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Eyebrow("點餐")
-                        Headline("The *menu*", role: .h3)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
+                    Eyebrow("點餐")
                 }
             }
+            .lineLimit(1)
             .layoutPriority(1)
             Spacer(minLength: 12)
             HStack(spacing: 8) {
@@ -169,16 +163,16 @@ struct MenuView: View {
             EmptyState(icon: "magnifying-glass", title: query.isEmpty ? "這一類還沒有品項" : "找不到「\(query)」", message: query.isEmpty ? "到後台「門市 POS → 菜單」新增" : nil)
                 .frame(height: 260)
         } else {
+            // 名字都很短（小吃、飲料）而且品項多：卡片小一點、一排放多一點
+            let dense = list.count >= 8 && list.allSatisfy { $0.name.count <= 5 }
             VStack(alignment: .leading, spacing: 12) {
-                if let c = categoryId.flatMap({ model.catalog.category($0) }), query.isEmpty {
-                    Eyebrow("\(c.name)・\(list.count) 項")
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: dense ? 112 : 150, maximum: dense ? 190 : 240), spacing: dense ? 10 : 12)],
+                          spacing: dense ? 10 : 12) {
                     ForEach(list) { item in
                         if item.hasVariants && VariantPanel.isSimple(item) {
                             // 小吃的兩種價錢：價錢就是卡上的鍵，點了直接加
                             PriceGroupCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
-                                           available: model.isAvailable(item)) {
+                                           available: model.isAvailable(item), compact: dense) {
                                 decrement(item)
                             } toggleAvailability: {
                                 model.toggleAvailability(item)
@@ -196,7 +190,7 @@ struct MenuView: View {
                         } else {
                             ItemCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
                                      inTicket: quantity(of: item), available: model.isAvailable(item),
-                                     hasOptions: !item.modifierGroupIds.isEmpty, multiplier: keypad.multiplier) {
+                                     hasOptions: !item.modifierGroupIds.isEmpty, multiplier: keypad.multiplier, compact: dense) {
                                 Task { await model.tap(item) }
                             } minus: {
                                 decrement(item)
@@ -232,21 +226,25 @@ struct CategoryTile: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 0) {
+            // 一行就好：分類名＋幾項（省下高度給品項）
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Circle()
                     .fill(Theme.tileInk.opacity(0.85))
                     .frame(width: 8, height: 8)
-                Spacer(minLength: 10)
+                    .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
                 Text(category.name)
-                    .font(.brand(18, .semibold))
+                    .font(.brand(17, .semibold))
                     .foregroundStyle(Theme.tileInk)
                     .lineLimit(1)
-                Text("\(count) 項")
-                    .font(.brand(12.5, .medium))
+                    .minimumScaleFactor(0.8)
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.brand(13, .medium))
+                    .monospacedDigit()
                     .foregroundStyle(Theme.tileInkMuted)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 92, alignment: .leading)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
             .background(Theme.swatch(category.swatch), in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
@@ -269,6 +267,8 @@ struct ItemCard: View {
     let available: Bool
     let hasOptions: Bool
     let multiplier: Int?
+    /// 小一點的卡（名字短、品項多的菜單）
+    var compact = false
     let tap: () -> Void
     let minus: () -> Void
     let toggleAvailability: () -> Void
@@ -337,8 +337,8 @@ struct ItemCard: View {
                     }
                 }
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+            .padding(compact ? 11 : 14)
+            .frame(maxWidth: .infinity, minHeight: compact ? 88 : 112, alignment: .topLeading)
             .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)

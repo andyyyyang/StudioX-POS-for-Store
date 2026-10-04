@@ -20,6 +20,8 @@ struct PriceGroupCard: View {
     let item: MenuItem
     let swatch: Swatch
     let available: Bool
+    /// 小一點的卡（名字短、品項多的菜單）
+    var compact = false
     let minus: () -> Void
     let toggleAvailability: () -> Void
 
@@ -64,8 +66,8 @@ struct PriceGroupCard: View {
                 StatusBadge("賣完", tone: .danger)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 112, alignment: .topLeading)
+        .padding(compact ? 10 : 12)
+        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 112, alignment: .topLeading)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)

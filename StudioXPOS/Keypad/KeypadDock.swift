@@ -42,6 +42,8 @@ struct KeypadDock: View {
     }
 
     @State private var shake: CGFloat = 0
+    /// 這一欄有多高：高的螢幕（13 吋）數字鍵大一點，空間不浪費。只跟螢幕有關、不跟上面的內容變（鍵的位置不會跳）
+    @State private var columnHeight: CGFloat = 0
 
     var body: some View {
         ZStack {
@@ -111,6 +113,7 @@ struct KeypadDock: View {
         .padding(.top, inSheet ? 22 : 20)
         .padding(.bottom, inSheet ? 8 : 20)
         .frame(maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { columnHeight = $0 })
         .background(Theme.dock.ignoresSafeArea())
         .overlay(alignment: .leading) {
             if !inSheet { Rule(vertical: true) }
@@ -363,10 +366,16 @@ struct KeypadDock: View {
                 case .backspace: Image(systemName: "delete.left").font(.system(size: 22, weight: .regular))
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: Metric.keyHeight)
+            .frame(maxWidth: .infinity, minHeight: keyHeight)
         }
         .buttonStyle(KeyStyle())
         .accessibilityLabel(label(k))
+    }
+
+    /// 數字鍵的高度：一般 68；一欄超過 900 點（13 吋橫放、直放）時多出來的分一點給鍵，最高 88。手機的 sheet 照舊
+    private var keyHeight: CGFloat {
+        guard !inSheet, columnHeight > 900 else { return Metric.keyHeight }
+        return min(Metric.keyHeight + (columnHeight - 900) / 6, 88)
     }
 
     private func label(_ k: KeypadKey) -> String {
