@@ -185,6 +185,8 @@ jobs:
           # 名稱|啟動參數|等幾秒（預設 7）
           phone=(
             "phone/01-order|$P -section order"
+            "phone/02a-ticket-selected|$P -section order -preselect -preselectStage ticket|9"
+            "phone/02b-ticket-sheet|$P -section order -preselect -preselectStage sheet|9"
             "phone/02-ticket|$P -section order -preselect|9"
             "phone/03-floor|$P -section floor"
             "phone/04-orders|$P -section orders"
@@ -206,7 +208,8 @@ jobs:
             limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
             # App 自己印的錯誤（Swift 的 Fatal error、SwiftUI 的檢查）收在 shots/logs/
             log="shots/logs/$(basename "$name").log"
-            limit 60 xcrun simctl launch --stdout="$PWD/$log" --stderr="$PWD/$log" "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
+            # --console-pty：App 的 stdout／stderr 接到這裡（Swift 的 Fatal error 會印在這）；背景跑，截完圖再收
+            ( limit $(( ${wait:-7} + 8 )) xcrun simctl launch --console-pty "$dev" "$bundle" $args > "$log" 2>&1 ) &
             sleep "${wait:-7}"
             limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
             # App 還在不在；不在的話系統記下的原因
@@ -215,7 +218,11 @@ jobs:
               limit 30 xcrun simctl spawn "$dev" log show --last 40s --style compact \
                 --predicate 'process == "StudioXPOS" OR eventMessage CONTAINS "tw.studiox.pos"' 2>/dev/null \
                 | grep -iE "terminat|crash|exit|kill|fatal|signal|jetsam|abort|exception|precondition" | tail -40 || true
+              echo "   ---- App 自己最後的紀錄（錯誤、fault）"
+              limit 30 xcrun simctl spawn "$dev" log show --last 40s --style compact --level debug \
+                --predicate 'process == "StudioXPOS" AND (messageType == error OR messageType == fault)' 2>/dev/null | tail -40 || true
             fi
+            wait 2>/dev/null || true
           done
           limit 60 xcrun simctl shutdown "$dev" || true
           ls shots/phone | wc -l
