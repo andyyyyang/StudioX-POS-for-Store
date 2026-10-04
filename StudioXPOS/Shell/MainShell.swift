@@ -23,6 +23,8 @@ struct MainShell: View {
     @Environment(KeypadController.self) private var keypad
     @FocusState private var focused: Bool
     @State private var scan = ""
+    /// 外接鍵盤一個一個打的數字：停 90 毫秒沒有下一個才放進右側鍵盤（條碼機打得很快、最後有 Enter：整串當掃到的，不會灌進鍵盤）
+    @State private var flush: Task<Void, Never>?
     @State private var showTicketSheet = false
 
     var body: some View {
@@ -120,8 +122,11 @@ struct MainShell: View {
             // 右欄：左邊選起來的那一筆＋它的動作、數字鍵、蓋住整欄的面板（見 Keypad/Dock.swift）。
             // 放在兩個 overlay 後面：直的 iPad 滑出來的單子交上來的選取也收得到
             .overlayPreferenceValue(DockKey.self, alignment: .trailing) { content in
-                KeypadDock(idleActions: idleActions, content: content, showsPinned: true)
+                KeypadDock(idleActions: idleActions, content: content, showsPinned: true,
+                           describeIdle: { model.describeTyped($0) })
                     .frame(width: wide ? Metric.dock : Metric.dockNarrow)
+                    // 待機打的數字：會員電話、統編、對到的品號，停一下就自動做（不用再按鍵）
+                    .background { TypedDigitsAutoAction() }
             }
             .onChange(of: showsTicket) { _, v in if !v { showTicketSheet = false } }
             .onChange(of: roomy) { _, v in if v { showTicketSheet = false } }
@@ -229,30 +234,36 @@ struct MainShell: View {
         model.touch()
         switch press.key {
         case .return:
+            flush?.cancel()
+            flush = nil
             let code = scan
             scan = ""
-            if keypad.keepsSelection, code.count >= 6, model.section == .order {
-                // 選了單子的一行（鍵盤在問它的數量）時掃到條碼：不是數量，是要加的品項（或會員卡、折價券）
-                keypad.cancel()
-                Task { await model.handleScan(code) }
-            } else if keypad.isAskingMemberPhone, let phone = ScanCode.memberPhone(in: code), phone != code {
-                // 鍵盤在問會員的電話、掃到的是網址或有 +886 的會員卡：只留電話（不然網址裡其他的數字也打進去了）
-                keypad.fill(phone)
-            } else if keypad.isAsking {
+            if code.count >= 4 {
+                // 條碼機（一口氣打進來、最後 Enter）：照內容判斷，不用再按任何鍵
+                scanned(code)
+                return .handled
+            }
+            // 人打的、還沒放進鍵盤的幾個數字：先放進去，再照平常的 Enter（確認／查品號）
+            for ch in code { if let n = ch.wholeNumberValue { keypad.press(.digit(n)) } }
+            if keypad.isAsking {
                 keypad.commit()
-            } else {
-                // 待機：掃描器打的整串字（沒有的話是右側鍵盤打的數字）
-                let typed = keypad.takeCode()
-                let raw = code.isEmpty ? (typed ?? "") : code
-                // 點餐頁以外：短的數字多半是不小心打的（品號在點餐頁打）；條碼、會員卡、載具、折價券都是 4 碼以上
-                guard !raw.isEmpty, model.section == .order || model.checkoutTicket != nil || raw.count >= 4 else { return .handled }
-                Task { await model.handleScan(raw) }
+            } else if let typed = keypad.takeCode() {
+                // 待機：右側鍵盤打的數字。點餐頁以外，短的數字多半是不小心打的（品號在點餐頁打）
+                guard model.section == .order || model.checkoutTicket != nil || typed.count >= 4 else { return .handled }
+                Task { await model.handleScan(typed) }
             }
             return .handled
         case .delete:
+            // 還沒放進鍵盤的先刪掉（人打得很快又按刪除）
+            if !scan.isEmpty {
+                scan.removeLast()
+                return .handled
+            }
             keypad.press(.backspace)
             return .handled
         case .escape:
+            flush?.cancel()
+            flush = nil
             scan = ""
             // 沒在問數字：交給右側面板的「關掉」
             guard keypad.isAsking else { return .ignored }
@@ -262,8 +273,43 @@ struct MainShell: View {
             let s = press.characters
             guard !s.isEmpty else { return .ignored }
             scan += s
-            if s.count == 1, let n = Int(s) { keypad.press(.digit(n)) }
+            // 人打的：停一下才放進鍵盤；條碼機的下一個字很快就來（取消這次），最後的 Enter 把整串當掃到的
+            flush?.cancel()
+            flush = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(90))
+                guard !Task.isCancelled else { return }
+                let typed = scan
+                scan = ""
+                for ch in typed { if let n = ch.wholeNumberValue { keypad.press(.digit(n)) } }
+            }
             return .handled
+        }
+    }
+
+    /// 條碼機掃到的一整串：鍵盤在問會員電話、統編這類的就填進去；其他（在問收多少錢、數量也一樣）直接照內容做——
+    /// 會員掛上、載具掛上、折價券套用、商品加入，鍵盤上打到一半的不動
+    private func scanned(_ code: String) {
+        if keypad.isAskingMemberPhone, let phone = ScanCode.memberPhone(in: code) {
+            keypad.fill(phone)
+            return
+        }
+        if let r = keypad.request, !r.keepsSelection, Self.scanAnswers(r.spec.kind, code) {
+            // 鍵盤在問一串碼（統編、愛心碼、配對碼…）：掃到的就是答案
+            keypad.fill(code)
+            return
+        }
+        if keypad.keepsSelection { keypad.cancel() }
+        Task { await model.handleScan(code) }
+    }
+
+    /// 掃到的這串可以直接當鍵盤問的答案嗎（PIN 不行：PIN 要人打）
+    private static func scanAnswers(_ kind: KeypadSpec.Kind, _ code: String) -> Bool {
+        guard code.allSatisfy(\.isNumber) else { return false }
+        switch kind {
+        case .taxId: return code.count == 8
+        case .loveCode: return (3...7).contains(code.count)
+        case .code(let lo, let hi): return (lo...hi).contains(code.count)
+        default: return false
         }
     }
 }

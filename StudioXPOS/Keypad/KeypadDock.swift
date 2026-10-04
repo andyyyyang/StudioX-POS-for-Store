@@ -34,6 +34,8 @@ struct KeypadDock: View {
     var showsPinned = false
     /// 手機：在下面升起來的 sheet 裡（沒有左邊那條分隔線；選起來的那一筆用小卡；面板由 sheet 自己換，不在這裡蓋）
     var inSheet = false
+    /// 待機打的數字是什麼（「會員 0912-345-678」「品號 2001 → 鴨胸」）：收銀台的右欄給（POSModel.describeTyped），停一下就自動做
+    var describeIdle: ((String) -> (title: String, hint: String))? = nil
 
     struct IdleActions {
         var lookup: (String) -> Void
@@ -194,6 +196,7 @@ struct KeypadDock: View {
     /// 題目：問的題目；待機時打了數字是「下一個品項 × 3」（三碼以內）或「品號 4710…」
     private var questionTitle: String {
         if let r = keypad.request { return r.spec.title }
+        if let d = describeIdle, !keypad.idle.digits.isEmpty { return d(keypad.idle.digits).title }
         guard idleActions != nil else { return "數量・品號" }
         if let m = keypad.multiplier { return "下一個品項 × \(m)" }
         return "品號 \(keypad.idle.digits)"
@@ -201,6 +204,7 @@ struct KeypadDock: View {
 
     private var questionHint: String? {
         if let r = keypad.request { return r.spec.subtitle }
+        if let d = describeIdle, !keypad.idle.digits.isEmpty { return d(keypad.idle.digits).hint }
         guard idleActions != nil else { return "要輸入數字時會出現在這裡" }
         if let m = keypad.multiplier { return "點品項＝加 \(m) 份；或按「品號」" }
         return "按「品號」加入這個品號的品項"

@@ -262,3 +262,59 @@ extension POSModel {
         s.count > 24 ? String(s.prefix(24)) + "…" : s
     }
 }
+
+// MARK: - 右側鍵盤待機打的數字：打完停一下就自動做（不用再按鍵）
+
+extension POSModel {
+    /// 這串數字是什麼（會員電話、統編、對到的品號、數量…）
+    func typedDigits(_ digits: String) -> TypedDigits? {
+        TypedDigits.classify(digits, catalog: catalog, atCheckout: checkoutTicket != nil)
+    }
+
+    /// 鍵盤上方的題目與說明：打的時候就看得出它會被當成什麼
+    func describeTyped(_ digits: String) -> (title: String, hint: String) {
+        switch typedDigits(digits) {
+        case .quantity(let n):
+            return ("下一個品項 × \(n)", "點品項＝加 \(n) 份")
+        case .partialPhone(let d):
+            return ("會員電話 \(Self.dashedPhone(d))", "打滿 10 碼、停一下就帶入會員")
+        case .member(let phone):
+            return ("會員 \(Self.dashedPhone(phone))", "停一下就查這位會員、掛到這張單")
+        case .taxId(let id):
+            return ("統編 \(id)", "停一下就掛到這張單的發票")
+        case .product(let m):
+            let name = m.variant.map { "\(m.item.name) \($0.label)" } ?? m.item.name
+            return ("品號 \(digits) → \(name)", "停一下就加入")
+        case .code, nil:
+            return ("品號 \(digits)", "打完按「品號」；打錯按 C")
+        }
+    }
+
+    /// 打完停一下：會員電話 → 查、掛上；統編（結帳中）→ 掛上；剛好對到的品號 → 加入。其他的等使用者
+    func actOnTyped(_ digits: String) async {
+        guard let kind = typedDigits(digits), kind.actsOnPause else { return }
+        keypad.clearIdle()
+        switch kind {
+        case .member(let phone):
+            _ = await handleScan(phone, context: .member)
+        case .taxId(let id):
+            guard let t = checkoutTicket ?? selectedTicket else { return }
+            setBuyer(.business(taxId: id, title: nil), for: t)
+            show("統編 \(id) 已掛上 \(t.number)")
+        case .product:
+            _ = await handleScan(digits)
+        case .quantity, .partialPhone, .code:
+            break
+        }
+    }
+
+    /// 0912345678 → 0912-345-678（打到一半的照打的分段）
+    static func dashedPhone(_ d: String) -> String {
+        var out = ""
+        for (i, ch) in d.enumerated() {
+            if i == 4 || i == 7 { out.append("-") }
+            out.append(ch)
+        }
+        return out
+    }
+}
