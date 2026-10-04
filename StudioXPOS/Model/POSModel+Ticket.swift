@@ -3,6 +3,7 @@ import POSCore
 import POSInvoice
 import POSPrinting
 import POSSync
+import SwiftUI
 
 /// 點餐：開單、加品項、改數量／價格／折扣、作廢、送廚房、換桌併桌拆單、會員
 extension POSModel {
@@ -29,14 +30,20 @@ extension POSModel {
     func seat(table: DiningTable) async {
         if let existing = state.openTickets(at: table.id).first {
             selectedTicketId = existing.id
-            section = .order
+            goToOrderIfShown()
             return
         }
         guard let guests = await keypad.askNumber(.guests(current: 0).with(subtitle: "\(table.name)・\(table.seats) 人桌"), validate: { $0 < 1 ? "至少 1 位" : nil }) else { return }
         if let t = openTicket(type: .dineIn, tableIds: [table.id], guests: guests) {
             selectedTicketId = t.id
-            section = .order
+            goToOrderIfShown()
+            if !visibleSections.contains(.order) { show("\(table.name) 入座 \(guests) 位，已同步到前場與結帳櫃台", tone: .info) }
         }
+    }
+
+    /// 這台有點餐頁才跳過去（報到接待只帶位，點餐交給前場）
+    func goToOrderIfShown() {
+        if visibleSections.contains(.order) { section = .order }
     }
 
     /// 目前這張單；沒有就照營業模式開一張（櫃台、零售：外帶；餐廳、咖啡：內用，不選桌直接點）
@@ -55,11 +62,13 @@ extension POSModel {
             return
         }
         if item.hasVariants {
-            // 服飾：先選顏色、尺寸（VariantPanel）
+            // 服飾：先選顏色、尺寸（VariantPanel）；同一個位置一次只開一張卡
+            modifierItem = nil
             variantItem = item
             return
         }
         if !catalog.groups(for: item).isEmpty {
+            variantItem = nil
             modifierItem = item
             return
         }
@@ -152,7 +161,7 @@ extension POSModel {
     func changeQuantity(_ line: TicketLine, in t: Ticket) async {
         if line.isSent {
             // 已經送廚房的：減少要主管（等於作廢一部分）
-            guard let q = await keypad.askNumber(.quantity(name: line.name, current: line.quantity), validate: { $0 < 1 ? "數量至少 1；不要了請按「作廢」" : nil }) else { return }
+            guard let q = await keypad.askNumber(.quantity(name: line.name, current: line.quantity), validate: { $0 < 1 ? "數量至少 1；不要了請按「作廢」" : self.redeemProblem(line, quantity: $0, in: t) }) else { return }
             if q < line.quantity {
                 guard let auth = await authorize(.voidSentItem, detail: "\(line.name) 已出單") else { return }
                 _ = auth
@@ -160,7 +169,7 @@ extension POSModel {
             record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, quantity: q)))
             return
         }
-        guard let q = await keypad.askNumber(.quantity(name: line.name, current: line.quantity), validate: { $0 < 1 ? "數量至少 1；不要了請按「刪除」" : nil }) else { return }
+        guard let q = await keypad.askNumber(.quantity(name: line.name, current: line.quantity), validate: { $0 < 1 ? "數量至少 1；不要了請按「刪除」" : self.redeemProblem(line, quantity: $0, in: t) }) else { return }
         record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, quantity: q)))
     }
 
@@ -168,6 +177,11 @@ extension POSModel {
         let q = line.quantity + delta
         if q < 1 {
             Task { await void([line], in: t) }
+            return
+        }
+        // 用課程卡抵的：卡的次數不夠就不能再加
+        if delta > 0, let problem = redeemProblem(line, quantity: q, in: t) {
+            show(problem, tone: .warning)
             return
         }
         if delta < 0 && line.isSent {
@@ -372,19 +386,19 @@ extension POSModel {
             do {
                 if let m = try await api.member(phone: entry.digits) {
                     remember(m)
-                    record(.ticketUpdated(TicketUpdated(ticketId: t.id, member: m.ref)))
+                    record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: m.ref))] + redemptionsToClear(in: t, newMemberId: m.id))
                     show("會員 \(m.name ?? m.ref.maskedPhone)\(m.tierName.map { "・\($0)" } ?? "")")
                     return
                 }
                 let created = try await api.createMember(MemberCreate(phone: entry.digits, name: nil))
                 remember(created)
-                record(.ticketUpdated(TicketUpdated(ticketId: t.id, member: created.ref)))
+                record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: created.ref))] + redemptionsToClear(in: t, newMemberId: created.id))
                 show("新會員 \(created.ref.maskedPhone) 加入了")
                 return
             } catch let e as APIError {
                 if case .offline = e {
                     // 離線：先記電話，後台結帳時再對到會員
-                    record(.ticketUpdated(TicketUpdated(ticketId: t.id, member: MemberRef(phone: entry.digits))))
+                    record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: MemberRef(phone: entry.digits)))] + redemptionsToClear(in: t, newMemberId: nil))
                     show("離線，先記下電話 \(MemberRef(phone: entry.digits).maskedPhone)", tone: .warning)
                     return
                 }
@@ -395,8 +409,134 @@ extension POSModel {
         }
     }
 
+    /// 拿掉會員：用他的課程卡抵的行一起取消（沒有會員就扣不了卡）
     func detachMember(from t: Ticket) {
-        record(.ticketUpdated(TicketUpdated(ticketId: t.id, clearMember: true)))
+        record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, clearMember: true))] + redemptionsToClear(in: t, newMemberId: nil, always: true))
+    }
+
+    /// 換了會員：前一位的課程卡抵的行要取消（同一位會員就不動）
+    private func redemptionsToClear(in t: Ticket, newMemberId: String?, always: Bool = false) -> [EventBody] {
+        let current = state.tickets[t.id] ?? t
+        if !always && current.member?.id == newMemberId { return [] }
+        return current.activeLines.filter { $0.redeem != nil }.map { l in
+            EventBody.lineUpdated(LineUpdated(ticketId: t.id, lineId: l.id, clearRedeem: true))
+        }
+    }
+
+    // MARK: 業績算給誰（服飾的銷售人員、美業的設計師與助理、課程的教練）
+
+    /// 服飾：整張單的業績算給誰（nil＝拿掉，回到開單的人）。行上沒有另外指定人的，抽成跟著換
+    func setSalesperson(_ staffId: String?, for t: Ticket) {
+        let id = staffId.flatMap { $0.isEmpty ? nil : $0 }
+        guard id != t.salespersonId else { return }
+        var bodies: [EventBody] = [.ticketUpdated(TicketUpdated(ticketId: t.id, salespersonId: id ?? ""))]
+        let who = id ?? t.openedBy
+        for l in t.activeLines where l.staffId == nil {
+            let item = l.itemId.flatMap { catalog.item($0) }
+            if let bps = commissionBps(item: item, staffId: who), bps != l.commissionBps {
+                bodies.append(.lineUpdated(LineUpdated(ticketId: t.id, lineId: l.id, commissionBps: bps)))
+            }
+        }
+        guard record(bodies) else { return }
+        show(id.map { "銷售：\(staffName($0))" } ?? "不指定銷售人員：業績算給開單的 \(staffName(t.openedBy))", tone: .neutral)
+    }
+
+    /// 美業、課程：這一行（服務）給誰做；抽成照新的人重算（品項有設就用品項的）
+    func setPerformer(_ line: TicketLine, staffId: String?, in t: Ticket) {
+        let id = staffId.flatMap { $0.isEmpty ? nil : $0 }
+        guard id != line.staffId else { return }
+        let item = line.itemId.flatMap { catalog.item($0) }
+        let bps = commissionBps(item: item, staffId: id ?? t.salespersonId ?? t.openedBy)
+        record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, staffId: id ?? "", commissionBps: bps)))
+    }
+
+    /// 助理（洗髮、吹整）；nil＝不用助理
+    func setAssistant(_ line: TicketLine, staffId: String?, in t: Ticket) {
+        let id = staffId.flatMap { $0.isEmpty ? nil : $0 }
+        guard id != line.assistantId else { return }
+        record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, assistantId: id ?? "")))
+    }
+
+    // MARK: 用課程卡抵
+
+    /// 這張卡在還沒結帳的單上已經抵了幾次（excluding：不算這一行）
+    func openPassUses(_ passId: String, excluding lineId: String? = nil) -> Int {
+        state.openTickets.reduce(0) { sum, t in
+            sum + t.activeLines.filter { $0.redeem?.passId == passId && $0.id != lineId }.reduce(0) { $0 + $1.quantity }
+        }
+    }
+
+    /// 次數卡還能抵幾次（帳戶上的剩餘次數，扣掉還沒結帳的單上已經抵的）；期間會籍不限次數是 nil
+    func visitsLeft(on pass: MemberPass, excluding lineId: String? = nil) -> Int? {
+        guard pass.spec.kind == .visits else { return nil }
+        return (pass.remaining ?? 0) - openPassUses(pass.id, excluding: lineId)
+    }
+
+    /// 這一行可以用客人的哪些卡抵（有會員、查得到帳戶、卡能抵這個品項；次數不夠的也列出來，選了再說不夠）
+    func redeemablePasses(for line: TicketLine, in t: Ticket) -> [MemberPass] {
+        guard line.isActive, line.redeem == nil, line.itemId != nil, !line.itemKind.needsMember,
+              t.member?.id != nil, let acct = account(for: t.member) else { return [] }
+        return acct.passes(covering: line.itemId, categoryId: line.categoryId, at: Date())
+    }
+
+    /// 用卡抵的那一行要變成 quantity 個：卡的次數夠不夠（不夠回一句話；查不到帳戶就不擋）
+    func redeemProblem(_ line: TicketLine, quantity: Int, in t: Ticket) -> String? {
+        guard let r = line.redeem, let pass = account(for: t.member)?.passes.first(where: { $0.id == r.passId }),
+              let left = visitsLeft(on: pass, excluding: line.id) else { return nil }
+        guard quantity > left else { return nil }
+        return left > 0 ? "\(pass.name) 只剩 \(left) 次可以抵" : "\(pass.name) 已經沒有次數了"
+    }
+
+    /// 這一行用客人的課程卡抵（不收錢、不開發票；業績照每次的價值算）。同一張卡在還沒結帳的單上抵掉的也算，不會超用
+    func redeem(_ line: TicketLine, with pass: MemberPass, in t: Ticket) {
+        guard t.member?.id != nil else {
+            show("先找會員才能用課程卡", tone: .warning)
+            return
+        }
+        guard line.isActive, line.redeem == nil else { return }
+        guard pass.isUsable(at: Date()), pass.spec.covers(itemId: line.itemId, categoryId: line.categoryId) else {
+            show("\(pass.name) 不能抵 \(line.name)", tone: .warning)
+            return
+        }
+        let left = visitsLeft(on: pass, excluding: line.id)
+        if let left, left < line.quantity {
+            show(left > 0 ? "\(pass.name) 只剩 \(left) 次，不夠抵 \(line.quantity) 個" : "\(pass.name) 的次數都排在還沒結帳的單上了", tone: .warning)
+            return
+        }
+        let r = PassRedemption(passId: pass.id, name: pass.name, value: pass.unitValue)
+        guard record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, redeem: r))) else { return }
+        if let left {
+            show("\(line.name) 用\(pass.name)抵・剩 \(left - line.quantity) 次")
+        } else {
+            show("\(line.name) 用\(pass.name)抵")
+        }
+    }
+
+    /// 取消用卡抵（回到照價收錢）
+    func unredeem(_ line: TicketLine, in t: Ticket) {
+        guard line.redeem != nil else { return }
+        record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, clearRedeem: true)))
+    }
+
+    // MARK: 換規格（結帳前）
+
+    /// 還沒結帳的那一行換顏色、尺寸：照菜單價格的換成新規格的價格；改過價（主管授權過）的維持原價
+    func changeVariant(_ line: TicketLine, to v: ItemVariant, in t: Ticket) {
+        guard line.isActive, !line.isSent, v.id != line.skuId, let item = line.itemId.flatMap({ catalog.item($0) }) else { return }
+        guard v.isAvailable else {
+            show("\(item.name) \(v.label) 今天不能賣", tone: .warning)
+            return
+        }
+        let listed = item.price(of: item.variant(line.skuId))
+        let fresh = item.price(of: v)
+        let price: Money? = line.unitPrice == listed && fresh != line.unitPrice ? fresh : nil
+        guard record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, unitPrice: price, skuId: v.id, variantName: v.label,
+                                              variantId: v.productVariantId ?? item.variantId))) else { return }
+        if let stock = v.stock, stock <= 0 {
+            show("\(item.name) 換成 \(v.label)・帳上沒有庫存，照樣換了", tone: .warning)
+        } else {
+            show("\(item.name) 換成 \(v.label)" + (price.map { "・\($0.formatted)" } ?? ""), tone: .neutral)
+        }
     }
 
     // MARK: 折扣的共用

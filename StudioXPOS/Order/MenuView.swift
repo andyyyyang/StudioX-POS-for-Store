@@ -1,3 +1,4 @@
+import Foundation
 import POSCore
 import POSInvoice
 import POSPrinting
@@ -20,7 +21,12 @@ struct MenuView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 18)
                 .padding(.bottom, 14)
-            if let item = model.modifierItem {
+            // 規格（顏色、尺寸）與加料（甜度、冰塊）同一個位置，一次只開一張
+            if let item = model.variantItem {
+                VariantPanel(item: item)
+                    .id(item.id)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let item = model.modifierItem {
                 ModifierPanel(item: item)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
@@ -41,6 +47,7 @@ struct MenuView: View {
             }
         }
         .animation(Motion.ease, value: model.modifierItem)
+        .animation(Motion.ease, value: model.variantItem)
         .onAppear {
             if categoryId == nil { categoryId = model.catalog.categories.first?.id }
         }
@@ -103,19 +110,26 @@ struct MenuView: View {
             Menu {
                 Button("自訂品項…") { askingCustom = true }
                 Button("掃商品條碼…") { scanning = true }
+                // 內用／外帶只有餐飲的模式才有（服飾、美業、課程、零售沒有這回事）
                 if let t = model.selectedTicket {
-                    Divider()
-                    ForEach(OrderType.allCases, id: \.self) { type in
-                        Button {
-                            model.setOrderType(type, for: t)
-                        } label: {
-                            if t.orderType == type { Label(type.label, systemImage: "checkmark") } else { Text(type.label) }
+                    if model.mode.showsOrderType {
+                        Divider()
+                        ForEach(OrderType.allCases, id: \.self) { type in
+                            Button {
+                                model.setOrderType(type, for: t)
+                            } label: {
+                                if t.orderType == type { Label(type.label, systemImage: "checkmark") } else { Text(type.label) }
+                            }
                         }
                     }
                 } else {
                     Divider()
-                    ForEach(OrderType.allCases, id: \.self) { type in
-                        Button("新的\(type.label)單") { model.openTicket(type: type) }
+                    if model.mode.showsOrderType {
+                        ForEach(OrderType.allCases, id: \.self) { type in
+                            Button("新的\(type.label)單") { model.openTicket(type: type) }
+                        }
+                    } else {
+                        Button("開一張新單") { model.openTicket(type: model.mode.defaultOrderType) }
                     }
                 }
             } label: {
@@ -159,14 +173,26 @@ struct MenuView: View {
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 12)], spacing: 12) {
                     ForEach(list) { item in
-                        ItemCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
-                                 inTicket: quantity(of: item), available: model.isAvailable(item),
-                                 hasOptions: !item.modifierGroupIds.isEmpty, multiplier: keypad.multiplier) {
-                            Task { await model.tap(item) }
-                        } minus: {
-                            decrement(item)
-                        } toggleAvailability: {
-                            model.toggleAvailability(item)
+                        if item.hasVariants {
+                            // 服飾：像選物店的目錄（照片或色票、幾色幾碼、價格、庫存）
+                            BoutiqueItemCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
+                                             inTicket: quantity(of: item), available: model.isAvailable(item)) {
+                                Task { await model.tap(item) }
+                            } minus: {
+                                decrement(item)
+                            } toggleAvailability: {
+                                model.toggleAvailability(item)
+                            }
+                        } else {
+                            ItemCard(item: item, swatch: model.catalog.category(item.categoryId)?.swatch ?? .sand,
+                                     inTicket: quantity(of: item), available: model.isAvailable(item),
+                                     hasOptions: !item.modifierGroupIds.isEmpty, multiplier: keypad.multiplier) {
+                                Task { await model.tap(item) }
+                            } minus: {
+                                decrement(item)
+                            } toggleAvailability: {
+                                model.toggleAvailability(item)
+                            }
                         }
                     }
                 }
@@ -222,7 +248,7 @@ struct CategoryTile: View {
     }
 }
 
-/// 一個品項
+/// 一個品項（服務多了時間、課程卡多了次數與期限、儲值多了送多少、服飾多了幾色幾碼與庫存）
 struct ItemCard: View {
     let item: MenuItem
     let swatch: Swatch
@@ -258,15 +284,35 @@ struct ItemCard: View {
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if let meta {
+                    HStack(spacing: 5) {
+                        HeroIcon(meta.icon, size: 13)
+                        Text(meta.text)
+                            .lineLimit(1)
+                        if let trailing = meta.trailing {
+                            Spacer(minLength: 4)
+                            Text(trailing)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .foregroundStyle(meta.warn ? Theme.warningFG : Theme.muted)
+                        }
+                    }
+                    .font(.brand(12, .medium))
+                    .foregroundStyle(Theme.muted)
+                }
                 Spacer(minLength: 0)
                 HStack(alignment: .firstTextBaseline) {
-                    Text(item.openPrice ? "時價" : item.price.short)
+                    Text(priceText)
                         .font(.brand(15, .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.ink2)
                     Spacer()
                     if !available {
                         StatusBadge("賣完", tone: .danger)
+                    } else if item.hasVariants {
+                        Text("選規格")
+                            .font(.brand(11.5, .medium))
+                            .foregroundStyle(Theme.muted)
                     } else if hasOptions {
                         Text("可選")
                             .font(.brand(11.5, .medium))
@@ -295,7 +341,174 @@ struct ItemCard: View {
             }
             Button(available ? "標示賣完" : "恢復供應", systemImage: available ? "nosign" : "checkmark") { toggleAvailability() }
         }
-        .accessibilityLabel("\(item.name)，\(item.price.formatted)\(available ? "" : "，賣完")\(inTicket > 0 ? "，已點 \(inTicket)" : "")")
+        .accessibilityLabel("\(item.name)，\(priceText)\(meta.map { "，\($0.text)" } ?? "")\(available ? "" : "，賣完")\(inTicket > 0 ? "，已點 \(inTicket)" : "")")
+    }
+
+    // MARK: 依種類的小字
+
+    private struct Meta {
+        var icon: String
+        var text: String
+        var trailing: String? = nil
+        var warn = false
+    }
+
+    /// 服務：「60 分」；課程卡：「10 次・180 天內」；儲值：「儲 10,000 送 1,000」；服飾：「6 色 × 5 尺寸　庫存 42」
+    private var meta: Meta? {
+        if item.hasVariants {
+            let stock = item.totalStock
+            return Meta(icon: "swatch", text: VariantPanel.summary(of: item),
+                        trailing: stock.map { $0 > 0 ? "庫存 \($0)" : "缺貨" }, warn: (stock ?? 1) <= 0)
+        }
+        switch item.itemKind {
+        case .service:
+            guard let minutes = item.durationMinutes, minutes > 0 else { return nil }
+            return Meta(icon: "clock", text: "\(minutes) 分")
+        case .pass:
+            guard let spec = item.pass else { return nil }
+            return Meta(icon: "ticket", text: spec.summary)
+        case .storedValue:
+            return Meta(icon: "gift", text: storedValueText)
+        case .goods:
+            return nil
+        }
+    }
+
+    private var storedValueText: String {
+        if item.openPrice { return "自訂儲值金額" }
+        let credit = item.credit ?? item.price
+        let bonus = credit - item.price
+        return bonus.cents > 0 ? "儲 \(item.price.plain) 送 \(bonus.plain)" : "儲值 \(credit.plain)"
+    }
+
+    private var priceText: String {
+        if item.openPrice { return item.itemKind == .storedValue ? "自訂" : "時價" }
+        if item.hasVariants, let from = VariantPanel.startingPrice(of: item) { return "\(from.short) 起" }
+        if item.hasVariants { return item.price(of: item.activeVariants.first).short }
+        return item.price.short
+    }
+}
+
+/// 服飾的品項：像選物店的目錄——上面是商品照（沒有照片就是這款有哪些顏色的色票、尺寸範圍），
+/// 下面是名字、「6 色 × 5 尺寸」、價格（規格價格不同寫「起」）、庫存的點（綠：有貨、橘黃：剩不多、紅：帳上缺貨）
+struct BoutiqueItemCard: View {
+    let item: MenuItem
+    let swatch: Swatch
+    let inTicket: Int
+    let available: Bool
+    let tap: () -> Void
+    let minus: () -> Void
+    let toggleAvailability: () -> Void
+
+    private var total: Int? { item.totalStock }
+
+    var body: some View {
+        Button(action: tap) {
+            VStack(alignment: .leading, spacing: 0) {
+                BoutiqueImage(item: item, swatch: swatch, dot: 26)
+                    .frame(height: 124)
+                    .overlay(alignment: .topTrailing) {
+                        if inTicket > 0 {
+                            Text("\(inTicket)")
+                                .font(.brand(13, .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Theme.onAccent)
+                                .frame(minWidth: 24, minHeight: 24)
+                                .background(Theme.accent, in: .circle)
+                                .padding(10)
+                                .transition(.scale.combined(with: .opacity))
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if let sizes = VariantPanel.sizeRange(of: item) {
+                            Text(sizes)
+                                .font(.brand(11, .semibold))
+                                .foregroundStyle(Theme.tileInk)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Color.white.opacity(0.72), in: .capsule)
+                                .padding(10)
+                        }
+                    }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.name)
+                        .font(.brand(15.5, .medium))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(VariantPanel.summary(of: item))
+                        .font(.brand(12, .medium))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(priceText)
+                            .font(.brand(15.5, .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.ink)
+                        Spacer(minLength: 4)
+                        stock
+                    }
+                    .padding(.top, 3)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 12)
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(Theme.surface)
+            .clipShape(.rect(cornerRadius: Metric.radiusLg, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                    .strokeBorder(inTicket > 0 ? Theme.accent.opacity(0.55) : Theme.line, lineWidth: inTicket > 0 ? 1.5 : 1)
+            }
+            .opacity(available ? 1 : 0.5)
+        }
+        .buttonStyle(PressScale(scale: 0.97))
+        .animation(Motion.spring, value: inTicket)
+        .contextMenu {
+            if inTicket > 0 {
+                Button("少一件", systemImage: "minus") { minus() }
+            }
+            Button(available ? "標示賣完" : "恢復供應", systemImage: available ? "nosign" : "checkmark") { toggleAvailability() }
+        }
+        .accessibilityLabel(accessibilityText)
+    }
+
+    @ViewBuilder
+    private var stock: some View {
+        if !available {
+            StatusBadge("賣完", tone: .danger)
+        } else if let total {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(stockColor(total))
+                    .frame(width: 6, height: 6)
+                Text(total > 0 ? "\(total)" : "缺貨")
+                    .font(.brand(12, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(total > 0 ? Theme.muted : Theme.warningFG)
+            }
+        }
+    }
+
+    private func stockColor(_ n: Int) -> Color {
+        if n <= 0 { return Theme.dangerFG }
+        if n <= 5 { return Theme.warningFG }
+        return Theme.live
+    }
+
+    private var priceText: String {
+        if let from = VariantPanel.startingPrice(of: item) { return "\(from.short) 起" }
+        return item.price(of: item.activeVariants.first).short
+    }
+
+    private var accessibilityText: String {
+        var parts = [item.name, priceText, VariantPanel.summary(of: item)]
+        if let total { parts.append(total > 0 ? "庫存 \(total)" : "帳上缺貨") }
+        if !available { parts.append("賣完") }
+        if inTicket > 0 { parts.append("已點 \(inTicket)") }
+        return parts.joined(separator: "，")
     }
 }
 

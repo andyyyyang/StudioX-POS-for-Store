@@ -43,7 +43,7 @@ struct MainShell: View {
                     .frame(width: wide ? Metric.dock : Metric.dockNarrow)
             }
             .overlay(alignment: .topTrailing) {
-                if !roomy && showsTicket {
+                if !roomy && showsTicket && !showTicketSheet {
                     Button {
                         showTicketSheet = true
                     } label: {
@@ -54,13 +54,47 @@ struct MainShell: View {
                     .padding(.top, 12)
                 }
             }
+            // 直的 iPad：單子從右邊滑出來、停在右側鍵盤的左邊（不用 sheet：sheet 會蓋住鍵盤，單子裡的數量、改價就打不了）
+            .overlay(alignment: .trailing) {
+                if !roomy && showsTicket && showTicketSheet {
+                    HStack(spacing: 0) {
+                        Color.black.opacity(0.32)
+                            .contentShape(.rect)
+                            .onTapGesture { showTicketSheet = false }
+                        TicketColumn()
+                            .frame(width: Metric.ticketColumnNarrow)
+                            .background(Theme.page)
+                            .overlay(alignment: .leading) { Rule(vertical: true) }
+                            .overlay(alignment: .topLeading) {
+                                Button {
+                                    showTicketSheet = false
+                                } label: {
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .frame(width: 30, height: 30)
+                                        .background(Theme.surface, in: .circle)
+                                        .overlay { Circle().strokeBorder(Theme.line) }
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.ink2)
+                                .accessibilityLabel("收起單子")
+                                .offset(x: -15, y: 14)
+                            }
+                            .shadow(color: .black.opacity(0.18), radius: 24, x: -6)
+                        // 右側鍵盤那一格留空、不擋手指
+                        Color.clear
+                            .frame(width: Metric.dockNarrow)
+                            .allowsHitTesting(false)
+                    }
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .onChange(of: showsTicket) { _, v in if !v { showTicketSheet = false } }
+            .onChange(of: roomy) { _, v in if v { showTicketSheet = false } }
         }
         .background(Theme.page.ignoresSafeArea())
         .animation(Motion.ease, value: showsTicket)
-        .sheet(isPresented: $showTicketSheet) {
-            TicketColumn()
-                .presentationDetents([.large])
-        }
+        .animation(Motion.spring, value: showTicketSheet)
         .confirmationDialog(
             "開不了發票", isPresented: Binding(get: { model.pendingInvoiceFailure != nil }, set: { if !$0 { model.pendingInvoiceFailure = nil } }),
             presenting: model.pendingInvoiceFailure

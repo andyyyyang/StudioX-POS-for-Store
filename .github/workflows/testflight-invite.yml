@@ -23,8 +23,21 @@ jobs:
       ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
       TESTFLIGHT_TESTERS: ${{ secrets.TESTFLIGHT_TESTERS }}
     steps:
+      - id: check
+        name: Secrets 設好了沒（還沒就跳過，不算失敗）
+        run: |
+          if [ -z "$ASC_KEY_ID" ] || [ -z "$ASC_ISSUER_ID" ] || [ -z "$ASC_PRIVATE_KEY" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### ⏸ 還沒設定 TestFlight 用的 Secrets（見 README「TestFlight」）" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@v5
+        if: steps.check.outputs.ready == 'true'
       - run: pip install --quiet pyjwt cryptography
+        if: steps.check.outputs.ready == 'true'
       - name: 加密名單用的公鑰（ci/testers.enc）
+        if: steps.check.outputs.ready == 'true'
         run: python3 ci/asc.py pubkey
       - run: python3 ci/asc.py invite
+        if: steps.check.outputs.ready == 'true'
