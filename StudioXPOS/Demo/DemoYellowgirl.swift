@@ -36,7 +36,9 @@ extension DemoStore {
             invoice: .disabled,
             mesh: MeshConfig(key: String(repeating: "7a", count: 32), enabled: false),
             queue: QueueConfig(mode: DemoQueue.mode, customerUrl: "https://cms.yellowgirl.tw/q?no={number}&waiting={waiting}",
-                               ticket: QueueTicketLayout(), usage: [.takeout])
+                               ticket: QueueTicketLayout(), usage: [.takeout]),
+            // 單據樣式：小鴨店標、圓點底圖、「好吃」印章、「謝謝光臨」頁尾（不是真的店標：DemoPrintArt 在 iPad 上畫）
+            printStyle: DemoPrintArt.yellowgirlStyle
         )
     }
 

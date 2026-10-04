@@ -133,6 +133,21 @@ struct ContractSamples {
                                     servedToday: 22,
                                     // 24 是外帶結帳時自動取的（掛著那張單）；25 是排隊等內用的 4 位
                                     entries: ["24": QueueEntry(ticketId: "tkt-a012", label: "A012・3 項"), "25": QueueEntry(guests: 4)])
+        // 門市折價券：查券的回應 → 套到單子上（ticket.updated 的 discount 帶 couponCode、minimumOrder）→ 結帳（sale.couponCode：後台記一筆使用）
+        let couponLookup = CouponLookup(coupon: Coupon(code: "YG-A3B2C1", name: "新會員 100 元", description: "加入會員送的，門市與網路商店都能用",
+                                                       type: .fixed, value: 10_000, minimumOrder: Money(dollars: 300),
+                                                       expiresAt: TaipeiTime.endOfDay(at, plusDays: 30), usesLeft: 1))
+        var couponTicket = Ticket(id: "tkt-yg-1", number: "A012", deviceId: "dev-a", orderType: .takeout, member: member, openedAt: at,
+                                  openedBy: "staff-leslie", businessDate: "2026-09-21", serviceMode: .counter)
+        couponTicket.lines = [TicketLine(id: "ln-yg-1", itemId: "itm-platter", name: "滷味拼盤", categoryId: "cat-braised", categoryName: "滷味",
+                                         unitPrice: Money(dollars: 180), quantity: 2, addedAt: at, addedBy: "staff-leslie")]
+        couponTicket.discount = couponLookup.coupon.discount
+        couponTicket.payments = [Payment.cash(id: "pay-yg-1", tendered: Money(dollars: 300), due: couponTicket.totals.amountDue, at: at, by: "staff-leslie", shiftId: "shift-1")]
+        let couponSale = SaleRecord(ticket: couponTicket, closedOn: "dev-a", shiftId: "shift-1", closedAt: at, closedBy: "staff-leslie", staffName: "Leslie", floor: FloorPlan())
+        let c1 = try POSEvent(id: "evt-0004", deviceId: "dev-a", seq: 44, lamport: 1210, at: at, staffId: "staff-leslie",
+                              body: .ticketUpdated(TicketUpdated(ticketId: couponTicket.id, discount: couponTicket.discount)), prevHash: e3.hash)
+        let c2 = try POSEvent(id: "evt-0005", deviceId: "dev-a", seq: 45, lamport: 1211, at: at, staffId: "staff-leslie",
+                              body: .ticketClosed(TicketClosed(ticketId: couponTicket.id, sale: couponSale)), prevHash: c1.hash)
         let history = DayHistory(businessDate: "2026-09-21", sales: [salonSale], refunds: [], voidedTickets: [], invoiceNumbers: [], voidedInvoiceNumbers: [], checkIns: 1)
         let appointment = Reservation(id: "rsv-appt-1", kind: .appointment, name: "王小美", phone: "0912345678", partySize: 1, startsAt: at, durationMinutes: 180,
                                       createdAt: at, staffId: "staff-mori",
@@ -157,6 +172,9 @@ struct ContractSamples {
             "member.json": try j(MemberLookup(member: memberSample)),
             "history.json": try j(history),
             "queue-state.json": try j(queueState),
+            "coupon-lookup.json": try j(couponLookup),
+            "event-ticket-updated-coupon.json": try j(c1),
+            "event-ticket-closed-coupon.json": try j(c2),
             "invoice-qr.txt": {
                 let p = InvoiceProof(invoice: invoice, storeName: "晨麥手作", qrKey: settings.qrKey)
                 return "barcode: \(p.barcode)\nleft:  \(p.qrLeft ?? "")\nright: \(p.qrRight ?? "")\n"
@@ -168,7 +186,7 @@ struct ContractSamples {
         let s = try Self.samples()
         let dec = EventCoding.decoder()
         for name in ["event-lines-added.json", "event-invoice-issued.json", "event-ticket-closed.json", "event-salon-ticket-closed.json",
-                     "event-member-checked-in.json", "event-sale-exchanged.json"] {
+                     "event-member-checked-in.json", "event-sale-exchanged.json", "event-ticket-updated-coupon.json", "event-ticket-closed-coupon.json"] {
             let e = try dec.decode(POSEvent.self, from: Data(s[name]!.utf8))
             #expect(e.isHashValid, "\(name)")
         }
@@ -180,6 +198,16 @@ struct ContractSamples {
         let boot = try dec.decode(Bootstrap.self, from: Data(s["bootstrap.json"]!.utf8))
         #expect(boot.features.queue)
         #expect(boot.queue?.ticket.number.y == 140)
+        let coupon = try dec.decode(CouponLookup.self, from: Data(s["coupon-lookup.json"]!.utf8))
+        #expect(coupon.problem == nil && coupon.coupon.discount?.couponCode == "YG-A3B2C1")
+        #expect(s["coupon-lookup.json"]!.contains(#""problem" : null"#))
+        let closed = try dec.decode(POSEvent.self, from: Data(s["event-ticket-closed-coupon.json"]!.utf8))
+        if case .ticketClosed(let c) = closed.body {
+            #expect(c.sale.couponCode == "YG-A3B2C1" && c.sale.discount == Money(dollars: 100) && c.sale.orderDiscount == Money(dollars: 100))
+            #expect(c.sale.total == Money(dollars: 260))
+        } else {
+            Issue.record("event-ticket-closed-coupon.json 不是 ticket.closed")
+        }
         let queue = try dec.decode(QueueState.self, from: Data(s["queue-state.json"]!.utf8))
         #expect(queue.current == 23 && queue.waiting == [24, 25, 26] && queue.takenAt.count == 3 && queue.servedToday == 22)
         if ProcessInfo.processInfo.environment["POSKIT_WRITE_SAMPLES"] == "1" {

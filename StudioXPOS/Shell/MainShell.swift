@@ -41,6 +41,8 @@ struct MainShell: View {
                         .checkoutHandoffDock()
                         // 叫號：右欄最上面那張叫號卡點開的面板、叫到號之後選桌入座（Queue/QueuePanels.swift）
                         .queueDockPanels()
+                        // 要確認的事（套折價券會換掉原本的整單折扣）：蓋住右欄的面板
+                        .confirmDockPanel()
                 }
                 // 直的 iPad 單子收起來時，單子欄照樣在（看不到）：整張單的動作（送單、結帳…）才會出現在右欄
                 .background {
@@ -153,6 +155,8 @@ struct MainShell: View {
         .onChange(of: keypad.request?.id) { _, _ in focused = true }
         .onKeyPress(phases: .down) { press in handle(press) }
         .simultaneousGesture(TapGesture().onEnded { model.touch() })
+        // 相機掃碼（掃碼、掃會員條碼、掃折價券…）：Components/ScanSheets.swift
+        .scanPresenter()
     }
 
     /// 點餐畫面的鍵盤待機時可以打品號
@@ -219,8 +223,8 @@ struct MainShell: View {
 
     // MARK: 外接鍵盤、條碼掃描器
 
-    /// 數字直接打進右側鍵盤；Enter＝確認。掃描器（像鍵盤一樣打字、最後按 Enter）：
-    /// 掃到手機條碼（/ 開頭）在結帳時當載具；掃到數字在點餐時當品號／條碼
+    /// 數字直接打進右側鍵盤；Enter＝確認。掃描器（像鍵盤一樣打字、最後按 Enter）和手機的相機走同一條路（POSModel.handleScan）：
+    /// 載具（/ 開頭）掛到這張單、會員卡掛會員、品號／條碼加品項、其他的當折價券查
     private func handle(_ press: KeyPress) -> KeyPress.Result {
         model.touch()
         switch press.key {
@@ -228,16 +232,21 @@ struct MainShell: View {
             let code = scan
             scan = ""
             if keypad.keepsSelection, code.count >= 6, model.section == .order {
-                // 選了單子的一行（鍵盤在問它的數量）時掃到條碼：不是數量，是要加的品項
+                // 選了單子的一行（鍵盤在問它的數量）時掃到條碼：不是數量，是要加的品項（或會員卡、折價券）
                 keypad.cancel()
-                model.lookup(code: code)
+                Task { await model.handleScan(code) }
+            } else if keypad.isAskingMemberPhone, let phone = ScanCode.memberPhone(in: code), phone != code {
+                // 鍵盤在問會員的電話、掃到的是網址或有 +886 的會員卡：只留電話（不然網址裡其他的數字也打進去了）
+                keypad.fill(phone)
             } else if keypad.isAsking {
                 keypad.commit()
-            } else if code.hasPrefix("/"), let t = model.checkoutTicket {
-                keypad.clearIdle()
-                if !model.setCarrier(code, for: t) { model.show("載具 \(code) 格式不對", tone: .warning) }
-            } else if model.section == .order, let c = keypad.takeCode() {
-                model.lookup(code: c)
+            } else {
+                // 待機：掃描器打的整串字（沒有的話是右側鍵盤打的數字）
+                let typed = keypad.takeCode()
+                let raw = code.isEmpty ? (typed ?? "") : code
+                // 點餐頁以外：短的數字多半是不小心打的（品號在點餐頁打）；條碼、會員卡、載具、折價券都是 4 碼以上
+                guard !raw.isEmpty, model.section == .order || model.checkoutTicket != nil || raw.count >= 4 else { return .handled }
+                Task { await model.handleScan(raw) }
             }
             return .handled
         case .delete:
@@ -314,7 +323,7 @@ struct SidebarRail: View {
             SyncDot(status: model.syncStatus, demo: model.isDemo)
                 .padding(.top, 6)
 
-            staffButton
+            staffControl
                 .padding(.top, 6)
                 .padding(.bottom, 12)
         }
@@ -353,6 +362,25 @@ struct SidebarRail: View {
                 .background(Theme.accentSoft, in: .capsule)
         }
         .accessibilityLabel("營業模式：\(model.mode.label)")
+    }
+
+    /// 個人的裝置（用 StudioX 帳號登入）：只寫是誰的，沒有鎖定／換人（鎖定是閒置時自動、用 Face ID 解開）
+    @ViewBuilder
+    private var staffControl: some View {
+        if model.isPersonalDevice, let me = model.currentStaff {
+            VStack(spacing: 5) {
+                StaffAvatar(name: me.name, swatch: me.swatch, size: 28)
+                Text(String(me.name.prefix(6)))
+                    .font(.brand(10.5, .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.ink2)
+            .frame(width: 70, height: 52)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("這台是 \(me.name) 的（個人）")
+        } else {
+            staffButton
+        }
     }
 
     /// 現在是誰（點了＝鎖定、讓下一位打 PIN）。上班中的其他人在「交班」看

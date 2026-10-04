@@ -14,7 +14,8 @@ struct PaymentView: View {
     let ticketId: String
 
     @State private var carrierText = ""
-    @State private var scanning = false
+    /// 選了「手機條碼」：手打的框與相機的鍵出現（手機不自動叫出系統鍵盤：先用相機掃）
+    @State private var carrierOpen = false
     @State private var shares: [Money] = []
     /// 已經跟後台查過儲值金的會員（查不到＝離線）
     @State private var walletLookup: String? = nil
@@ -61,11 +62,9 @@ struct PaymentView: View {
         .dockSelection(dock(t, x))
         // 會員還沒查過（從預約、報到帶進來的）：先查一次儲值金，付款方式才知道要不要出現「儲值金」
         .task(id: t.member?.id) { await lookUpWallet(t) }
-        .sheet(isPresented: $scanning) {
-            CodeScannerSheet(title: "掃客人的手機條碼", types: ScanKind.carrier) { code in
-                carrierText = code
-                if !model.setCarrier(code, for: t) { model.show("載具格式不對：\(code)", tone: .warning) }
-            }
+        // 相機掃到的載具（POSModel.handleScan）：手打的框跟著換成掃到的
+        .onChange(of: t.invoiceBuyer) { _, buyer in
+            if case .consumer(let c?) = buyer { carrierText = c.id }
         }
     }
 
@@ -480,12 +479,20 @@ struct PaymentView: View {
 
     private func choose(_ kind: BuyerKind, for t: Ticket) {
         model.touch()
+        if kind != .carrier { carrierOpen = false }
         switch kind {
         case .paper:
             carrierFocused = false
             model.setBuyer(.paper, for: t)
         case .carrier:
-            carrierFocused = true
+            carrierOpen = true
+            if compact {
+                // 手機沒有條碼機：直接打開相機（手打的框照樣在）
+                model.requestScan(.carrier)
+            } else {
+                // iPad：外接條碼機掃進框裡、或手打
+                carrierFocused = true
+            }
         case .business:
             carrierFocused = false
             Task { await model.askTaxId(for: t) }
@@ -532,9 +539,21 @@ struct PaymentView: View {
             }
             .font(.brand(14, .medium))
         }
-        if k == .carrier || carrierFocused {
+        if k == .carrier || carrierFocused || carrierOpen {
+            if compact {
+                Button {
+                    model.requestScan(.carrier)
+                } label: {
+                    HStack(spacing: 8) {
+                        HeroIcon("qr-code", size: 18)
+                        Text("用相機掃手機條碼")
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.brand(.primary, size: .md, fullWidth: true))
+            }
             HStack(spacing: 8) {
-                TextField("/ABC+123（掃描器掃或手打）", text: $carrierText)
+                TextField(compact ? "/ABC+123（手打）" : "/ABC+123（掃描器掃或手打）", text: $carrierText)
                     .focused($carrierFocused)
                     .textInputAutocapitalization(.characters)
                     .autocorrectionDisabled()
@@ -545,13 +564,15 @@ struct PaymentView: View {
                     .onSubmit {
                         if !model.setCarrier(carrierText, for: t) { model.show("手機條碼是 / 開頭 8 碼", tone: .warning) }
                     }
-                Button {
-                    scanning = true
-                } label: {
-                    HeroIcon("qr-code", size: 18)
+                if !compact {
+                    Button {
+                        model.requestScan(.carrier)
+                    } label: {
+                        HeroIcon("qr-code", size: 18)
+                    }
+                    .buttonStyle(SquareIconButtonStyle(size: 46))
+                    .accessibilityLabel("用相機掃")
                 }
-                .buttonStyle(SquareIconButtonStyle(size: 46))
-                .accessibilityLabel("用相機掃")
             }
         }
         if case .business = t.invoiceBuyer {

@@ -99,6 +99,24 @@ final class KeypadController {
         if quick.commits { commit() }
     }
 
+    /// 正在問會員的電話（找會員、會員頁、報到）：掃會員卡的相機、條碼機掃到的網址可以直接填
+    var isAskingMemberPhone: Bool {
+        guard let r = request, !r.keepsSelection else { return false }
+        return r.spec.kind == .phone || r.spec.title == "會員"
+    }
+
+    /// 換成這串數字並確認（掃到的會員卡）：和打完按「查詢」一樣
+    func fill(_ digits: String) {
+        guard var r = request else { return }
+        r.entry.press(.clear)
+        for ch in digits {
+            if let n = ch.wholeNumberValue { r.entry.press(.digit(n)) }
+        }
+        r.error = nil
+        request = r
+        commit()
+    }
+
     /// 打字機（外接鍵盤、條碼掃描器）
     func type(_ text: String) {
         for ch in text {

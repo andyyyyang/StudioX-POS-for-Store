@@ -80,6 +80,8 @@ extension POSModel {
 struct RootView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    /// 個人的裝置離開一陣子、回來時剛鎖起來：鎖定畫面直接跳出 Face ID
+    @State private var promptUnlock = false
 
     var body: some View {
         ZStack {
@@ -92,7 +94,7 @@ struct RootView: View {
                 PairingView()
                     .transition(.opacity)
             case .locked:
-                LockView()
+                lockScreen
                     .transition(.asymmetric(insertion: .opacity, removal: .move(edge: .top).combined(with: .opacity)))
             case .ready:
                 // iPhone：上面選、下面做（PhoneShell）；iPad：四欄的收銀台
@@ -126,9 +128,24 @@ struct RootView: View {
         .onChange(of: model.phase) { _, p in
             // 截圖、自動測試：鎖定畫面一出現就照參數登入、開頁
             if p == .locked { model.applyLaunchArguments() }
+            if p == .ready { promptUnlock = false }
         }
         .onChange(of: scenePhase) { _, p in
-            if p == .active { model.touch() }
+            // 個人的裝置離開太久就鎖起來（POSModel+Personal）；其他照舊算一次「有人在用」
+            if p == .active { promptUnlock = model.returnedToForeground() }
+        }
+    }
+
+    /// 鎖定畫面：店裡共用的打 PIN；個人的裝置（用 StudioX 帳號登入）用 Face ID／手機密碼；
+    /// 綁著的那位被停用了（401 staff_inactive）是「請找店長」＋重試（資料不清）
+    @ViewBuilder
+    private var lockScreen: some View {
+        if model.isPersonalDevice && model.staffBlocked {
+            PersonalBlockedView()
+        } else if model.isPersonalDevice {
+            PersonalLockView(promptOnAppear: promptUnlock)
+        } else {
+            LockView()
         }
     }
 }

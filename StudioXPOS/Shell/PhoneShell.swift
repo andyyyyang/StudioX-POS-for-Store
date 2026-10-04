@@ -35,6 +35,8 @@ struct PhoneShell: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     // 叫號：點餐頁上面那張叫號卡點開的面板、叫到號之後選桌入座（和 iPad 同一份，這裡是 sheet）
                     .queueDockPanels()
+                    // 要確認的事（套折價券會換掉原本的整單折扣）：下面升起來的面板（單子的 sheet 開著時由它自己放）
+                    .confirmDockPanel()
             }
             PhoneTabBar()
         }
@@ -62,6 +64,8 @@ struct PhoneShell: View {
             Button("不用", role: .cancel) {}
         }
         .simultaneousGesture(TapGesture().onEnded { model.touch() })
+        // 相機掃碼（掃碼、掃會員條碼、掃折價券、掃載具）：先收起單子的 sheet 再打開（Components/ScanSheets.swift）
+        .phoneScanPresenter(ui)
     }
 
     /// 最底下這一層是不是最上面的：點餐頁的單子、加料／規格的 sheet 開著時，鍵盤與面板由那張 sheet 出

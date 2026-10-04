@@ -90,7 +90,7 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 
 ### 單據樣式（`printStyle`）：先畫成圖片再印
 
-所有單據（交易明細、結帳單、廚房單、取餐號碼；號碼牌照舊用 `queue.ticket`）預設**整張畫成圖片**再送出單機（ESC/POS `GS v 0`）：
+所有單據（交易明細、結帳單、廚房單、取餐號碼；號碼牌照舊用 `queue.ticket`）預設**整張畫成圖片**再送出單機（ESC/POS `GS v 0`，每 256 行一段）：
 每台機器印出來一模一樣（不挑機器的字型、不會缺字），也可以疊上店家自己的圖。出單機設定裡可以改回「文字」（舊機器、藍牙很慢時）。
 
 開機資料多一個 `printStyle`（沒給＝預設樣式）：
@@ -121,8 +121,17 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 - 圖（`header` 店標、`footer` 頁尾、`background` 底圖、`overlays` 貼圖）：`width`、`x`、`y` 都是紙寬的比例（0–1）；`y` 從 `anchor`（`top`｜`bottom`）算。
   iPad 開機時下載、存在本機（斷網照樣印）；熱感紙只有黑白：照片、插畫用擴散網點（Floyd–Steinberg），字用門檻（150）——字永遠是清楚的黑。
   `background.lighten`（0–1）先把底圖變淡再打網點，疊在字下面也看得清楚；`fit`：`top`（貼在上面）｜`tile`（整張重複）｜`stretch`
-- `headerLines`、`footerLines`：店家自己的字（地址、電話、統編照樣自動印）
+- `headerLines`、`footerLines`：店家自己的字（地址、電話照樣自動印）
 - 電子發票證明聯格式是財政部規定的：只吃 `font`，不疊圖
+- 細節（後台的預覽和 iPad 一模一樣照這個畫；範例 `samples/print-style.json`）：
+  - 由上到下：取餐號碼 → `header` 圖 → 店名、地址、電話 → `headerLines`（廚房單放在最上面）→ 內容 → `footerLines` → `footer` 圖
+  - 字：24 點 × `scale`（大字 2 倍），左右不留邊：58 mm 一行 16 個中文字、80 mm 24 個
+  - `align`：`left`｜`center`｜`right`；`overlays` 的 `x` 是左緣、`y` 是離 `anchor` 那一邊（上或下）最近的邊，都是紙寬的比例；高度照圖的比例
+  - `fit`：`top` 縮到紙寬、貼在最上面一次；`tile` 縮到紙寬、往下重複；`stretch` 撐滿整張
+  - 疊的順序：底圖（先 `lighten`：灰 = 255 − (255 − g) × (1 − lighten)）→ `header`／`footer` 圖 → `overlays`，一起用 Floyd–Steinberg 打網點（門檻 128）；字另外一層、門檻 150；兩層有一層是黑就印黑。iPad 另外把字周圍 2 點的網點清掉（深色底圖上的字也看得清楚）
+  - 沒給的預設：`header`／`footer` 的 `width` 0.5、置中；`fit: top`、`lighten: 0.75`；貼圖 `width` 0.25、`anchor: top`、`x`／`y` 0。範圍：`x`／`y` 0–1、`width` 0.02–1、`scale` 0.8–1.6
+  - 某一種單據沒給（或 `{}`）＝不疊圖，不會沿用 `receipt` 的
+  - 統編不會自動印在交易明細上（要的話寫在 `headerLines`）
 
 ## 事件（同步的核心）
 

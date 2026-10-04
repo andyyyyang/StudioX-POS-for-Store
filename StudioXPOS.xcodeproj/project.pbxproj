@@ -211,9 +211,9 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "連到藍牙出單機（58／80 mm 熱感機）列印收據、發票證明聯與廚房單。";
-				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、客人的手機條碼載具與付款碼、商品條碼。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、會員卡、客人的手機條碼載具、折價券與商品條碼。";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "店長用 Face ID 授權退款、作廢這類動作。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "用 Face ID 解鎖門市 POS";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -251,9 +251,9 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "連到藍牙出單機（58／80 mm 熱感機）列印收據、發票證明聯與廚房單。";
-				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、客人的手機條碼載具與付款碼、商品條碼。";
+				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、會員卡、客人的手機條碼載具、折價券與商品條碼。";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
-				INFOPLIST_KEY_NSFaceIDUsageDescription = "店長用 Face ID 授權退款、作廢這類動作。";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "用 Face ID 解鎖門市 POS";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

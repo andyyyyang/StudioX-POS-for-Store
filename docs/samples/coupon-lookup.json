@@ -1,0 +1,13 @@
+{
+  "coupon" : {
+    "code" : "YG-A3B2C1",
+    "description" : "加入會員送的，門市與網路商店都能用",
+    "expiresAt" : "2026-10-20T16:00:00.000Z",
+    "minimumOrder" : 30000,
+    "name" : "新會員 100 元",
+    "type" : "fixed",
+    "usesLeft" : 1,
+    "value" : 10000
+  },
+  "problem" : null
+}

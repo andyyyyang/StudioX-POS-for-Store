@@ -407,6 +407,13 @@ private struct SettingsDeviceSection: View {
 
     private var identityPanel: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if model.isPersonalDevice {
+                // 用 StudioX 帳號登入的個人裝置：綁著這個人，不用 PIN；登出在「資料」
+                Text("\(model.deviceNoun)是 \(model.personalName) 的（個人）")
+                    .font(.brand(17, .semibold))
+                    .foregroundStyle(Theme.ink)
+                Rule(color: Theme.hair)
+            }
             ValueRow(label: "名稱", value: model.device.name.isEmpty ? "—" : model.device.name, strong: true)
             ValueRow(label: "代號", value: "\(model.device.code)（單號開頭）")
             ValueRow(label: "崗位", value: roleText)
@@ -885,6 +892,8 @@ private struct SettingsPrinterList: View {
                 .clipShape(.rect(cornerRadius: Metric.radius, style: .continuous))
                 .panel(padding: 0)
             }
+            // 單據樣式（後台的 printStyle）：每種單據印出來的樣子、測試列印
+            PrintStyleEntry()
             recent
         }
         // 右欄（這一頁的動作）：大鍵「新增出單機」
@@ -982,10 +991,10 @@ private struct SettingsPrinterRow: View {
         case .network:
             let host = printer.host.isEmpty ? "沒有 IP" : printer.host
             let address = printer.port == 9100 ? host : "\(host):\(printer.port)"
-            return "\(address)・\(printer.paper.label)・\(SettingsEncoding.label(printer.encoding))"
+            return "\(address)・\(printer.paper.label)・\(PrintMethod.label(printer.encoding, style: printers.style))"
         case .bluetooth:
             let device = printer.peripheralName.map { "・\($0)" } ?? "・還沒選裝置"
-            return "藍牙・\(printer.paper.label)\(device)"
+            return "藍牙・\(printer.paper.label)・\(PrintMethod.label(printer.encoding, style: printers.style))\(device)"
         }
     }
 
@@ -1102,23 +1111,6 @@ private struct SettingsPrintPreview: View {
 
 // MARK: - 出單機：新增／編輯
 
-/// 文字模式的編碼（印出來是亂碼時換一個試）
-private struct SettingsEncoding: Identifiable {
-    let id: String
-    let title: String
-    let detail: String
-
-    static let all: [SettingsEncoding] = [
-        SettingsEncoding(id: "big5", title: "Big5", detail: "台灣的機器大多是這個，最快"),
-        SettingsEncoding(id: "utf8", title: "UTF-8", detail: "新一點的機器；中文變亂碼時試試"),
-        SettingsEncoding(id: "raster", title: "點陣圖", detail: "整張畫成圖：不挑字型，最慢"),
-    ]
-
-    static func label(_ id: String) -> String {
-        all.first(where: { $0.id == id })?.title ?? id
-    }
-}
-
 private struct SettingsPrinterEditor: View {
     @Environment(POSModel.self) private var model
     @Environment(PrinterHub.self) private var printers
@@ -1150,7 +1142,7 @@ private struct SettingsPrinterEditor: View {
             connectionPanel
             paperPanel
             rolesPanel
-            encodingPanel
+            PrintMethodPanel(encoding: $config.encoding, style: printers.style)
             drawerPanel
         }
         .dockSelection(editorDock)
@@ -1358,35 +1350,7 @@ private struct SettingsPrinterEditor: View {
         }
     }
 
-    // MARK: 編碼、錢櫃
-
-    private var encodingPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Eyebrow("中文編碼")
-            HStack(spacing: 10) {
-                ForEach(SettingsEncoding.all) { e in
-                    Button {
-                        config.encoding = e.id
-                    } label: {
-                        VStack(spacing: 4) {
-                            Text(e.title)
-                                .font(.brand(15, .semibold))
-                            Text(e.detail)
-                                .font(.brand(11.5, .regular))
-                                .multilineTextAlignment(.center)
-                                .opacity(0.7)
-                        }
-                        .padding(.horizontal, 8)
-                    }
-                    .buttonStyle(.choice(config.encoding == e.id, height: 80))
-                }
-            }
-            Text("印出來的中文是亂碼或問號，就換一個編碼再按「測試列印」。")
-                .textRole(.xs)
-                .foregroundStyle(Theme.muted)
-        }
-        .panel(padding: 22)
-    }
+    // MARK: 列印方式（PrintStyleSettings.swift）、錢櫃
 
     private var drawerPanel: some View {
         Toggle(isOn: $config.hasDrawer) {
@@ -2050,6 +2014,7 @@ private struct SettingsDataSection: View {
     @State private var check: SettingsChainCheck?
     @State private var confirmUnpair = false
     @State private var confirmEndDemo = false
+    @State private var confirmSignOut = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -2074,6 +2039,14 @@ private struct SettingsDataSection: View {
             Button("取消", role: .cancel) {}
         } message: {
             Text("示範的單、班、打卡都會清掉，回到配對畫面。")
+        }
+        .confirmationDialog("登出\(model.deviceNoun)？", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("登出\(model.deviceNoun)", role: .destructive) {
+                Task { await model.signOutPersonalDevice() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(unpairMessage)
         }
     }
 
@@ -2119,6 +2092,10 @@ private struct SettingsDataSection: View {
         if model.isDemo {
             return [POSAction("結束示範", icon: "x-circle", destructive: true) { confirmEndDemo = true }]
         }
+        // 個人的裝置：是他自己的，登出不用授權（網站停用這台、StudioX 帳號也登出）
+        if model.isPersonalDevice {
+            return [POSAction("登出\(model.deviceNoun)", icon: "arrow-right-start-on-rectangle", destructive: true) { confirmSignOut = true }]
+        }
         if model.pairing != nil {
             return [POSAction("解除配對", icon: "arrow-right-start-on-rectangle", destructive: true) { Task { await askUnpair() } }]
         }
@@ -2127,6 +2104,7 @@ private struct SettingsDataSection: View {
 
     private var leaveNote: String? {
         if model.isDemo { return "現在是虛構的「晨麥手作」，資料只在這次開著的時候；要結束示範、回到配對畫面，按右邊的「結束示範」。" }
+        if model.isPersonalDevice { return "\(model.deviceNoun)是 \(model.personalName) 的（個人）。不用了或要換店：按右邊的「登出\(model.deviceNoun)」，會清掉這台的單、班、設定與登入資訊，StudioX 帳號也會登出。" }
         if model.pairing != nil { return "這台不用了或要換店：按右邊的「解除配對」（要店長以上授權），會清掉這台的單、班、設定與登入資訊。" }
         return nil
     }
@@ -2166,7 +2144,11 @@ private struct SettingsDataSection: View {
         let pending = model.syncStatus.pending
         if pending > 0 { parts.append("還有 \(pending) 筆沒送到後台，會先試著送；送不出去的會跟著清掉。") }
         if model.openShift != nil { parts.append("這台還有開著的班，建議先交班。") }
-        parts.append("這台不再接這家店：本機的單、班、設定與登入資訊會清掉，回到配對畫面。要再用，請在後台產生新的配對碼。")
+        if model.isPersonalDevice {
+            parts.append("\(model.deviceNoun)不再是你在這家店的裝置：本機的單、班、設定與登入資訊會清掉，StudioX 帳號也會登出。要再用，重新用 StudioX 帳號登入。")
+        } else {
+            parts.append("這台不再接這家店：本機的單、班、設定與登入資訊會清掉，回到配對畫面。要再用，請在後台產生新的配對碼。")
+        }
         return parts.joined(separator: "\n")
     }
 }

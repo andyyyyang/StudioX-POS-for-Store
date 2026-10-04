@@ -20,6 +20,8 @@ struct TicketColumn: View {
     @Environment(KeypadController.self) private var keypad
     /// 截圖（-preselect）時先選起第一行；看不到的那一份（直的 iPad、手機只為了交出整張單的動作）不要選
     var preselects = true
+    /// 手機：「掃碼（會員・載具・折價券）」放進整張單的「⋯」。點餐頁下面那條（看不到的單子欄）不放：掃碼鍵在頁首（同一個動作只出現一次）
+    var offersScan = true
     @State private var splitting: Ticket?
     @State private var noteFor: TicketLine?
     @State private var noteText = ""
@@ -32,10 +34,12 @@ struct TicketColumn: View {
     @State private var selectedLineId: String? = nil
     /// 蓋住右欄的選擇
     @State private var panel: TicketPanel? = nil
-    /// 自訂品項、掃商品條碼（以前在點餐頁的「⋯」）
+    /// 自訂品項（以前在點餐頁的「⋯」）
     @State private var askingCustom = false
     @State private var customName = ""
-    @State private var scanning = false
+    /// 輸入折價券代碼（英數：用系統的文字框，右側鍵盤只有數字）
+    @State private var askingCoupon = false
+    @State private var couponText = ""
     /// 往左右滑開著的那一行（一次只開一行）
     /// 手機：按了「數量」才問（一選起來就升起整個鍵盤會把單子蓋掉；快速 −1／+1 用往右滑）
     @State private var phoneQuantity = false
@@ -48,9 +52,9 @@ struct TicketColumn: View {
         var isLine: Bool { [.performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse].contains(self) }
     }
 
-    // 一整串修飾太長，編譯器算不完型別：拆成三段（版面、跟著選取變的事、跳出來的視窗）
+    // 一整串修飾太長，編譯器算不完型別：拆成四段（版面、跟著選取變的事、跳出來的視窗、要選原因的）
     var body: some View {
-        dialogs(lifecycle(layout))
+        confirmations(dialogs(lifecycle(layout)))
     }
 
     private var layout: some View {
@@ -115,16 +119,20 @@ struct TicketColumn: View {
             }
     }
 
-    /// 拆單、掃條碼、自訂品項、備註、作廢的原因
+    /// 拆單、自訂品項、折價券代碼、備註（相機掃碼在最外層：model.requestScan）
     private func dialogs<V: View>(_ v: V) -> some View {
         v
             .sheet(item: $splitting) { t in
                 SplitSheet(ticket: t)
             }
-            .sheet(isPresented: $scanning) {
-                CodeScannerSheet(title: "掃商品條碼", types: ScanKind.product) { code in
-                    model.lookup(code: code)
-                }
+            .alert("輸入折價券代碼", isPresented: $askingCoupon) {
+                TextField("例如 YG-A3B2C1", text: $couponText)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("套用") { applyTypedCoupon() }
+                Button("取消", role: .cancel) { couponText = "" }
+            } message: {
+                Text("和網路商店同一份折價券；要連線才能確認")
             }
             .alert("自訂品項", isPresented: $askingCustom) {
                 TextField("品名（例如：開瓶費）", text: $customName)
@@ -151,6 +159,11 @@ struct TicketColumn: View {
                 }
                 Button("取消", role: .cancel) {}
             }
+    }
+
+    /// 作廢的原因（一行、整張單）
+    private func confirmations<V: View>(_ v: V) -> some View {
+        v
             .confirmationDialog("為什麼不要了？", isPresented: voidReasonShown) {
                 ForEach(["客人取消", "點錯", "出餐太慢", "餐點問題", "招待"], id: \.self) { reason in
                     Button(reason) {
@@ -177,6 +190,14 @@ struct TicketColumn: View {
 
     private var voidReasonShown: Binding<Bool> {
         Binding(get: { !voidReasonFor.isEmpty }, set: { if !$0 { voidReasonFor = [] } })
+    }
+
+    /// 「套用」：打的代碼交給後台查（POSModel+Coupons）
+    private func applyTypedCoupon() {
+        let code = couponText.trimmingCharacters(in: .whitespacesAndNewlines)
+        couponText = ""
+        guard !code.isEmpty, let t = model.selectedTicket else { return }
+        Task { await model.applyCoupon(code: code, to: t) }
     }
 
     /// 截圖用：點餐頁還沒有單 → 先打開一張有點東西的單；單子有東西就選起第一行（右欄是那一行的動作）
@@ -229,7 +250,7 @@ struct TicketColumn: View {
     private var emptyActionsHint: String {
         var parts = model.otherOrderTypes.map { "開\($0.label)單" }
         if model.mode.wantsCustomer { parts.insert("找會員開單", at: 0) }
-        parts += ["自訂品項", "掃條碼"]
+        parts += ["自訂品項", "掃碼"]
         return parts.joined(separator: "、") + "在右邊"
     }
 
@@ -529,9 +550,7 @@ struct TicketColumn: View {
                 if redeemedCount > 0 {
                     ValueRow(label: "課程卡抵用 \(redeemedCount) 項", value: "不收費", tone: Theme.accentText)
                 }
-                if x.orderDiscount.cents > 0 {
-                    ValueRow(label: "折扣 \(t.discount?.label ?? "")", value: "−" + x.orderDiscount.formatted, tone: Theme.accentText)
-                }
+                orderDiscountRow(t, x)
                 if x.serviceCharge.cents > 0 {
                     ValueRow(label: "服務費 \(percentText(bps: t.serviceChargeBps))", value: x.serviceCharge.formatted)
                 }
@@ -540,6 +559,10 @@ struct TicketColumn: View {
                     ServiceDurationBar(segments: durationSegments(t), total: minutes)
                         .padding(.vertical, 2)
                 }
+            }
+            // 折價券還沒到最低消費（改了品項）：手機選了一行時也看得到
+            if let d = t.discount, let short = model.couponShortfall(t) {
+                CouponMinimumWarning(minimum: d.minimumOrder ?? .zero, short: short)
             }
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -562,6 +585,16 @@ struct TicketColumn: View {
                 ValueRow(label: x.balance.isNegative ? "多收" : "尚欠", value: Money(cents: abs(x.balance.cents)).formatted, strong: true,
                          tone: x.balance.isNegative ? Theme.dangerFG : Theme.ink)
             }
+        }
+    }
+
+    /// 整單折扣：折價券寫它的名字（「折價券 新會員 100 元  −NT$100」），其他的「折扣 9 折」
+    @ViewBuilder
+    private func orderDiscountRow(_ t: Ticket, _ x: TicketTotals) -> some View {
+        if let d = t.discount, d.isCoupon {
+            ValueRow(label: d.reason.isEmpty ? "折價券 \(d.couponCode ?? "")" : d.reason, value: "−" + x.orderDiscount.formatted, tone: Theme.accentText)
+        } else if x.orderDiscount.cents > 0 {
+            ValueRow(label: "折扣 \(t.discount?.label ?? "")", value: "−" + x.orderDiscount.formatted, tone: Theme.accentText)
         }
     }
 
@@ -621,7 +654,8 @@ struct TicketColumn: View {
             actions.append(POSAction("開\(other.label)單", icon: "plus-circle") { model.openTicket(type: other) })
         }
         actions.append(POSAction("自訂品項…", icon: "pencil-square") { askingCustom = true })
-        actions.append(POSAction("掃商品條碼…", icon: "qr-code") { scanning = true })
+        // 相機掃碼：商品一個接一個、會員卡、載具、折價券（iPad 也有相機；外接條碼機不用按，直接掃）
+        actions.append(POSAction("掃碼…", icon: "qr-code") { model.requestScan(.any) })
         // 剛結帳的那一筆（點餐頁下面那條）：補印交易明細
         if let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
             actions.append(POSAction("印上一筆明細", icon: "printer") { model.printReceipt(sale) })
@@ -663,11 +697,15 @@ struct TicketColumn: View {
         if t.member == nil {
             out.append(POSAction("找會員", icon: "user-circle") { Task { await model.attachMember(to: t) } })
         }
+        // 手機沒有條碼機：相機掃（「⋯」裡，沒有六個鍵的限制）；iPad 的在「更多…」
+        if model.isPhone && offersScan {
+            out.append(POSAction("掃碼（會員・載具・折價券）", icon: "qr-code") { model.requestScan(.any) })
+        }
         if model.mode.staffPerTicket {
             let s = model.staffMember(t.salespersonId)
             out.append(POSAction(s.map { "銷售：\($0.name)" } ?? "指定\(model.mode.staffTitle)", icon: "user") { panel = .salesperson })
         }
-        out.append(POSAction(t.discount == nil ? "折扣…" : "折扣（\(t.discount?.label ?? "")）…", icon: "tag") { panel = .ticketDiscount })
+        out.append(POSAction(discountActionTitle(t), icon: "tag") { panel = .ticketDiscount })
         out.append(POSAction("整張單的備註…", icon: "pencil-square") {
             noteText = t.note
             ticketNote = true
@@ -675,6 +713,12 @@ struct TicketColumn: View {
         out.append(POSAction("更多…", icon: "ellipsis-horizontal") { panel = .ticketMore })
         out.append(POSAction("作廢整張單…", icon: "trash", destructive: true) { voidingTicket = true })
         return out
+    }
+
+    /// 「折扣・折價券…」「折扣（9 折）…」「折扣（折價券）…」
+    private func discountActionTitle(_ t: Ticket) -> String {
+        guard let d = t.discount else { return "折扣・折價券…" }
+        return d.isCoupon ? "折扣（折價券）…" : "折扣（\(d.label)）…"
     }
 
     // MARK: - 右欄：選起來的一行
@@ -741,7 +785,7 @@ struct TicketColumn: View {
     /// 跳視窗（備註、作廢的原因）、蓋住右欄的面板、拆單、掃條碼：問數量的鍵盤先讓開，關掉再回來問
     private var quantityPaused: Bool {
         noteFor != nil || !voidReasonFor.isEmpty || panel != nil || ticketNote || voidingTicket
-            || askingCustom || scanning || splitting != nil
+            || askingCustom || askingCoupon || model.scanRequest != nil || splitting != nil
     }
 
     /// 點了一行：右側鍵盤直接問它的數量（帶入現在的數量，打數字＝換掉；−1、+1、2 個、3 個一按就改；大鍵確認）。
@@ -1007,12 +1051,7 @@ struct TicketColumn: View {
                 panel = nil
                 Task { await model.discountTicket(t, kind: .amount) }
             }
-            if t.discount != nil {
-                DockChoice(title: "取消整單折扣", trailing: t.discount?.label) {
-                    panel = nil
-                    model.clearTicketDiscount(t)
-                }
-            }
+            couponChoices(t)
             if t.serviceChargeBps > 0 {
                 DockChoice(title: "免收服務費", detail: "要領班以上", trailing: percentText(bps: t.serviceChargeBps)) {
                     panel = nil
@@ -1056,9 +1095,12 @@ struct TicketColumn: View {
                 panel = nil
                 askingCustom = true
             }
-            DockChoice(title: "掃商品條碼", detail: "用相機掃") {
-                panel = nil
-                scanning = true
+            // 手機的「掃碼」在「⋯」裡（同一個動作只出現一次）
+            if !model.isPhone {
+                DockChoice(title: "掃碼", detail: "用相機掃商品、會員卡、載具、折價券") {
+                    panel = nil
+                    model.requestScan(.any)
+                }
             }
             ForEach(laterCourses(t), id: \.self) { c in
                 DockChoice(title: "催菜：第 \(c) 道", detail: "開始做第 \(c) 道") {
@@ -1088,6 +1130,27 @@ struct TicketColumn: View {
             }
         case .performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse:
             EmptyView()
+        }
+    }
+
+    /// 整單折扣面板裡的折價券：掃、打代碼（英數，用系統的文字框）；已經有整單折扣的可以拿掉
+    @ViewBuilder
+    private func couponChoices(_ t: Ticket) -> some View {
+        DockChoice(title: "掃折價券", detail: "用相機掃折價券的 QR Code、條碼") {
+            panel = nil
+            model.requestScan(.coupon)
+        }
+        DockChoice(title: "輸入折價券代碼", detail: "英文、數字，例如 YG-A3B2C1") {
+            panel = nil
+            couponText = ""
+            askingCoupon = true
+        }
+        if let d = t.discount {
+            DockChoice(title: d.isCoupon ? "拿掉折價券" : "取消整單折扣", detail: d.isCoupon ? d.reason : nil,
+                       trailing: d.isCoupon ? d.couponCode : d.label) {
+                panel = nil
+                model.clearTicketDiscount(t)
+            }
         }
     }
 
@@ -1758,5 +1821,28 @@ struct SplitSheet: View {
         let total = moving.values.reduce(0, +)
         let all = ticket.activeLines.reduce(0) { $0 + $1.quantity }
         return total > 0 && total < all
+    }
+}
+
+/// 單子上的提醒：折價券還沒到最低消費（改了品項），結帳前會拿掉
+struct CouponMinimumWarning: View {
+    let minimum: Money
+    let short: Money
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            HeroIcon("exclamation-triangle", size: 15)
+                .padding(.top, 1)
+            Text("未達最低消費 \(minimum.formatted)（還差 \(short.formatted)），結帳前會拿掉折價券")
+                .font(.brand(12.5, .medium))
+                .monospacedDigit()
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Theme.warningFG)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Tone.warning.background, in: .rect(cornerRadius: Metric.radius))
+        .accessibilityElement(children: .combine)
     }
 }

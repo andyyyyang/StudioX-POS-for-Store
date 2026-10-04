@@ -112,7 +112,7 @@ public actor SyncEngine {
         } catch let e as APIError {
             switch e {
             case .serviceOff: update { $0.health = .paused; $0.lastError = e.userMessage }
-            case .unauthorized, .revoked: update { $0.health = .attention; $0.lastError = e.userMessage }
+            case .unauthorized, .revoked, .staffInactive: update { $0.health = .attention; $0.lastError = e.userMessage }
             default:
                 backoff = min(max(backoff * 2, 2), 60)
                 update { $0.health = e.isRetryable ? .offline : .attention; $0.lastError = e.userMessage }

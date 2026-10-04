@@ -12,6 +12,8 @@ public enum APIError: Error, Equatable, Sendable {
     case unauthorized
     /// 後台移除了這台：清資料、回配對畫面
     case revoked
+    /// 個人裝置綁的門市人員被停用（401 staff_inactive）：還沒送的帳要留著，不能清資料
+    case staffInactive
     /// StudioX 沒開通／店家暫停了門市 POS：照常營業，提示「後台暫停同步」
     case serviceOff
     case notModified
@@ -31,6 +33,7 @@ public enum APIError: Error, Equatable, Sendable {
         case .offline: "沒有網路，先存在這台，連上後自動補送"
         case .unauthorized: "這台的登入失效了，請重新配對"
         case .revoked: "這台已經從後台移除"
+        case .staffInactive: "你在這家店的門市人員被停用了，請找店長"
         case .serviceOff: "後台暫停了門市 POS 的同步（這台照常可以用）"
         case .notModified: "沒有變更"
         case .http(_, _, let m): m ?? "後台出了點問題，稍後自動重試"
@@ -63,6 +66,8 @@ public protocol POSAPI: Sendable {
     func queue() async throws -> QueueState
     /// 叫號的動作（取號、下一號、過號…）：回應是改完的狀態
     func queue(_ action: QueueAction) async throws -> QueueState
+    /// 門市折價券：能不能用在這張單（subtotal：整單折扣前的小計）。沒有這張券＝nil；斷線丟 APIError.offline（App 不套用）
+    func coupon(code: String, subtotal: Money, memberId: String?) async throws -> CouponLookup?
 }
 
 extension POSAPI {
@@ -83,6 +88,10 @@ extension POSAPI {
 
     public func queue(_ action: QueueAction) async throws -> QueueState {
         throw APIError.http(status: 404, code: "not_found", message: "後台還不支援叫號")
+    }
+
+    public func coupon(code: String, subtotal: Money, memberId: String?) async throws -> CouponLookup? {
+        throw APIError.http(status: 404, code: "unsupported", message: POSClient.couponsUnsupported)
     }
 }
 
@@ -188,6 +197,22 @@ public struct POSClient: POSAPI {
         try await call("queue/\(action.path)", method: "POST", body: action.body)
     }
 
+    /// 後台還沒有折價券的 API（舊版的後台：路徑不存在的 404 沒有 `not_found`）
+    public static let couponsUnsupported = "後台還不支援門市折價券，請更新後台"
+
+    /// GET /coupons/:code?subtotal=&memberId=。`404 not_found`＝沒有這張券（nil）；其他的 404（舊版後台沒有這個路徑）丟出來
+    public func coupon(code: String, subtotal: Money, memberId: String?) async throws -> CouponLookup? {
+        var query = ["subtotal": String(subtotal.cents)]
+        if let memberId, !memberId.isEmpty { query["memberId"] = memberId }
+        do {
+            let r: CouponLookup = try await call("coupons/\(code)", query: query)
+            return r
+        } catch APIError.http(404, let errorCode, let message) {
+            if errorCode == "not_found" { return nil }
+            throw APIError.http(status: 404, code: errorCode, message: message ?? Self.couponsUnsupported)
+        }
+    }
+
     // MARK: 傳輸
 
     struct Empty: Encodable {}
@@ -227,6 +252,7 @@ public struct POSClient: POSAPI {
             let err = try? EventCoding.decoder().decode(APIErrorBody.self, from: data)
             switch (status, err?.error) {
             case (401, "revoked"): throw APIError.revoked
+            case (401, "staff_inactive"): throw APIError.staffInactive
             case (401, _): throw APIError.unauthorized
             case (403, "service_off"): throw APIError.serviceOff
             default: throw APIError.http(status: status, code: err?.error ?? "http_\(status)", message: err?.message)

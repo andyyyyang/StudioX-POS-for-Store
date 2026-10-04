@@ -1,0 +1,15 @@
+{
+  "cmsUrl" : "https://cms.example.tw",
+  "deviceCode" : "C",
+  "deviceId" : "dev-p",
+  "personal" : true,
+  "role" : "handheld",
+  "siteName" : "晨麥手作",
+  "staff" : {
+    "id" : "staff-may",
+    "name" : "王小美",
+    "role" : "cashier"
+  },
+  "storeName" : "晨麥手作",
+  "token" : "sxpos_dev-p.Qm…"
+}

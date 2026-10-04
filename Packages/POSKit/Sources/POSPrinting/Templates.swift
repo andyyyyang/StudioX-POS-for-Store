@@ -11,15 +11,17 @@ public enum Templates {
     /// accountLines：結帳後的會員帳戶（「儲值金餘額 8,500」「剪髮 10 次卡 剩 9 次」）
     public static func saleReceipt(_ sale: SaleRecord, store: StoreProfile, reprint: Bool = false, pickupNumber: String? = nil,
                                    staffNames: [String: String] = [:], accountLines: [String] = []) -> Receipt {
-        var r = Receipt()
+        var r = Receipt(doc: pickupNumber == nil ? .receipt : .pickup)
         if let pickupNumber {
             r.add(.text("取餐號碼", ReceiptStyle(align: .center, bold: true)))
             r.add(.text(pickupNumber, ReceiptStyle(align: .center, bold: true, scale: 3)))
             r.add(.doubleRule)
         }
+        let top = r.blocks.count
         r.add(.text(store.name, .title))
         if !store.address.isEmpty { r.add(.text(store.address, .center)) }
         if !store.phone.isEmpty { r.add(.text("電話 \(store.phone)", .center)) }
+        r.storeHeader = top..<r.blocks.count
         r.add(.text(reprint ? "交易明細（補印）" : "交易明細", ReceiptStyle(align: .center, bold: true)))
         r.add(.rule)
         let showsType = sale.serviceMode?.showsOrderType ?? true
@@ -42,6 +44,8 @@ public enum Templates {
         r.add(.rule)
         r.add(.row("小計", sale.itemsGross.plain, .body))
         if sale.discount.cents > 0 { r.add(.row("折扣" + (sale.discountReason.map { "（\($0)）" } ?? ""), "−" + sale.discount.plain, .body)) }
+        // 門市折價券：印代碼（客人對得到是哪一張；退款時店員也看得到）
+        if let code = sale.couponCode { r.add(.detail("折價券代碼 \(code)")) }
         if sale.serviceCharge.cents > 0 { r.add(.row("服務費", sale.serviceCharge.plain, .body)) }
         r.add(.row("總計", sale.total.plain, .big))
         if sale.tip.cents > 0 { r.add(.row("小費", sale.tip.plain, .body)) }
@@ -72,8 +76,9 @@ public enum Templates {
 
     public static func bill(_ t: Ticket, store: StoreProfile, floor: FloorPlan) -> Receipt {
         let x = t.totals
-        var r = Receipt()
+        var r = Receipt(doc: .bill)
         r.add(.text(store.name, .title))
+        r.storeHeader = 0..<r.blocks.count
         r.add(.text("結帳單", ReceiptStyle(align: .center, bold: true)))
         r.add(.rule)
         r.add(.row(t.title(floor: floor), "單號 \(t.number)", .strong))
@@ -86,7 +91,11 @@ public enum Templates {
         }
         r.add(.rule)
         r.add(.row("小計", x.subtotal.plain, .body))
-        if x.orderDiscount.cents > 0 { r.add(.row("折扣 \(t.discount?.label ?? "")", "−" + x.orderDiscount.plain, .body)) }
+        if x.orderDiscount.cents > 0 {
+            // 折價券印它的名字（「折價券 新會員 100 元」），其他的印「折扣 9 折」
+            let label = t.discount.map { $0.isCoupon && !$0.reason.isEmpty ? $0.reason : "折扣 \($0.label)" } ?? "折扣"
+            r.add(.row(label, "−" + x.orderDiscount.plain, .body))
+        }
         if x.serviceCharge.cents > 0 { r.add(.row("服務費 \(percentText(bps: t.serviceChargeBps))", x.serviceCharge.plain, .body)) }
         r.add(.row("應付", x.amountDue.plain, .big))
         if x.paid.cents > 0 { r.add(.row("已付", x.paid.plain, .body)); r.add(.row("尚欠", x.balance.plain, .strong)) }
@@ -117,7 +126,7 @@ public enum Templates {
     }
 
     public static func kitchenTicket(_ t: Ticket, lines: [TicketLine], station: String?, mode: KitchenMode, floor: FloorPlan, at: Date) -> Receipt {
-        var r = Receipt()
+        var r = Receipt(doc: .kitchen)
         let heading: String = switch mode {
         case .new: "出單"
         case .add: "加點"

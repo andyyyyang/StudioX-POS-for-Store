@@ -43,7 +43,11 @@ struct DockContext: View {
         if r.spec.title == "收現金", let t = model.checkoutTicket {
             DockCashChange(due: t.totals.balance, typed: r.entry.money ?? .zero)
         } else if r.spec.kind == .phone || r.spec.title == "會員" {
-            DockMemberMatches(digits: r.entry.isPristine ? "" : r.entry.digits)
+            // 打電話，或用相機掃會員卡（掃到＝把電話打進來、按查詢）
+            VStack(alignment: .leading, spacing: 16) {
+                MemberScanButton()
+                DockMemberMatches(digits: r.entry.isPristine ? "" : r.entry.digits)
+            }
         } else if r.spec.kind == .taxId {
             DockRecentTaxIds()
         } else {

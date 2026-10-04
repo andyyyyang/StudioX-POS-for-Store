@@ -117,4 +117,25 @@ struct PrintingTests {
         #expect(plain.plainText(width: .mm58).contains("前面還有 0 位"))
         #expect(plain.blocks.last == .cut)
     }
+
+    /// 門市折價券：收據印折扣的原因（折價券的名字）與代碼，結帳單印折價券的名字；58／80 mm 都放得進紙寬
+    @Test func couponOnReceiptAndBill() {
+        let at = Date(timeIntervalSince1970: 1_791_000_000)
+        var t = Ticket(id: "t", number: "A012", deviceId: "d", orderType: .takeout, openedAt: at, openedBy: "s", businessDate: "2026-10-04")
+        t.lines = [TicketLine(id: "l1", itemId: "i", name: "滷味拼盤", unitPrice: Money(dollars: 180), quantity: 2, addedAt: at, addedBy: "s")]
+        t.discount = Discount(kind: .amount, value: 10_000, reason: "折價券 新會員 100 元", couponCode: "YG-A3B2C1", minimumOrder: Money(dollars: 300))
+        t.payments = [Payment.cash(id: "p", tendered: Money(dollars: 300), due: t.totals.amountDue, at: at, by: "s", shiftId: nil)]
+        let sale = SaleRecord(ticket: t, closedOn: "d", shiftId: nil, closedAt: at, closedBy: "s", staffName: "阿珠", floor: FloorPlan())
+        let store = StoreProfile(name: "黃毛丫頭")
+        for w in PaperWidth.allCases {
+            let text = Templates.saleReceipt(sale, store: store).plainText(width: w)
+            #expect(text.contains("折價券 新會員 100 元"))
+            #expect(text.contains("−100"))
+            #expect(text.contains("折價券代碼 YG-A3B2C1"))
+            for line in text.split(separator: "\n") { #expect(TextWidth.of(String(line)) <= w.columns, "\(w) \(line)") }
+        }
+        let bill = Templates.bill(t, store: store, floor: FloorPlan()).plainText(width: .mm58)
+        #expect(bill.contains("折價券 新會員 100 元"))
+        #expect(!bill.contains("折扣 −$100"))
+    }
 }

@@ -15,6 +15,12 @@ public struct Bitmap: Sendable, Hashable {
         bytes = [UInt8](repeating: 0, count: ((width + 7) / 8) * height)
     }
 
+    /// 已經排好的位元組（Halftone.pack）；長度不對就是一張白的
+    public init(width: Int, height: Int, bytes: [UInt8]) {
+        self.init(width: width, height: height)
+        if bytes.count == self.bytes.count { self.bytes = bytes }
+    }
+
     public subscript(x: Int, y: Int) -> Bool {
         get {
             guard x >= 0, y >= 0, x < width, y < height else { return false }

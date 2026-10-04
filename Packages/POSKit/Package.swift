@@ -24,11 +24,11 @@ let package = Package(
         .target(name: "POSCore"),
         .target(name: "POSInvoice", dependencies: ["POSCore"]),
         .target(name: "POSPrinting", dependencies: ["POSCore", "POSInvoice"]),
-        .target(name: "POSSync", dependencies: ["POSCore", "POSInvoice"]),
+        .target(name: "POSSync", dependencies: ["POSCore", "POSInvoice", "POSPrinting"]),
         .testTarget(name: "POSCoreTests", dependencies: ["POSCore"]),
         .testTarget(name: "POSInvoiceTests", dependencies: ["POSCore", "POSInvoice"]),
         .testTarget(name: "POSPrintingTests", dependencies: ["POSCore", "POSInvoice", "POSPrinting"]),
-        .testTarget(name: "POSSyncTests", dependencies: ["POSCore", "POSInvoice", "POSSync"]),
+        .testTarget(name: "POSSyncTests", dependencies: ["POSCore", "POSInvoice", "POSPrinting", "POSSync"]),
     ],
     swiftLanguageModes: [.v6]
 )

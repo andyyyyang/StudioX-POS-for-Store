@@ -1,0 +1,12 @@
+{
+  "at" : "2026-09-21T14:13:20.000Z",
+  "data" : "{\"sale\":{\"businessDate\":\"2026-09-21\",\"closedAt\":\"2026-09-21T14:13:20.000Z\",\"closedBy\":\"staff-leslie\",\"couponCode\":\"YG-A3B2C1\",\"deviceId\":\"dev-a\",\"discount\":10000,\"discountReason\":\"折價券 新會員 100 元\",\"guests\":0,\"itemsGross\":36000,\"lines\":[{\"categoryId\":\"cat-braised\",\"categoryName\":\"滷味\",\"discount\":10000,\"gross\":36000,\"itemId\":\"itm-platter\",\"lineId\":\"ln-yg-1\",\"modifiers\":\"\",\"name\":\"滷味拼盤\",\"net\":26000,\"quantity\":2,\"staffId\":\"staff-leslie\",\"taxKind\":1,\"unitPrice\":18000}],\"member\":{\"id\":\"mem-1\",\"name\":\"王小美\",\"phone\":\"0912345678\",\"tierName\":\"金卡\"},\"note\":\"\",\"number\":\"A012\",\"openedAt\":\"2026-09-21T14:13:20.000Z\",\"openedBy\":\"staff-leslie\",\"openedDeviceId\":\"dev-a\",\"orderDiscount\":10000,\"orderType\":\"takeout\",\"payments\":[{\"amount\":26000,\"at\":\"2026-09-21T14:13:20.000Z\",\"by\":\"staff-leslie\",\"change\":4000,\"id\":\"pay-yg-1\",\"shiftId\":\"shift-1\",\"status\":\"approved\",\"tender\":\"cash\",\"tendered\":30000}],\"serviceCharge\":0,\"serviceMode\":\"counter\",\"shiftId\":\"shift-1\",\"staffName\":\"Leslie\",\"tableIds\":[],\"tableNames\":\"\",\"tax\":1200,\"ticketId\":\"tkt-yg-1\",\"tip\":0,\"total\":26000,\"voidedAmount\":0,\"voidedItems\":0},\"ticketId\":\"tkt-yg-1\"}",
+  "deviceId" : "dev-a",
+  "hash" : "e8e779d2568981dcc05b8b202cdc29043a1c66ad7b1a900d5afbde6de92b0533",
+  "id" : "evt-0005",
+  "lamport" : 1211,
+  "prevHash" : "33bf47b7a9d589295b86aa2d63b3b8744869742fa3e657acc618c9b18e04de14",
+  "seq" : 45,
+  "staffId" : "staff-leslie",
+  "type" : "ticket.closed"
+}

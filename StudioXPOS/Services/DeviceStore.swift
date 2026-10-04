@@ -17,6 +17,10 @@ enum DeviceStore {
         var role: DeviceRole
         var storeName: String
         var pairedAt: Date
+        /// 用 StudioX 帳號登入的個人裝置：綁著的門市人員（開機資料還沒抓到也知道是誰；POSModel+Personal）
+        var personal: Bool? = nil
+        var staffId: String? = nil
+        var staffName: String? = nil
     }
 
     private static var root: URL {

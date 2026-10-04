@@ -23,6 +23,8 @@ extension POSModel {
                                   exchange: exchange, appointmentId: appointmentId)
         guard record(.ticketOpened(opened)) else { return nil }
         selectedTicketId = id
+        // 沒有單時掃到的載具：掛到這一張（POSModel+Scan）
+        applyPendingCarrier(to: id)
         return state.tickets[id]
     }
 
@@ -430,19 +432,19 @@ extension POSModel {
             do {
                 if let m = try await api.member(phone: entry.digits) {
                     remember(m)
-                    record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: m.ref))] + redemptionsToClear(in: t, newMemberId: m.id))
+                    attach(m.ref, memberId: m.id, to: t)
                     show("會員 \(m.name ?? m.ref.maskedPhone)\(m.tierName.map { "・\($0)" } ?? "")")
                     return
                 }
                 let created = try await api.createMember(MemberCreate(phone: entry.digits, name: nil))
                 remember(created)
-                record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: created.ref))] + redemptionsToClear(in: t, newMemberId: created.id))
+                attach(created.ref, memberId: created.id, to: t)
                 show("新會員 \(created.ref.maskedPhone) 加入了")
                 return
             } catch let e as APIError {
                 if case .offline = e {
                     // 離線：先記電話，後台結帳時再對到會員
-                    record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: MemberRef(phone: entry.digits)))] + redemptionsToClear(in: t, newMemberId: nil))
+                    attach(MemberRef(phone: entry.digits), memberId: nil, to: t)
                     show("離線，先記下電話 \(MemberRef(phone: entry.digits).maskedPhone)", tone: .warning)
                     return
                 }
@@ -451,6 +453,12 @@ extension POSModel {
                 problem = "查不到，請再試一次"
             }
         }
+    }
+
+    /// 把會員掛到這張單（打電話查到的、掃會員卡的）：換了會員的話，前一位的課程卡抵的行一起取消
+    @discardableResult
+    func attach(_ ref: MemberRef, memberId: String?, to t: Ticket) -> Bool {
+        record([EventBody.ticketUpdated(TicketUpdated(ticketId: t.id, member: ref))] + redemptionsToClear(in: t, newMemberId: memberId))
     }
 
     /// 拿掉會員：用他的課程卡抵的行一起取消（沒有會員就扣不了卡）

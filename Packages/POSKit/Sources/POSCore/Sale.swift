@@ -74,6 +74,10 @@ public struct SaleRecord: Codable, Sendable, Hashable {
     public var itemsGross: Money
     public var discount: Money
     public var discountReason: String?
+    /// 整單折扣是門市折價券：它的代碼（後台記一筆使用、usesLeft 少一次；全額退款還回去）。沒有＝nil，JSON 裡不出現
+    public var couponCode: String?
+    /// 只有整單折扣（折價券、整單打折）折掉的（分）：`discount` 還包含每一行自己的折扣。0＝nil，JSON 裡不出現
+    public var orderDiscount: Money?
     public var serviceCharge: Money
     public var total: Money
     public var tip: Money
@@ -127,6 +131,9 @@ public struct SaleRecord: Codable, Sendable, Hashable {
         itemsGross = totals.itemsGross
         discount = totals.discountTotal
         discountReason = t.discount?.reason
+        orderDiscount = totals.orderDiscount.cents > 0 ? totals.orderDiscount : nil
+        // 折價券折到 0 元（小計是 0）就不算用掉
+        couponCode = totals.orderDiscount.cents > 0 ? t.discount?.couponCode : nil
         serviceCharge = totals.serviceCharge
         total = totals.total
         tip = totals.tip

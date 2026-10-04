@@ -1,0 +1,12 @@
+{
+  "at" : "2026-09-21T14:13:20.000Z",
+  "data" : "{\"discount\":{\"couponCode\":\"YG-A3B2C1\",\"kind\":\"amount\",\"minimumOrder\":30000,\"reason\":\"折價券 新會員 100 元\",\"value\":10000},\"ticketId\":\"tkt-yg-1\"}",
+  "deviceId" : "dev-a",
+  "hash" : "33bf47b7a9d589295b86aa2d63b3b8744869742fa3e657acc618c9b18e04de14",
+  "id" : "evt-0004",
+  "lamport" : 1210,
+  "prevHash" : "405c44a1805cd31445aec89697fe630a54c7c6ad836a16dc862e35d9e109f8e7",
+  "seq" : 44,
+  "staffId" : "staff-leslie",
+  "type" : "ticket.updated"
+}

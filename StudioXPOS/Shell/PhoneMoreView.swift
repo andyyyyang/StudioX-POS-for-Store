@@ -6,12 +6,14 @@ import POSSync
 import SwiftUI
 
 /// 手機的「更多」：誰在用、這支手機在哪家店、同步得怎樣；查會員；這支手機的設定（收款、營業模式、外觀、自動鎖定）。
-/// 動作照設計規則放在下面：大鍵「換人」（鎖定、讓下一位打 PIN），「⋯」裡是結束示範／解除配對
+/// 動作照設計規則放在下面：大鍵「換人」（鎖定、讓下一位打 PIN），「⋯」裡是結束示範／解除配對。
+/// 個人的手機（用 StudioX 帳號登入）：寫「這支手機是 王小美 的（個人）」，沒有換人；「⋯」裡是「登出這支手機」
 struct PhoneMoreView: View {
     @Environment(POSModel.self) private var model
 
     @State private var confirmEndDemo = false
     @State private var confirmUnpair = false
+    @State private var confirmSignOut = false
 
     private struct Appearance: Identifiable {
         let id: String
@@ -46,7 +48,15 @@ struct PhoneMoreView: View {
             .padding(.bottom, 24)
         }
         .scrollIndicators(.hidden)
-        .dockSelection(.page("phone-more", primary: POSAction("換人（鎖定）", icon: "lock-closed") { model.lock() }, actions: leaveActions))
+        .dockSelection(.page("phone-more", primary: lockAction, actions: leaveActions))
+        .confirmationDialog("登出這支手機？", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            Button("登出這支手機", role: .destructive) {
+                Task { await model.signOutPersonalDevice() }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(signOutMessage)
+        }
         .confirmationDialog("結束示範？", isPresented: $confirmEndDemo, titleVisibility: .visible) {
             Button("結束示範", role: .destructive) { model.reset() }
             Button("取消", role: .cancel) {}
@@ -84,7 +94,13 @@ struct PhoneMoreView: View {
             }
             Rule(color: Theme.hair)
             ValueRow(label: "店", value: model.store.name)
-            ValueRow(label: "這支手機", value: model.device.name.isEmpty ? model.role.label : "\(model.device.name)・\(model.role.label)")
+            if model.isPersonalDevice {
+                Text("這支手機是 \(model.personalName) 的（個人）")
+                    .font(.brand(15, .medium))
+                    .foregroundStyle(Theme.ink)
+            } else {
+                ValueRow(label: "這支手機", value: model.device.name.isEmpty ? model.role.label : "\(model.device.name)・\(model.role.label)")
+            }
             ValueRow(label: "結帳", value: model.takesPayment ? "這支手機也能收款" : "送到結帳櫃台")
             if !model.isDemo {
                 ValueRow(label: "同步", value: model.syncStatus.label)
@@ -235,10 +251,25 @@ struct PhoneMoreView: View {
         m == 0 ? "不自動" : "\(m) 分"
     }
 
-    /// 「⋯」：示範模式是「結束示範」；配對了的是「解除配對」（要店長授權、再確認一次）
+    /// 大鍵「換人」：個人的手機沒有（只有他自己；閒置時自動鎖、用 Face ID 解開）
+    private var lockAction: POSAction? {
+        if model.isPersonalDevice { return nil }
+        return POSAction("換人（鎖定）", icon: "lock-closed") { model.lock() }
+    }
+
+    private var signOutMessage: String {
+        let pending = model.syncStatus.pending
+        let first = pending > 0 ? "還有 \(pending) 筆沒送到後台，會先試著送。" : ""
+        return first + "這支手機不再是你在「\(model.store.name)」的點餐機，StudioX 帳號也會登出；要再用，重新用 StudioX 帳號登入。"
+    }
+
+    /// 「⋯」：示範模式是「結束示範」；個人的手機是「登出這支手機」（不用授權，是他自己的）；配對了的是「解除配對」（要店長授權、再確認一次）
     private var leaveActions: [POSAction] {
         if model.isDemo {
             return [POSAction("結束示範", icon: "x-circle", destructive: true) { confirmEndDemo = true }]
+        }
+        if model.isPersonalDevice {
+            return [POSAction("登出這支手機", icon: "arrow-right-start-on-rectangle", destructive: true) { confirmSignOut = true }]
         }
         if model.pairing != nil {
             return [POSAction("解除配對", icon: "arrow-right-start-on-rectangle", destructive: true) { Task { await askUnpair() } }]

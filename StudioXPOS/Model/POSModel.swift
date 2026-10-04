@@ -131,6 +131,8 @@ final class POSModel {
     var variantItem: MenuItem?
     var toast: Toast?
     var alert: AlertInfo?
+    /// 個人裝置：綁的那位被停用了（401 staff_inactive）。鎖定畫面換成「請找店長」＋重試；本機資料不清，店長重新啟用、同步恢復就解開
+    var staffBlocked = false
     var lastActivity = Date()
     /// 剛結帳的那一筆（付款畫面上「上一筆」、找零）
     var lastSale: SaleRecord?
@@ -139,6 +141,23 @@ final class POSModel {
     var receiptOffer: SaleRecord?
     /// 結帳時發票開不出來
     var pendingInvoiceFailure: InvoiceFailure?
+
+    // MARK: 掃碼、折價券（POSModel+Scan、POSModel+Coupons）
+
+    /// 要打開的相機（收銀台、手機的最外層放；Components/ScanSheets.swift）
+    var scanRequest: ScanRequest?
+    /// 相機關掉之後要做的事（掃到要選甜度、規格的品項：卡片等相機關掉才打開）
+    @ObservationIgnored var afterScan: (@MainActor () -> Void)?
+    /// 開著的相機有幾個（開著時要確認的事在相機上問，不在右欄）
+    var scannersOpen = 0
+    /// 沒有單時掃到的載具：這台下一張開的單用（10 分鐘內）
+    var pendingCarrier: PendingCarrier?
+    /// 要確認的事（套折價券換掉原本的折扣）：右欄的面板，或相機上的一張卡
+    var confirmRequest: ConfirmRequest?
+    /// 掃到會員、沒有單：會員頁打開這一位
+    var memberRequest: MembersFocus?
+    /// 把單子打開給人看（手機的單子 sheet；-scanDemo 截圖）
+    var revealTicketRequest = 0
 
     let keypad = KeypadController()
     let printers = PrinterHub()
@@ -188,6 +207,8 @@ final class POSModel {
             return
         }
         phase = .locked
+        // 個人的裝置（用 StudioX 帳號登入）：直接是綁著的那位，不用 PIN（POSModel+Personal）
+        autoLoginPersonal()
         Task { await refreshBootstrap() }
     }
 
@@ -268,6 +289,8 @@ final class POSModel {
             let art = queue.art
             Task { await art.prefetch(url) }
         }
+        // 單據樣式：換樣式、先把圖下載起來（印的時候不等網路）
+        printers.applyStyle(b.printStyle)
         if let current = currentStaff, let fresh = staff.first(where: { $0.id == current.id }) { currentStaff = fresh }
         if !visibleSections.contains(section) { section = visibleSections.first ?? .order }
     }
@@ -278,9 +301,13 @@ final class POSModel {
             let b = try await api.bootstrap(ifNoneMatch: configVersion)
             apply(b)
             if !isDemo { DeviceStore.save(b) }
+            // 個人的裝置：綁著的人在不在（被停用＝擋住畫面、不清資料；回來了＝解開）
+            if checkPersonalStaff() { return }
         } catch APIError.notModified {
         } catch APIError.revoked {
             revoked()
+        } catch APIError.staffInactive where isPersonalDevice {
+            personalStaffBlocked()
         } catch {
             // 離線：用快取照常營業
         }
@@ -300,6 +327,8 @@ final class POSModel {
             if r.serverSeq > ledger.journal.cursor.pullCursor { await engine?.kick() }
         } catch APIError.revoked {
             revoked()
+        } catch APIError.staffInactive where isPersonalDevice {
+            personalStaffBlocked()
         } catch {}
     }
 
@@ -310,6 +339,9 @@ final class POSModel {
             describeRemote(events)
         }
         if status.health == .attention, status.lastError == APIError.revoked.userMessage { revoked() }
+        // 綁的那位被停用了（401 staff_inactive）：還沒送到後台的帳不能清掉——擋住畫面等店長重新啟用；同步恢復就解開（POSModel+Personal）
+        if isPersonalDevice, status.health == .attention, status.lastError == APIError.staffInactive.userMessage { personalStaffBlocked() }
+        if status.health == .synced, staffBlocked { staffBlocked = false }
     }
 
     /// 收到別台的事件（後台或區網）
@@ -346,6 +378,11 @@ final class POSModel {
     }
 
     private func revoked() {
+        // 個人的裝置：連 StudioX 帳號一起登出，說清楚是怎麼了（POSModel+Personal）
+        if isPersonalDevice {
+            personalDeviceLost(.revoked)
+            return
+        }
         let id = pairing?.deviceId
         reset()
         DeviceStore.forget(deviceId: id)
@@ -374,6 +411,10 @@ final class POSModel {
         reservations = []
         queue.reset()
         queueConfig = nil
+        pendingCarrier = nil
+        memberRequest = nil
+        scanRequest = nil
+        answerConfirm(false)
         phase = .pairing
     }
 
@@ -392,7 +433,18 @@ final class POSModel {
         let info = DeviceInfo(name: UIDevice.current.name, model: UIDevice.current.modelIdentifier,
                               systemVersion: UIDevice.current.systemVersion, appVersion: Bundle.main.appVersion)
         let r = try await POSClient.pair(cmsURL: cmsURL, request: PairRequest(code: code, device: info))
-        let p = DeviceStore.Pairing(cmsURL: cmsURL, deviceId: r.deviceId, deviceCode: r.deviceCode, role: r.role, storeName: r.storeName, pairedAt: Date())
+        try await completePairing(cmsURL: cmsURL, response: r)
+    }
+
+    /// 拿到後台發的裝置 token 之後（配對碼、StudioX 帳號都走這裡）：存起來、抓開機資料、打開這台的日誌。
+    /// personalStaff：用 StudioX 帳號登入的個人裝置綁著的人（直接登入，不用 PIN）
+    func completePairing(cmsURL: URL, response r: PairResponse, personalStaff: PersonalStaff? = nil) async throws {
+        var p = DeviceStore.Pairing(cmsURL: cmsURL, deviceId: r.deviceId, deviceCode: r.deviceCode, role: r.role, storeName: r.storeName, pairedAt: Date())
+        if let personalStaff {
+            p.personal = true
+            p.staffId = personalStaff.id
+            p.staffName = personalStaff.name
+        }
         try DeviceStore.save(p, token: r.token)
         pairing = p
         let client = POSClient(cmsURL: cmsURL, token: r.token)
@@ -401,6 +453,7 @@ final class POSModel {
         apply(b)
         try open(api: client, deviceId: r.deviceId)
         phase = .locked
+        autoLoginPersonal()
         await topUpInvoiceRolls()
     }
 
@@ -454,6 +507,8 @@ final class POSModel {
 
     func lock() {
         keypad.cancel()
+        scanRequest = nil
+        answerConfirm(false)
         checkoutTicketId = nil
         currentStaff = nil
         phase = .locked
@@ -494,7 +549,8 @@ final class POSModel {
     func record(_ bodies: [EventBody]) -> Bool {
         guard let ledger, !bodies.isEmpty else { return false }
         do {
-            let events = try ledger.record(bodies, staffId: currentStaff?.id)
+            // 個人的裝置一律記綁著的那位（後台不計入別人的：docs/API.md「用 StudioX 帳號登入」）
+            let events = try ledger.record(bodies, staffId: personalStaffId ?? currentStaff?.id)
             refreshState()
             touch()
             mesh.broadcast(events)

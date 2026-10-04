@@ -1,0 +1,20 @@
+{
+  "sites" : [
+    {
+      "cmsUrl" : "https://cms.example.tw",
+      "icon" : {
+        "fill" : true,
+        "src" : "data:image/png;base64,iVBORw0KGgo…"
+      },
+      "id" : "site-1",
+      "level" : "owner",
+      "name" : "晨麥手作"
+    },
+    {
+      "cmsUrl" : "https://yellowgirl.tw",
+      "id" : "site-2",
+      "level" : "staff",
+      "name" : "黃毛丫頭"
+    }
+  ]
+}

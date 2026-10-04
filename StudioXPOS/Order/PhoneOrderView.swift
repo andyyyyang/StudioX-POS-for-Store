@@ -103,6 +103,7 @@ struct PhoneOrderView: View {
                     }
                 }
                 Spacer(minLength: 8)
+                scanButton
                 Button {
                     withAnimation(Motion.fast) {
                         searching.toggle()
@@ -136,6 +137,30 @@ struct PhoneOrderView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
+    }
+
+    /// 「掃碼」：手機不接條碼機，用相機掃——商品一個接一個、會員卡、發票載具、折價券（POSModel.handleScan 照內容判斷）
+    private var scanButton: some View {
+        Button {
+            model.requestScan(.any)
+        } label: {
+            HStack(spacing: 6) {
+                HeroIcon("qr-code", size: 17)
+                Text("掃碼")
+                    .font(.brand(15, .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .foregroundStyle(Theme.ink)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .background(Theme.surface, in: .capsule)
+            .overlay { Capsule().strokeBorder(Theme.line) }
+            .contentShape(.capsule)
+        }
+        .buttonStyle(PressScale(scale: 0.96))
+        .accessibilityLabel("掃碼")
+        .accessibilityHint("用相機掃商品、會員卡、發票載具、折價券")
     }
 
     /// 分類：一排可以左右滑的膠囊（選到的墨色實心）
@@ -284,7 +309,7 @@ struct PhoneOrderView: View {
     @ViewBuilder
     private var hiddenTicketColumn: some View {
         if model.selectedTicket != nil {
-            TicketColumn(preselects: false)
+            TicketColumn(preselects: false, offersScan: false)
                 .hidden()
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
@@ -308,9 +333,15 @@ struct PhoneOrderView: View {
                 if more { ticketDetent = .large }
             }) {
                 TicketColumn()
+                    // 套折價券要換掉原本的折扣：在這張 sheet 的下面問（不疊第二張）
+                    .confirmDockPanel()
             }
             .presentationDetents([.medium, .large], selection: $ticketDetent)
             .phoneSheetStyle(Theme.page)
+        }
+        // 把單子打開給人看（-scanDemo 截圖：掃到的折價券、會員在單子上）
+        .onChange(of: model.revealTicketRequest) { _, _ in
+            if model.selectedTicket != nil { openTicket() }
         }
     }
 
@@ -351,6 +382,7 @@ struct PhoneOrderView: View {
     }
 
     private func ticketHint(_ t: Ticket) -> String {
+        if model.couponShortfall(t) != nil { return "未達最低消費，結帳前會拿掉折價券" }
         if t.billPrintedAt != nil { return t.billSentFrom != nil ? "已送到結帳櫃台・點開看單子" : "已印結帳單・點開看單子" }
         let unsent = t.unsentLines.reduce(0) { $0 + $1.quantity }
         if unsent > 0 && model.features.kitchen && model.mode.usesKitchen && !model.mode.payFirst { return "\(unsent) 項還沒送廚房・點開改數量、備註" }

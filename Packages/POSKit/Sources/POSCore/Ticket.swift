@@ -15,9 +15,23 @@ public struct Discount: Codable, Sendable, Hashable {
     public var reason: String
     /// 超過權限時，授權的主管
     public var authorizedBy: String?
+    /// 門市折價券（和網路商店同一份）的代碼：後台結帳時記一筆使用（docs/API.md「折價券（門市）」）。不是折價券＝nil，JSON 裡不出現
+    public var couponCode: String?
+    /// 折價券的最低消費（分）：小計（整單折扣前）低於這個，結帳前拿掉折價券。nil＝沒有限制
+    public var minimumOrder: Money?
 
-    public init(kind: Kind, value: Int, reason: String = "", authorizedBy: String? = nil) {
+    public init(kind: Kind, value: Int, reason: String = "", authorizedBy: String? = nil, couponCode: String? = nil, minimumOrder: Money? = nil) {
         self.kind = kind; self.value = value; self.reason = reason; self.authorizedBy = authorizedBy
+        self.couponCode = couponCode; self.minimumOrder = minimumOrder
+    }
+
+    /// 這是折價券
+    public var isCoupon: Bool { couponCode != nil }
+
+    /// 折價券還差多少才到最低消費（小計＝整單折扣前；到了、沒有限制都是 nil）
+    public func shortfall(subtotal: Money) -> Money? {
+        guard let min = minimumOrder, min.cents > 0, subtotal < min else { return nil }
+        return min - subtotal
     }
 
     public static func percent(_ bps: Int, reason: String = "", authorizedBy: String? = nil) -> Discount {

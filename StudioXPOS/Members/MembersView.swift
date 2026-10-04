@@ -61,12 +61,16 @@ struct MembersView: View {
             .padding(.top, 22)
             .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
-        // 沒選人的時候：右欄最下面的大鍵是「查會員」（鍵盤已經在等電話時就是鍵盤的「查詢」）
-        .dockSelection(.page("members", primary: POSAction("查會員", icon: "magnifying-glass") { armToken += 1 }))
+        // 沒選人的時候：右欄最下面的大鍵是「查會員」（鍵盤已經在等電話時就是鍵盤的「查詢」，上面有「用相機掃會員條碼」）；
+        // 鍵盤沒在等的時候（手機往下滑收起來了）：「掃會員條碼」在這一頁的動作裡
+        .dockSelection(.page("members", primary: POSAction("查會員", icon: "magnifying-glass") { armToken += 1 },
+                             actions: [POSAction("掃會員條碼", icon: "qr-code") { model.requestScan(.memberProfile) }]))
         .task(id: armToken) { await searchLoop() }
         .task { await preselectForScreenshot() }
         .onAppear { restore() }
         .onDisappear { releaseKeypad() }
+        // 掃到會員卡（沒有單、或會員頁的相機）：打開那一位（POSModel+Scan）
+        .onChange(of: model.memberRequest?.token) { _, _ in takeMemberRequest() }
     }
 
     // MARK: - 上面（只有標題：查會員是右欄的大鍵）
@@ -215,8 +219,19 @@ struct MembersView: View {
         select(nil)
     }
 
-    /// 結帳（儲值、買卡）時這頁會換成付款畫面；回來時打開剛剛那一位（重新向後台查）
+    /// 掃到的會員卡（POSModel.memberRequest）：打開那一位
+    private func takeMemberRequest() {
+        guard let f = model.memberRequest else { return }
+        model.memberRequest = nil
+        select(f)
+    }
+
+    /// 結帳（儲值、買卡）時這頁會換成付款畫面；回來時打開剛剛那一位（重新向後台查）。剛掃到會員卡的先開那一位
     private func restore() {
+        if model.memberRequest != nil {
+            takeMemberRequest()
+            return
+        }
         guard focus == nil, let f = MembersMemory.focus(store: memoryKey) else { return }
         focus = MembersFocus(phone: f.phone, ref: f.ref)
     }

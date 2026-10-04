@@ -58,8 +58,9 @@ struct PrinterConfig: Codable, Identifiable, Hashable {
     var peripheralId: String?
     var peripheralName: String?
     var paper: PaperWidth = .mm80
-    /// big5（台灣的機器多半是這個）、utf8、raster（全部畫成圖：不挑機器的字型，最慢）
-    var encoding: String = "big5"
+    /// 列印方式：auto（新的出單機：照後台的單據樣式，預設畫成圖片）、raster（圖片）、big5／utf8（文字：出單機自己的字型）。
+    /// 之前選好的 big5、utf8 照舊；自動遇到後台設成文字時用 Big5
+    var encoding: String = "auto"
     var roles: Set<PrinterRole> = [.receipt]
     /// 廚房出單只印這幾站（空的＝全部）
     var stations: [String] = []
@@ -86,6 +87,11 @@ final class PrinterHub {
     }
     var status: [String: PrinterHealth] = [:]
     var recent: [PrintJob] = []
+    /// 單據樣式（開機資料的 printStyle；PrintComposer.swift）與它的圖
+    var style = PrintStyle.standard
+    let assets = PrintAssets()
+    /// 每台出單機排隊：前一張送完才送下一張（圖片要先在背景打網點，後印的不能先送到）
+    @ObservationIgnored private var tails: [String: Task<Void, Never>] = [:]
 
     private static let key = "printers"
 
@@ -124,24 +130,19 @@ final class PrinterHub {
             return
         }
         for p in list {
-            let bytes: [UInt8]
-            if p.encoding == "raster" {
-                guard let image = ReceiptRaster.render(r, width: p.paper) else { continue }
-                var e = ESCPOS()
-                e.initialize()
-                e.raster(image)
-                e.cut()
-                bytes = e.bytes
+            // 圖片（預設）：照單據樣式畫成圖；文字：出單機自己的字型
+            if mode(of: p) == .image {
+                printImage(r, to: p, title: title)
             } else {
-                bytes = ReceiptRenderer.escpos(r, width: p.paper, encode: Self.encoder(p))
+                send(ReceiptRenderer.escpos(r, width: p.paper, encode: Self.encoder(p)), to: p, title: title, receipt: r)
             }
-            send(bytes, to: p, title: title, receipt: r)
         }
     }
 
-    /// 證明聯：畫成點陣圖（兩個 QR Code 左右並排、5.7 公分寬），後面接交易明細（文字）
+    /// 證明聯：畫成點陣圖（兩個 QR Code 左右並排、5.7 公分寬；財政部的格式，只吃單據樣式的字型、不疊圖），
+    /// 後面接交易明細（圖片模式照單據樣式畫，文字模式印文字）
     func printInvoice(_ proof: InvoiceProof, detail: SaleRecord?, store: StoreProfile) {
-        let image = InvoiceProofRaster.render(proof)
+        let image = InvoiceProofRaster.render(proof, font: style.font)
         var list = targets(.invoice)
         if list.isEmpty { list = targets(.receipt) }
         guard !list.isEmpty, let image else {
@@ -149,21 +150,25 @@ final class PrinterHub {
                               image: InvoiceProofRaster.preview(proof), printer: nil, error: list.isEmpty ? nil : "證明聯畫不出來"))
             return
         }
+        let title = "證明聯 \(proof.numberLabel)"
+        let receipt = detail.map { Templates.saleReceipt($0, store: store) }
         for p in list {
             var e = ESCPOS()
             e.initialize()
             e.align(.center)
             e.raster(image)
             e.feed(1)
-            if let detail {
-                let receipt = Templates.saleReceipt(detail, store: store)
-                let tail = ReceiptRenderer.escpos(receipt, width: p.paper, encode: Self.encoder(p))
-                e.cut()
-                e.raw(tail)
+            e.cut()
+            let head = e.bytes
+            if let receipt, mode(of: p) == .image, let layers = PrintComposer.layers(receipt, style: style, paper: p.paper, assets: assets) {
+                deliver(to: p, title: title, receipt: nil) {
+                    let bitmap = await PrintComposer.dither(layers)
+                    return PrintPayload(bytes: head + ReceiptRenderer.raster(receipt, image: bitmap), preview: PrintComposer.image(bitmap))
+                }
             } else {
-                e.cut()
+                let tail = receipt.map { ReceiptRenderer.escpos($0, width: p.paper, encode: Self.encoder(p)) } ?? []
+                send(head + tail, to: p, title: title, receipt: nil)
             }
-            send(e.bytes, to: p, title: "證明聯 \(proof.numberLabel)", receipt: nil)
         }
     }
 
@@ -214,39 +219,47 @@ final class PrinterHub {
         r.add(.row("名稱", p.name, .body))
         r.add(.row("連線", p.connection == .network ? "\(p.host):\(p.port)" : "藍牙 \(p.peripheralName ?? "")", .body))
         r.add(.row("紙寬", p.paper.label, .body))
+        r.add(.row("列印方式", PrintMethod.label(p.encoding, style: style), .body))
         r.add(.row("中文", "珍珠奶茶・雞排・鹹酥雞", .body))
         r.add(.row("金額", "1,280", .big))
         r.add(.cut)
-        let bytes: [UInt8]
-        if p.encoding == "raster", let img = ReceiptRaster.render(r, width: p.paper) {
-            var e = ESCPOS()
-            e.initialize()
-            e.raster(img)
-            e.cut()
-            bytes = e.bytes
+        if mode(of: p) == .image {
+            printImage(r, to: p, title: "測試")
         } else {
-            bytes = ReceiptRenderer.escpos(r, width: p.paper, encode: Self.encoder(p))
+            send(ReceiptRenderer.escpos(r, width: p.paper, encode: Self.encoder(p)), to: p, title: "測試", receipt: r)
         }
-        send(bytes, to: p, title: "測試", receipt: r)
     }
 
     private func send(_ bytes: [UInt8], to p: PrinterConfig, title: String, receipt: Receipt?, image: UIImage? = nil) {
+        deliver(to: p, title: title, receipt: receipt, image: image) { PrintPayload(bytes: bytes) }
+    }
+
+    /// 送到一台出單機。同一台照順序：前一張送完才送下一張；make 輪到它才跑（圖片模式在這裡等背景的網點算好）
+    func deliver(to p: PrinterConfig, title: String, receipt: Receipt?, image: UIImage? = nil,
+                 make: @escaping @MainActor () async -> PrintPayload?) {
         let host = p.host, port = p.port, name = p.name, id = p.id
         let connection = p.connection, peripheral = p.peripheralId
-        Task {
+        let previous = tails[id]
+        tails[id] = Task {
+            await previous?.value
+            guard let payload = await make() else {
+                remember(PrintJob(title: title, receipt: receipt, image: image, printer: name, error: "畫不出來"))
+                return
+            }
+            let shown = payload.preview ?? image
             do {
                 switch connection {
                 case .network:
-                    try await RawSocket.send(bytes, host: host, port: port)
+                    try await RawSocket.send(payload.bytes, host: host, port: port)
                 case .bluetooth:
                     guard let peripheral else { throw BLEError.notFound }
-                    try await BluetoothPrinters.shared.send(bytes, to: peripheral)
+                    try await BluetoothPrinters.shared.send(payload.bytes, to: peripheral)
                 }
                 status[id] = PrinterHealth(name: name, ok: true)
-                remember(PrintJob(title: title, receipt: receipt, image: image, printer: name, error: nil))
+                remember(PrintJob(title: title, receipt: receipt, image: shown, printer: name, error: nil))
             } catch {
                 status[id] = PrinterHealth(name: name, ok: false, message: error.localizedDescription)
-                remember(PrintJob(title: title, receipt: receipt, image: image, printer: name, error: "印不出來：\(error.localizedDescription)"))
+                remember(PrintJob(title: title, receipt: receipt, image: shown, printer: name, error: "印不出來：\(error.localizedDescription)"))
             }
         }
     }
@@ -384,8 +397,9 @@ enum Raster {
 enum InvoiceProofRaster {
     static let width = 384
 
-    static func render(_ proof: InvoiceProof) -> Bitmap? {
-        Raster.bitmap(InvoiceProofTicket(proof: proof), width: width)
+    /// font：單據樣式的字型（證明聯只吃這個，不疊圖）
+    static func render(_ proof: InvoiceProof, font: PrintFont = .sans) -> Bitmap? {
+        Raster.bitmap(InvoiceProofTicket(proof: proof, design: font.design), width: width)
     }
 
     /// 畫面上的預覽（沒有出單機時）
@@ -399,26 +413,27 @@ enum InvoiceProofRaster {
 /// 證明聯的版面（財政部的格式：店名、電子發票證明聯、期別、號碼、日期時間、隨機碼與總計、賣方買方、一維條碼、兩個 QR Code）
 struct InvoiceProofTicket: View {
     let proof: InvoiceProof
+    var design: Font.Design = .default
 
     var body: some View {
         VStack(spacing: 2) {
             Text(proof.storeName)
-                .font(.system(size: 24, weight: .bold))
+                .font(.system(size: 24, weight: .bold, design: design))
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
             Text(proof.heading)
-                .font(.system(size: 30, weight: .heavy))
+                .font(.system(size: 30, weight: .heavy, design: design))
             Text(proof.periodLabel)
-                .font(.system(size: 32, weight: .heavy))
+                .font(.system(size: 32, weight: .heavy, design: design))
             Text(proof.numberLabel)
-                .font(.system(size: 32, weight: .heavy))
+                .font(.system(size: 32, weight: .heavy, design: design))
                 .monospacedDigit()
             Group {
                 row(proof.dateTime, proof.formatCode ?? "")
                 row(proof.randomCode, proof.total)
                 row(proof.seller, proof.buyer ?? "")
             }
-            .font(.system(size: 17, weight: .medium))
+            .font(.system(size: 17, weight: .medium, design: design))
             .monospacedDigit()
             Canvas { ctx, size in
                 let bars = Code39.row(proof.barcode, narrow: 1, ratio: 3)
@@ -462,20 +477,18 @@ struct InvoiceProofTicket: View {
     }
 }
 
-/// 收據畫成圖（raster 模式的出單機、畫面上的預覽）
-enum ReceiptRaster {
-    static func render(_ r: Receipt, width: PaperWidth) -> Bitmap? {
-        Raster.bitmap(ReceiptPaper(receipt: r, paper: width, forPrint: true), width: width.dots)
-    }
-}
-
-/// 一張單據的樣子（印的時候黑白、畫面上用品牌字）
+/// 一張單據的樣子（印的時候黑白、畫面上用品牌字）。圖片模式印的時候外面再包一層單據樣式（PrintComposer.swift 的 PrintedSlip）
 struct ReceiptPaper: View {
     let receipt: Receipt
     var paper: PaperWidth = .mm80
     var forPrint = false
+    /// 單據樣式的字型（printStyle.font）、大小（scale）；heavy：整張加粗（廚房單）
+    var design: Font.Design = .default
+    var scale: CGFloat = 1
+    var heavy = false
 
-    private var base: CGFloat { forPrint ? (paper == .mm58 ? 18 : 22) : 13 }
+    /// 印的時候：24 點的字（和出單機的文字模式一樣：58 mm 一行 16 個中文字、80 mm 24 個）× 單據樣式的大小
+    private var base: CGFloat { (forPrint ? 24 : 13) * scale }
 
     var body: some View {
         VStack(alignment: .leading, spacing: forPrint ? 3 : 4) {
@@ -484,7 +497,8 @@ struct ReceiptPaper: View {
             }
         }
         .foregroundStyle(forPrint ? Color.black : Theme.ink)
-        .padding(forPrint ? 8 : 18)
+        // 印的時候不留左右邊（滿版：和文字模式一樣寬）；上下留白由 PrintedSlip 管
+        .padding(forPrint ? 0 : 18)
     }
 
     @ViewBuilder
@@ -492,7 +506,7 @@ struct ReceiptPaper: View {
         switch b {
         case .text(let s, let st):
             Text(s)
-                .font(.system(size: base * (st.scale > 1 ? 1.45 : 1), weight: st.bold ? .bold : .regular))
+                .font(font(base * factor(st.scale, screen: 1.45), bold: st.bold))
                 .frame(maxWidth: .infinity, alignment: st.align == .center ? .center : st.align == .right ? .trailing : .leading)
                 .padding(.vertical, st.invert ? 2 : 0)
                 .background(st.invert ? (forPrint ? Color.black : Theme.ink) : .clear)
@@ -503,10 +517,10 @@ struct ReceiptPaper: View {
                 Spacer(minLength: 8)
                 Text(r).monospacedDigit()
             }
-            .font(.system(size: base * (st.scale > 1 ? 1.35 : 1), weight: st.bold ? .bold : .regular))
+            .font(font(base * factor(st.scale, screen: 1.35), bold: st.bold))
         case .detail(let s):
             Text(s)
-                .font(.system(size: base * 0.88))
+                .font(font(base * (forPrint ? 1 : 0.88), bold: false))
                 .foregroundStyle(forPrint ? Color.black : Theme.muted)
                 .padding(.leading, base)
         case .rule:
@@ -530,5 +544,15 @@ struct ReceiptPaper: View {
         case .drawer, .beep, .cut:
             EmptyView()
         }
+    }
+
+    private func font(_ size: CGFloat, bold: Bool) -> Font {
+        let weight: Font.Weight = bold ? (heavy ? .heavy : .bold) : (heavy ? .semibold : .regular)
+        return .system(size: size, weight: weight, design: design)
+    }
+
+    /// 文字模式的放大（ReceiptStyle.scale）→ 畫多大：印的時候和出單機一樣（2 倍字＝2×、取餐號碼 3×）；畫面上的預覽小一點
+    private func factor(_ s: Int, screen: CGFloat) -> CGFloat {
+        forPrint ? CGFloat(max(s, 1)) : (s > 1 ? screen : 1)
     }
 }

@@ -1,6 +1,7 @@
 import Foundation
 import POSCore
 import POSInvoice
+import POSPrinting
 
 // iPad ↔ 後台（atelier-cms 的「門市 POS」服務插件）的資料格式。和 docs/API.md 一一對應，改這裡就要改那裡。
 // 金額一律是整數「分」；時間一律是 ISO 8601（UTC、毫秒）；JSON 的 key 是 camelCase。
@@ -101,8 +102,9 @@ public struct PairResponse: Codable, Sendable, Hashable {
 // MARK: - 開機資料
 
 public struct DeviceProfile: Codable, Sendable, Hashable {
-    public init(id: String, name: String, code: String, role: DeviceRole, stations: [String]) {
+    public init(id: String, name: String, code: String, role: DeviceRole, stations: [String], personal: Bool? = nil, staffId: String? = nil) {
         self.id = id; self.name = name; self.code = code; self.role = role; self.stations = stations
+        self.personal = personal; self.staffId = staffId
     }
 
     public var id: String
@@ -111,6 +113,9 @@ public struct DeviceProfile: Codable, Sendable, Hashable {
     public var role: DeviceRole
     /// 廚房螢幕只看哪些出單站（空的＝全部）
     public var stations: [String]
+    /// 個人的裝置（用 StudioX 帳號登入、綁著 staffId 那位；ConsoleAuth.swift）。沒給＝店裡共用的
+    public var personal: Bool?
+    public var staffId: String?
 }
 
 /// 同一家店的 iPad 在同一個 Wi-Fi 上互相同步（斷網也能看到別台點的單）：訊息用這把金鑰簽章
@@ -125,10 +130,12 @@ public struct MeshConfig: Codable, Sendable, Hashable {
 /// GET {cms}/api/pos/v1/bootstrap：開機、每 5 分鐘、收到「設定改了」時重抓。帶 If-None-Match: <version> 沒變回 304
 public struct Bootstrap: Codable, Sendable, Hashable {
     public init(version: String, serverTime: Date, device: DeviceProfile, store: StoreProfile, features: FeatureFlags, catalog: Catalog,
-                floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig, queue: QueueConfig? = nil) {
+                floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig, queue: QueueConfig? = nil,
+                printStyle: PrintStyle? = nil) {
         self.version = version; self.serverTime = serverTime; self.device = device; self.store = store; self.features = features
         self.catalog = catalog; self.floor = floor; self.staff = staff; self.invoice = invoice; self.mesh = mesh
         self.queue = queue
+        self.printStyle = printStyle
     }
 
     public var version: String
@@ -143,6 +150,8 @@ public struct Bootstrap: Codable, Sendable, Hashable {
     public var mesh: MeshConfig
     /// 叫號（號碼牌）的設定；features.queue 關著、或舊版後台沒有時是 nil
     public var queue: QueueConfig?
+    /// 單據樣式（POSPrinting/PrintStyle.swift）：先畫成圖片再印、疊店家的圖；沒給＝預設（圖片、不疊圖）。讀的時候很寬鬆，壞掉的樣式不會讓開機資料讀不進來
+    public var printStyle: PrintStyle?
 }
 
 // MARK: - 事件
@@ -283,6 +292,119 @@ public struct MemberCreate: Codable, Sendable {
     public var phone: String
     public var name: String?
     public init(phone: String, name: String?) { self.phone = phone; self.name = name }
+}
+
+// MARK: - 折價券（門市）
+
+/// 折價券的種類。`free_shipping`（免運）不能在門市用；不認得的種類照樣讀得進來（後台會給 problem）
+public enum CouponType: Codable, Sendable, Hashable {
+    /// 折固定金額（value 是分：NT$100＝10000）
+    case fixed
+    /// 打折（value 是萬分比：9 折＝1000）
+    case percentage
+    /// 免運、或之後新增的種類
+    case other(String)
+
+    public var rawValue: String {
+        switch self {
+        case .fixed: "fixed"
+        case .percentage: "percentage"
+        case .other(let s): s
+        }
+    }
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "fixed": self = .fixed
+        case "percentage": self = .percentage
+        default: self = .other(rawValue)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
+/// 一張折價券（和網路商店同一份；後台「折價券」）
+public struct Coupon: Codable, Sendable, Hashable {
+    /// 大寫英數（YG-A3B2C1）
+    public var code: String
+    /// 「新會員 100 元」
+    public var name: String
+    public var description: String?
+    public var type: CouponType
+    /// fixed：分；percentage：萬分比
+    public var value: Int
+    /// 最低消費（小計，分）；沒有＝不限
+    public var minimumOrder: Money?
+    public var expiresAt: Date?
+    /// 還能用幾次（沒有＝不限）
+    public var usesLeft: Int?
+
+    public init(code: String, name: String, description: String? = nil, type: CouponType, value: Int, minimumOrder: Money? = nil,
+                expiresAt: Date? = nil, usesLeft: Int? = nil) {
+        self.code = code; self.name = name; self.description = description; self.type = type; self.value = value
+        self.minimumOrder = minimumOrder; self.expiresAt = expiresAt; self.usesLeft = usesLeft
+    }
+
+    /// 畫面、收據上的名字：「新會員 100 元」（沒取名字的用代碼）
+    public var displayName: String {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.isEmpty ? code : n
+    }
+
+    /// 整單折扣的原因：「折價券 新會員 100 元」
+    public var reason: String { "折價券 \(displayName)" }
+
+    /// 套到單子上的整單折扣（帶著代碼與最低消費）；免運、不認得的種類是 nil（門市不能用）
+    public var discount: Discount? {
+        let min = (minimumOrder?.cents ?? 0) > 0 ? minimumOrder : nil
+        switch type {
+        case .fixed:
+            guard value > 0 else { return nil }
+            return Discount(kind: .amount, value: value, reason: reason, couponCode: code, minimumOrder: min)
+        case .percentage:
+            guard value > 0, value <= 10_000 else { return nil }
+            return Discount(kind: .percent, value: value, reason: reason, couponCode: code, minimumOrder: min)
+        case .other:
+            return nil
+        }
+    }
+}
+
+/// GET {cms}/api/pos/v1/coupons/:code?subtotal=12000&memberId=…：
+/// `problem` 是不能用的原因（給店員看的一句：「已經過期（10/1）」「未達最低消費 NT$500」）；null＝可以用。
+/// 沒有這張券是 404 not_found（POSClient.coupon 回 nil）
+public struct CouponLookup: Codable, Sendable, Hashable {
+    public var coupon: Coupon
+    public var problem: String?
+
+    public init(coupon: Coupon, problem: String? = nil) {
+        self.coupon = coupon
+        self.problem = problem
+    }
+
+    enum CodingKeys: String, CodingKey { case coupon, problem }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        coupon = try c.decode(Coupon.self, forKey: .coupon)
+        let p = try c.decodeIfPresent(String.self, forKey: .problem)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        problem = (p?.isEmpty ?? true) ? nil : p
+    }
+
+    /// 和 docs/API.md 的範例一樣：可以用的時候也寫 `"problem": null`
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(coupon, forKey: .coupon)
+        try c.encode(problem, forKey: .problem)
+    }
 }
 
 // MARK: - 訂位與候位

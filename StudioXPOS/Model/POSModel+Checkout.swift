@@ -19,6 +19,8 @@ extension POSModel {
             return
         }
         keypad.cancel()
+        // 折價券：改了品項、小計低於最低消費的，結帳前拿掉（提示說一聲；單子上之前已經提醒過）
+        dropCouponBelowMinimum(t)
         selectedTicketId = t.id
         checkoutTicketId = t.id
         if ![.order, .floor, .orders, .appointments, .checkIn, .members].contains(section) { section = .order }

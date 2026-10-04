@@ -12,9 +12,13 @@ import UIKit
 /// 把這台的出單機換成虛擬出單機（tools/escpos-emulator，在同一台 Mac 上；模擬器和 Mac 共用網路，所以 127.0.0.1 連得到），
 /// 走和店裡一模一樣的網路列印（TCP 9100），照順序印一輪；虛擬出單機把收到的指令畫成圖片：
 ///
-///   9100：58 mm、Big5（收據、證明聯、號碼牌、錢櫃）
-///   9101：80 mm、Big5（廚房）
-///   9102：80 mm、點陣圖模式（收據：整張畫成圖再送）
+///   9100：58 mm、文字 Big5（收據、證明聯、號碼牌、錢櫃）＋一張圖片模式的取餐單（黃毛丫頭的單據樣式）
+///   9101：80 mm、文字 Big5（廚房）
+///   9102：80 mm、列印方式「自動」＝圖片（收據、結帳單照晨麥手作的單據樣式）＋黃毛丫頭樣式的取餐單、圖片的廚房單
+///
+/// 文字（9100、9101）和圖片（9102）的同一張單都留著，對照看。
+/// 示範店是晨麥手作（-demo cafe：有內用、結帳單、發票證明聯，每種單據都印得到）；它的單據樣式只有麥穗店標與店家的字，
+/// 所以另外用黃毛丫頭的單據樣式（店標、圓點底圖、印章、頁尾）印取餐單，底圖網點、貼圖、字旁邊挖白都看得到。
 enum PrinterLab {
     static var started = false
 }
@@ -29,9 +33,10 @@ extension POSModel {
         p58.roles = [.receipt, .invoice, .queue]; p58.hasDrawer = true
         var p80 = PrinterConfig(name: "虛擬 80（廚房）")
         p80.host = host; p80.port = 9101; p80.paper = .mm80; p80.encoding = "big5"; p80.roles = [.kitchen]
-        var r80 = PrinterConfig(name: "虛擬 80 點陣圖（收據）")
-        r80.host = host; r80.port = 9102; r80.paper = .mm80; r80.encoding = "raster"; r80.roles = [.receipt]
+        var r80 = PrinterConfig(name: "虛擬 80 圖片（收據）")
+        r80.host = host; r80.port = 9102; r80.paper = .mm80; r80.encoding = "auto"; r80.roles = [.receipt]
         printers.printers = [p58, p80, r80]
+        let small = p58, wide = r80
 
         Task { @MainActor in
             func step(_ label: String, _ run: () -> Void) async {
@@ -41,6 +46,10 @@ extension POSModel {
                 try? await Task.sleep(for: .milliseconds(1500))
             }
             try? await Task.sleep(for: .seconds(2))
+            // 單據樣式的圖（示範的在 iPad 上畫）先準備好：晨麥手作的、黃毛丫頭的（只有這裡用，不清掉晨麥的）
+            let yellowgirl = DemoPrintArt.yellowgirlStyle
+            await printers.assets.sync(printers.style)
+            await printers.assets.sync(yellowgirl, prune: false)
             for p in printers.printers {
                 await step("測試頁 \(p.name)") { printers.test(p, store: store) }
             }
@@ -68,6 +77,17 @@ extension POSModel {
                 printers.printQueueTicket(QueueTicket(layout: layout, number: 129, waiting: 8, link: link, storeName: store.name, at: Date(),
                                                       background: Self.labTicketBackground()))
             }
+            // 圖片模式：黃毛丫頭的單據樣式，58 與 80 各一張取餐單；80 再一張圖片的廚房單（和 9101 的文字版對照）
+            let yg = DemoStore.yellowgirlBootstrap(now: Date())
+            let pickup = PrintStyleSamples.receipt(.pickup, store: yg.store, items: yg.catalog.items)
+            await step("取餐單（黃毛丫頭的單據樣式）58") { printers.printImage(pickup, to: small, title: "取餐單（圖片）", style: yellowgirl) }
+            await step("取餐單（黃毛丫頭的單據樣式）80") { printers.printImage(pickup, to: wide, title: "取餐單（圖片）", style: yellowgirl) }
+            if let t = state.openTickets.first(where: { !$0.activeLines.isEmpty }) {
+                let kitchen = Templates.kitchenTicket(t, lines: t.activeLines, station: nil, mode: .new, floor: floor, at: Date())
+                await step("廚房單（圖片）\(t.number)") { printers.printImage(kitchen, to: wide, title: "廚房單（圖片）") }
+            }
+            // 圖片要在背景打網點：等最後一張送出去
+            try? await Task.sleep(for: .seconds(2))
             await step("開錢櫃") { printers.openDrawer() }
             print("PrinterLab: done")
         }

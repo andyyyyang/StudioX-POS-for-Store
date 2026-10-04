@@ -39,7 +39,11 @@ public enum ReceiptBlock: Sendable, Hashable {
 
 public struct Receipt: Sendable, Hashable {
     public var blocks: [ReceiptBlock]
-    public init(_ blocks: [ReceiptBlock] = []) { self.blocks = blocks }
+    /// 哪一種單據（圖片模式照 printStyle.docs 的樣式疊圖）；nil＝交班單、退款單、測試頁：不疊圖
+    public var doc: PrintDoc?
+    /// 店名、地址、電話是 blocks 的哪幾個：圖片模式的店標畫在它上面、店家自己的字（headerLines）接在它下面
+    public var storeHeader: Range<Int>?
+    public init(_ blocks: [ReceiptBlock] = [], doc: PrintDoc? = nil) { self.blocks = blocks; self.doc = doc }
 
     public mutating func add(_ b: ReceiptBlock) { blocks.append(b) }
     public mutating func add(_ bs: [ReceiptBlock]) { blocks += bs }

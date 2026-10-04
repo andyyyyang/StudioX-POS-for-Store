@@ -184,7 +184,7 @@ struct DemoStore {
         yellowgirl = today
         past = DemoHistory(base: bootstrap, regulars: DemoHistory.regulars(members, catalog: bootstrap.catalog))
         api = DemoAPI(bootstrap: bootstrap, reservations: reservations, members: members, classes: classes, history: past,
-                      queue: today.map { DemoQueue(yellowgirl: $0, now: now) })
+                      queue: today.map { DemoQueue(yellowgirl: $0, now: now) }, coupons: Self.coupons(kind: kind, now: now))
     }
 
     /// 昨天的單（照後台歷史）＋今天已經發生的事（開班、打卡、結帳的單、正在服務的、報到）
@@ -219,6 +219,27 @@ struct DemoStore {
         kind == .fitness ? Self.fitnessClasses(now: createdAt) : []
     }
 
+    /// 示範的門市折價券（DemoAPI.coupon；掃碼或在折扣面板打代碼）：
+    ///   WELCOME100  新會員 100 元（滿 NT$300）      VIP10   VIP 9 折
+    ///   EXPIRED     已經過期（9/30）                 ONLINE  只能在網路商店用
+    ///   黃毛丫頭多一張 YG-A3B2C1（新會員 50 元）
+    static func coupons(kind: DemoKind, now: Date) -> [String: DemoCoupon] {
+        let month = now.addingTimeInterval(30 * 86_400)
+        var list = [
+            DemoCoupon(coupon: Coupon(code: "WELCOME100", name: "新會員 100 元", description: "加入會員送的，門市與網路商店都能用", type: .fixed, value: 10_000,
+                                      minimumOrder: Money(dollars: 300), expiresAt: month, usesLeft: 1)),
+            DemoCoupon(coupon: Coupon(code: "VIP10", name: "VIP 9 折", description: "金卡會員每次都能用", type: .percentage, value: 1000)),
+            DemoCoupon(coupon: Coupon(code: "EXPIRED", name: "中秋節 50 元", type: .fixed, value: 5000, expiresAt: now.addingTimeInterval(-4 * 86_400)),
+                       problem: "已經過期（9/30）"),
+            DemoCoupon(coupon: Coupon(code: "ONLINE", name: "網路限定 8 折", type: .percentage, value: 2000), problem: "只能在網路商店用"),
+        ]
+        if kind == .yellowgirl {
+            list.append(DemoCoupon(coupon: Coupon(code: "YG-A3B2C1", name: "新會員 50 元", description: "黃毛丫頭網站加入會員送的", type: .fixed, value: 5000,
+                                                  expiresAt: month, usesLeft: 1)))
+        }
+        return Dictionary(list.map { ($0.coupon.code, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
     // MARK: - 晨麥手作（餐廳咖啡）
 
     static func cafeBootstrap(now: Date) -> Bootstrap {
@@ -251,7 +272,9 @@ struct DemoStore {
             invoice: invoice,
             mesh: MeshConfig(key: String(repeating: "5d", count: 32), enabled: false),
             // 號碼存在示範的「後台」（DemoQueue）；號碼牌用 iPad 的預設版面（沒有背景圖）
-            queue: QueueConfig(mode: DemoQueue.mode, customerUrl: "https://chenmai.example.tw/q?no={number}&waiting={waiting}", ticket: QueueTicketLayout())
+            queue: QueueConfig(mode: DemoQueue.mode, customerUrl: "https://chenmai.example.tw/q?no={number}&waiting={waiting}", ticket: QueueTicketLayout()),
+            // 單據樣式：麥穗店標＋店家自己的字（圖在 iPad 上畫：DemoPrintArt）
+            printStyle: DemoPrintArt.cafeStyle
         )
     }
 
@@ -534,10 +557,12 @@ actor DemoAPI: POSAPI {
     private var pastDays: [String: DayHistory] = [:]
     /// 叫號（後台開了才有）：號碼存在這裡，每 20 秒左右有人自己取號
     private var line: DemoQueue?
+    /// 門市折價券（代碼 → 券）
+    private let coupons: [String: DemoCoupon]
 
     /// queue：這家示範的叫號一打開的樣子（黃毛丫頭的號碼對著今天的單）；沒給是晨麥手作那一套
     init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil,
-         queue: DemoQueue? = nil) {
+         queue: DemoQueue? = nil, coupons: [String: DemoCoupon] = [:]) {
         base = bootstrap
         self.reservations = Dictionary(reservations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.members = Dictionary(members.map { ($0.phone, $0) }, uniquingKeysWith: { first, _ in first })
@@ -545,6 +570,7 @@ actor DemoAPI: POSAPI {
         today = TaipeiTime.businessDate(bootstrap.serverTime, cutoffHour: bootstrap.store.businessDayCutoffHour)
         past = history
         line = bootstrap.features.queue ? (queue ?? DemoQueue(now: bootstrap.serverTime)) : nil
+        self.coupons = coupons
     }
 
     func bootstrap(ifNoneMatch version: String?) async throws -> Bootstrap {
@@ -708,6 +734,18 @@ actor DemoAPI: POSAPI {
         var s = q.state(now: now)
         s.numbers = numbers
         return s
+    }
+
+    // MARK: 折價券
+
+    /// 和後台一樣：不能用的給原因（過期、只能網路用、未達最低消費）；沒有這張＝nil（404）
+    func coupon(code: String, subtotal: Money, memberId: String?) async throws -> CouponLookup? {
+        guard let c = coupons[code.uppercased()] else { return nil }
+        if let problem = c.problem { return CouponLookup(coupon: c.coupon, problem: problem) }
+        if let minimum = c.coupon.minimumOrder, minimum.cents > 0, subtotal < minimum {
+            return CouponLookup(coupon: c.coupon, problem: "未達最低消費 \(minimum.formatted)")
+        }
+        return CouponLookup(coupon: c.coupon)
     }
 
     // MARK: 課表
@@ -958,4 +996,10 @@ nonisolated struct SeededRandom: Sendable {
         }
         return list.last?.0
     }
+}
+
+/// 示範後台的一張折價券（不能用的帶原因）
+nonisolated struct DemoCoupon: Sendable {
+    var coupon: Coupon
+    var problem: String? = nil
 }
