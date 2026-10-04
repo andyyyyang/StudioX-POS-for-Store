@@ -556,14 +556,7 @@ private struct SettingsModeSection: View {
         return m
     }
 
-    private func icon(_ m: ServiceMode) -> String {
-        switch m {
-        case .tableService: "table-cells"
-        case .counter: "shopping-bag"
-        case .retail: "tag"
-        case .cafe: "cake"
-        }
-    }
+    private func icon(_ m: ServiceMode) -> String { m.icon }
 }
 
 private struct SettingsModeOption: View {
