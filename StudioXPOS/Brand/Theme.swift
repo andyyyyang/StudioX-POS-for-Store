@@ -1,4 +1,7 @@
 import POSCore
+import POSInvoice
+import POSPrinting
+import POSSync
 import SwiftUI
 import UIKit
 

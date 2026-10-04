@@ -1,5 +1,6 @@
 import Foundation
 import POSCore
+import POSInvoice
 import POSPrinting
 import POSSync
 

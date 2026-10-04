@@ -1,5 +1,8 @@
 import Observation
 import POSCore
+import POSInvoice
+import POSPrinting
+import POSSync
 import SwiftUI
 
 /// 右側固定鍵盤現在在做什麼。

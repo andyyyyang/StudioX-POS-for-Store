@@ -1,4 +1,7 @@
 import POSCore
+import POSInvoice
+import POSPrinting
+import POSSync
 import SwiftUI
 
 /// 右側固定鍵盤（畫面最右邊那一欄）。

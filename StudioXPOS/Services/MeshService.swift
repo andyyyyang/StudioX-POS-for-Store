@@ -3,6 +3,8 @@ import Foundation
 import Network
 import Observation
 import POSCore
+import POSInvoice
+import POSPrinting
 import POSSync
 
 /// 同一家店的 iPad 在同一個 Wi-Fi 上直接互傳事件（不經過網際網路）。
