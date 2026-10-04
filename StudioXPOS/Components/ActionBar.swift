@@ -11,15 +11,15 @@ import SwiftUI
 //   清單、卡片上不要每一列都擺一排按鈕：點一下選起來，動作出現在同一個固定的地方（動作列、卡片旁邊的面板）。
 
 /// 一個動作：按鈕的字、圖示（Heroicons 的名字）、做什麼
-struct POSAction: Identifiable {
+nonisolated struct POSAction: Identifiable {
     var id: String { title }
     var title: String
     var icon: String?
     var isDestructive: Bool
     var isEnabled: Bool
-    var perform: () -> Void
+    var perform: @MainActor () -> Void
 
-    init(_ title: String, icon: String? = nil, destructive: Bool = false, enabled: Bool = true, perform: @escaping () -> Void) {
+    init(_ title: String, icon: String? = nil, destructive: Bool = false, enabled: Bool = true, perform: @escaping @MainActor () -> Void) {
         self.title = title
         self.icon = icon
         self.isDestructive = destructive

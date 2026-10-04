@@ -14,8 +14,9 @@ import SwiftUI
 ///   │ 人員│                        │ [送單][結帳]│ …        │
 ///   └────┴──────────────────────┴────────────┴──────────┘
 ///
-/// 直的 iPad（寬度不夠四欄）：單子收進右上角的按鈕，點了用面板打開；右側鍵盤照樣固定在最右邊。
-/// 不用打數字的視窗（`.dockPanel`）蓋在右側鍵盤那一欄，要打數字時自動讓開。
+/// 直的 iPad（寬度不夠四欄）：單子收進右下角的按鈕，點了用面板打開；右側鍵盤照樣固定在最右邊。
+/// 左邊選、右邊做：選起來的那一筆（`.dockSelection`）的動作都在右欄，和數字鍵在一起；
+/// 不用打數字的選擇（`.dockPanel`）蓋住右欄，要打數字時自動讓開。
 struct MainShell: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -45,19 +46,23 @@ struct MainShell: View {
                         .frame(width: wide ? Metric.ticketColumn : Metric.ticketColumnNarrow)
                         .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
-                KeypadDock(idleActions: idleActions)
+                // 右欄的位置；真正的右欄畫在下面的 overlayPreferenceValue 裡（才拿得到各畫面交上來的選取與面板）
+                Theme.dock
+                    .ignoresSafeArea()
                     .frame(width: wide ? Metric.dock : Metric.dockNarrow)
             }
-            .overlay(alignment: .topTrailing) {
+            // 直的 iPad：單子收在工作區右下角（放右上會擋到頁首的切換）
+            .overlay(alignment: .bottomTrailing) {
                 if !roomy && showsTicket && !showTicketSheet {
                     Button {
                         showTicketSheet = true
                     } label: {
                         Label("單子 \(model.selectedTicket?.itemCount ?? 0)", systemImage: "list.bullet.rectangle")
                     }
-                    .buttonStyle(.brand(.primary, size: .md))
-                    .padding(.trailing, Metric.dockNarrow + 16)
-                    .padding(.top, 12)
+                    .buttonStyle(.brand(.primary, size: .lg))
+                    .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
+                    .padding(.trailing, Metric.dockNarrow + 20)
+                    .padding(.bottom, 20)
                 }
             }
             // 直的 iPad：單子從右邊滑出來、停在右側鍵盤的左邊（不用 sheet：sheet 會蓋住鍵盤，單子裡的數量、改價就打不了）
@@ -95,9 +100,10 @@ struct MainShell: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            // 不用打數字的視窗（入座選桌、選服務、退款的選項…）蓋在右側鍵盤那一欄；要打數字時讓開（見 DockPanel.swift）
-            .overlayPreferenceValue(DockPanelKey.self, alignment: .trailing) { item in
-                DockPanelHost(item: item, asking: keypad.isAsking)
+            // 右欄：左邊選起來的那一筆＋它的動作、數字鍵、蓋住整欄的面板（見 Keypad/Dock.swift）。
+            // 放在兩個 overlay 後面：直的 iPad 滑出來的單子交上來的選取也收得到
+            .overlayPreferenceValue(DockKey.self, alignment: .trailing) { content in
+                KeypadDock(idleActions: idleActions, content: content)
                     .frame(width: wide ? Metric.dock : Metric.dockNarrow)
             }
             .onChange(of: showsTicket) { _, v in if !v { showTicketSheet = false } }

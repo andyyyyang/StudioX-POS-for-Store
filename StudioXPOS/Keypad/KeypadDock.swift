@@ -4,25 +4,31 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 右側固定鍵盤（畫面最右邊那一欄）。
+/// 右側固定鍵盤（畫面最右邊那一欄）：左邊選、右邊做。
 ///
 ///   ┌────────────────────┐
-///   │ 收現金          ×  │  題目＋小字（應收 NT$1,280）
-///   │                    │
-///   │      NT$ 1,500     │  大字顯示（PIN 是圓點、統編四碼一組）
-///   │  ✓ 統一編號正確     │  規則：對了打勾、錯了紅字搖一下
-///   │ 找零 NT$220        │  這一刻最需要的（DockContext：找零、熟客、熱賣、桌況…）
+///   │ 桌位            ×  │  選起來的那一筆（.dockSelection）：卡片＋動作鍵
+///   │ A2・4 位・32 分     │  沒選東西：這一刻最需要的資訊（DockContext：熱賣、桌況、接下來的預約…）
+///   │ [換桌]   [併桌]    │
+///   │ 收現金          ×  │  題目：要打數字時才出現，緊貼在鍵的上面
+///   │      NT$ 1,500     │  大字（PIN 是圓點、統編四碼一組）＋規則（對了打勾、錯了紅字搖一下）
 ///   │ [剛好][1,300][1,500]│  快速鍵
 ///   │  1    2    3       │
-///   │  4    5    6       │  鍵位永遠一樣
+///   │  4    5    6       │  鍵位永遠一樣、位置永遠不動
 ///   │  7    8    9       │
 ///   │  00   0    ⌫       │
-///   │ [      收款      ] │  確認（品牌橘）
+///   │ [      收款      ] │  最下面那顆大鍵＝下一步：問數字時確認；選了東西時是它的主要動作
 ///   └────────────────────┘
+///
+/// 不用打數字的選擇（.dockPanel）蓋住整欄；要打數字時讓開，打完再回來。
 struct KeypadDock: View {
     @Environment(KeypadController.self) private var keypad
     /// 待機時的兩個動作（點餐畫面：「品號」查品項；其他畫面沒有）
     var idleActions: IdleActions? = nil
+    /// 畫面交上來的：選起來的那一筆、蓋住整欄的面板（MainShell 收集）
+    var content = DockContent()
+    /// 題目右上的「取消」。鎖定、配對畫面的鍵盤一直在等 PIN／配對碼，取消沒有意義
+    var showsCancel = true
 
     struct IdleActions {
         var lookup: (String) -> Void
@@ -32,24 +38,14 @@ struct KeypadDock: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.bottom, 18)
-            display
-            // 上面空出來的地方：跟著現在在做的事（找零、熟客、熱賣、桌況、接下來的預約…）
-            DockContext()
-                .padding(.top, 18)
-                .padding(.bottom, 12)
-            quickKeys
-                .padding(.bottom, 12)
-            keys
-            actions
-                .padding(.top, 12)
+        ZStack {
+            column
+            if let panel = content.panel, !keypad.isAsking {
+                DockPanelChrome(item: panel)
+                    .id(panel.id)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
-        .padding(20)
-        .frame(maxHeight: .infinity)
-        .background(Theme.dock.ignoresSafeArea())
-        .overlay(alignment: .leading) { Rule(vertical: true) }
         .sensoryFeedback(.selection, trigger: keypad.keyTick)
         .sensoryFeedback(.error, trigger: keypad.errorTick)
         .sensoryFeedback(.success, trigger: keypad.successTick)
@@ -61,6 +57,59 @@ struct KeypadDock: View {
             }
         }
         .animation(Motion.fast, value: keypad.request?.id)
+        .animation(Motion.fast, value: content.selection?.id)
+        .animation(Motion.spring, value: content.panel?.id)
+        .animation(Motion.fast, value: showsQuestion)
+    }
+
+    private var column: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            top
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            if showsQuestion {
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                        .padding(.bottom, 14)
+                    display
+                }
+                .padding(.top, 16)
+                .transition(.opacity)
+            }
+            quickKeys
+            keys
+                .padding(.top, 12)
+            bottomKey
+                .padding(.top, 12)
+        }
+        .padding(20)
+        .frame(maxHeight: .infinity)
+        .background(Theme.dock.ignoresSafeArea())
+        .overlay(alignment: .leading) { Rule(vertical: true) }
+    }
+
+    // MARK: 上面：選起來的那一筆／正在打數字時的幫手／待機的資訊
+
+    @ViewBuilder
+    private var top: some View {
+        if !keypad.isAsking, let s = content.selection, s.isItem {
+            ScrollView {
+                DockSelectionView(selection: s, takesEscape: content.panel == nil)
+            }
+            .scrollIndicators(.hidden)
+        } else if !keypad.isAsking, let s = content.selection, !s.actions.isEmpty {
+            // 這一頁沒選東西時的動作（新增訂位…）在上面，下面照樣是這一刻的資訊
+            VStack(alignment: .leading, spacing: 18) {
+                DockActionKeys(actions: s.actions)
+                DockContext()
+            }
+        } else {
+            DockContext()
+        }
+    }
+
+    /// 題目與大字：問數字時、點餐畫面待機（數量・品號）、或待機時打了數字才出現
+    private var showsQuestion: Bool {
+        keypad.isAsking || idleActions != nil || !keypad.idle.digits.isEmpty
     }
 
     // MARK: 題目
@@ -76,7 +125,7 @@ struct KeypadDock: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            if keypad.isAsking {
+            if keypad.isAsking && showsCancel {
                 Button {
                     keypad.cancel()
                 } label: {
@@ -198,6 +247,7 @@ struct KeypadDock: View {
                     .buttonStyle(QuickKeyStyle(prominent: q.commits))
                 }
             }
+            .padding(.top, 14)
         }
     }
 
@@ -249,10 +299,10 @@ struct KeypadDock: View {
         }
     }
 
-    // MARK: 確認
+    // MARK: 最下面那顆大鍵：下一步
 
     @ViewBuilder
-    private var actions: some View {
+    private var bottomKey: some View {
         if let r = keypad.request {
             Button {
                 keypad.commit()
@@ -263,6 +313,19 @@ struct KeypadDock: View {
             .buttonStyle(.brand(.accent, size: .lg, fullWidth: true, arrow: true))
             .opacity(r.entry.canCommit ? 1 : 0.55)
             .keyboardShortcut(.defaultAction)
+        } else if let s = content.selection, let p = s.primary, idleActions == nil || keypad.idle.digits.isEmpty {
+            Button(action: p.perform) {
+                HStack(spacing: 8) {
+                    if let icon = p.icon { HeroIcon(icon, size: 17) }
+                    Text(p.title)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.brand(p.isDestructive ? .danger : (s.accent ? .accent : .primary), size: .lg, fullWidth: true, arrow: true))
+            .disabled(!p.isEnabled)
+            .id(s.id)
         } else if let idleActions {
             HStack(spacing: 8) {
                 Button("清除") { keypad.clearIdle() }
@@ -275,7 +338,11 @@ struct KeypadDock: View {
                 .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
                 .disabled(keypad.idle.digits.isEmpty)
             }
+        } else if !keypad.idle.digits.isEmpty {
+            Button("清除") { keypad.clearIdle() }
+                .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
         } else {
+            // 鍵的位置不動：大鍵那一格空著也留著
             Color.clear.frame(height: BrandButtonStyle.Size.lg.height)
         }
     }

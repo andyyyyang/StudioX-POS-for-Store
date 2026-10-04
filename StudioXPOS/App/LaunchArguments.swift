@@ -13,6 +13,7 @@ import UIKit
 ///   -section <頁>                        登入後打開這一頁（AppSection 的 rawValue：order、floor、appointments、checkIn…）
 ///   -landscape                           請系統轉成橫的（iPad 收銀台的樣子）
 ///   -serviceMode <模式>、-workstation <崗位>   UserDefaults 的參數網域會直接蓋過這台的設定
+///   -preselect                           打開的那一頁先選起第一筆（截右欄「選起來之後」的樣子）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -22,6 +23,15 @@ enum LaunchArguments {
     }
 
     static func has(_ key: String) -> Bool { ProcessInfo.processInfo.arguments.contains(key) }
+
+    /// 截圖用：頁面出現時先選起第一筆（只在 Debug）。各頁在 .onAppear／.task 裡看這個
+    static var preselect: Bool {
+        #if DEBUG
+        has("-preselect")
+        #else
+        false
+        #endif
+    }
 }
 
 extension POSModel {

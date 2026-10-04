@@ -1,5 +1,5 @@
 # UI 截圖：在 GitHub 的 Mac 上用 iPad 模擬器打開四家示範店（餐廳咖啡、服飾、美業、健身）的每個畫面，
-# 截圖縮小後提交回這個分支的 docs/screenshots/（也放在這次執行的 artifact）。
+# 截圖縮小後提交回這個分支的 docs/screenshots/（深色）與 docs/screenshots/light/（淺色），也放在這次執行的 artifact。
 # 提交訊息有 [screenshots] 才跑（Mac 的分鐘數比較貴），也可以手動 Run workflow。
 # 和 StudioX Console App 的 ui-screenshots.yml 同一套做法。
 name: UI 截圖
@@ -23,7 +23,7 @@ jobs:
       group: ui-screenshots-${{ github.ref }}
       cancel-in-progress: true
     runs-on: macos-26
-    timeout-minutes: 50
+    timeout-minutes: 62
     steps:
       - uses: actions/checkout@v5
 
@@ -68,7 +68,7 @@ jobs:
           PY
 
       - name: 截圖
-        timeout-minutes: 32
+        timeout-minutes: 44
         continue-on-error: true
         run: |
           app="build/Build/Products/Debug-iphonesimulator/StudioXPOS.app"
@@ -101,6 +101,28 @@ jobs:
             "41-fitness-members|-demo fitness $L -section members"
             "42-fitness-order|-demo fitness $L -section order"
             "43-fitness-dashboard|-demo fitness $L -section dashboard"
+            # 選起來之後：動作都在右欄（-preselect：每頁先選起第一筆）
+            "50-cafe-floor-selected|-demo cafe $L -section floor -preselect"
+            "51-cafe-reservation-selected|-demo cafe $L -section reservations -preselect"
+            "52-cafe-order-line|-demo cafe $L -section order -preselect"
+            "53-cafe-kitchen-selected|-demo cafe $L -section kitchen -preselect"
+            "54-apparel-sale-selected|-demo apparel $L -section orders -preselect"
+            "55-salon-appointment-selected|-demo salon $L -section appointments -preselect"
+            "56-salon-member-selected|-demo salon $L -section members -preselect"
+            "57-fitness-checkin-selected|-demo fitness $L -section checkIn -preselect"
+          )
+          # 淺色再拍一輪（外觀預設跟著 iPad）
+          light=(
+            "01-cafe-lock|-demo cafe -landscape"
+            "02-cafe-floor|-demo cafe $L -section floor"
+            "03-cafe-order|-demo cafe $L -section order"
+            "07-cafe-reservations|-demo cafe $L -section reservations"
+            "21-apparel-orders|-demo apparel $L -section orders"
+            "30-salon-appointments|-demo salon $L -section appointments"
+            "32-salon-members|-demo salon $L -section members"
+            "40-fitness-checkin|-demo fitness $L -section checkIn"
+            "50-cafe-floor-selected|-demo cafe $L -section floor -preselect"
+            "56-salon-member-selected|-demo salon $L -section members -preselect"
           )
           limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
           dev="$IPAD"
@@ -115,17 +137,23 @@ jobs:
           limit 20 osascript -e 'tell application "Simulator" to activate' -e 'delay 1' \
             -e 'tell application "System Events" to key code 123 using {command down}' || echo "   轉不了，照直的截"
           sleep 4
-          for scene in "${scenes[@]}"; do
+          shoot() {  # 一張：名稱|啟動參數|等幾秒 → shots/<資料夾>/<名稱>.png
+            local dir="$1" scene="$2"
             IFS='|' read -r name args wait <<< "$scene"
-            echo "-- $name $(date +%T)"
+            echo "-- $dir$name $(date +%T)"
             limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
             # 每張都重新安裝：示範模式的資料、這台的設定都從乾淨的開始
             limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
             limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
             limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
             sleep "${wait:-7}"
-            limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
-          done
+            limit 30 xcrun simctl io "$dev" screenshot "shots/$dir$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
+          }
+          for scene in "${scenes[@]}"; do shoot "" "$scene"; done
+          mkdir -p shots/light
+          limit 30 xcrun simctl ui "$dev" appearance light || true
+          sleep 2
+          for scene in "${light[@]}"; do shoot "light/" "$scene"; done
           limit 60 xcrun simctl shutdown "$dev" || true
           ls shots | wc -l
 
@@ -141,10 +169,12 @@ jobs:
         if: always()
         run: |
           ls shots/*.png >/dev/null 2>&1 || { echo "沒有截到"; exit 0; }
-          mkdir -p docs/screenshots
-          rm -f docs/screenshots/*.jpg
-          for f in shots/*.png; do
-            sips -Z 1600 -s format jpeg -s formatOptions 72 "$f" --out "docs/screenshots/$(basename "${f%.png}").jpg" >/dev/null
+          mkdir -p docs/screenshots/light
+          rm -f docs/screenshots/*.jpg docs/screenshots/light/*.jpg
+          for f in shots/*.png shots/light/*.png; do
+            [ -f "$f" ] || continue
+            out="docs/screenshots/${f#shots/}"
+            sips -Z 1600 -s format jpeg -s formatOptions 72 "$f" --out "${out%.png}.jpg" >/dev/null
           done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
