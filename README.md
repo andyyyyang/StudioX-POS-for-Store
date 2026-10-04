@@ -57,6 +57,25 @@ open StudioXPOS.xcodeproj
 | `cd Packages/POSKit && swift test` | 核心邏輯的測試（Linux、macOS 都能跑；GitHub Actions 的 `poskit.yml` 每次推上來跑） |
 | `.github/workflows/ios.yml` | 每次推上來在 GitHub 的 Mac 上編一次 App（模擬器、不簽章），錯誤列在 Actions 的摘要 |
 
+## TestFlight
+
+推到 `claude/pos-foundation` 或 `main`（App 的檔案有改）就自動出一版 TestFlight（`.github/workflows/testflight.yml`）：
+GitHub 的 Mac 用 App Store Connect API 金鑰自己簽章（這一次專用的憑證與描述檔，用完就撤銷）、封存、上傳，
+等 Apple 處理好後把最近的提交寫成「測試內容」、交給內部測試群組「StudioX 團隊」並寄邀請。和 StudioX Console App 同一套，**可以用同一把金鑰**。
+
+**第一次設定**（只有這幾步要在網頁上做）：
+1. GitHub 這個 repo → Settings → Secrets and variables → Actions → New repository secret，新增四個（和 StudioX Console App 的一樣）：
+   `ASC_KEY_ID`、`ASC_ISSUER_ID`、`ASC_PRIVATE_KEY`（`.p8` 整段）、`APPLE_TEAM_ID`；要邀請別人再加 `TESTFLIGHT_TESTERS`（逗號隔開的 `姓名 <email>`）
+2. Actions → TestFlight → Run workflow 跑一次：它會註冊 App ID `tw.studiox.pos`，然後停下來說「App Store Connect 上還沒有這個 App」
+3. App Store Connect → App →「＋」新增 App：平台 iOS、名稱 **StudioX POS**、主要語言 繁體中文、套件 ID 選 `tw.studiox.pos`、SKU `studiox-pos`
+   （Apple 不讓 API 建 App，這一步只能在網頁上做）
+4. 回 Actions 重跑。之後每次推上來，十幾分鐘後 iPad 上的 TestFlight 就有新版
+
+- 版號用 UTC 時間（`2610041530`＝26/10/04 15:30），版本改 `MARKETING_VERSION`
+- Secrets 還沒設定時整個流程跳過，不會失敗；這個 repo 是公開的，Mac 的分鐘數不另外計費
+- TestFlight 版一樣有「先看看示範」（四家示範店），不用後台也能試
+- 上架需要的已經準備好：`ITSAppUsesNonExemptEncryption = NO`、隱私清單 `StudioXPOS/PrivacyInfo.xcprivacy`、沒有透明度的 App 圖示
+
 ## 和後台配對
 
 1. 店家的後台（atelier-cms，開了 `pos` 模組；接 StudioX 的店家由 StudioX 在 console 開通「門市 POS」服務）

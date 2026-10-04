@@ -22,7 +22,5 @@
 			</array>
 		</dict>
 	</array>
-	<key>UIApplicationExitsOnSuspend</key>
-	<false/>
 </dict>
 </plist>

@@ -1,0 +1,254 @@
+# 推上來就出一版 TestFlight（iPad POS）：GitHub 的 Mac 用 App Store Connect API 金鑰自己簽章、封存、上傳，
+# 再寫好「測試內容」、交給內部測試群組。和 StudioX Console App 同一套做法、可以用同一把金鑰。金鑰放在 repo 的 Secrets（見 README「TestFlight」）：
+#   ASC_KEY_ID、ASC_ISSUER_ID、ASC_PRIVATE_KEY（.p8 的內容）、APPLE_TEAM_ID
+# 還沒設定 Secrets 時整個流程會跳過（不會失敗）。
+name: TestFlight
+
+on:
+  push:
+    branches:
+      - main
+      - claude/pos-foundation
+    paths:
+      - "StudioXPOS/**"
+      - "StudioXPOS.xcodeproj/**"
+      - "StudioXPOS-Info.plist"
+      - "StudioXPOS.entitlements"
+      - "Packages/POSKit/Sources/**"
+      - ".github/workflows/testflight.yml"
+      - "ci/**"
+  workflow_dispatch:
+
+# GitHub 給這個流程的 token 只能讀 repo（簽章、上傳用的是 App Store Connect 的金鑰，不需要 GitHub 的寫入權限）
+permissions:
+  contents: read
+
+# 一次出一版（排隊，不取消正在上傳的）
+concurrency:
+  group: testflight-pos
+  cancel-in-progress: false
+
+env:
+  BUNDLE_ID: tw.studiox.pos
+
+jobs:
+  # 便宜的 Linux 先檢查：Secrets 設好了沒、App ID 註冊了沒、App Store Connect 上有沒有這個 App
+  prepare:
+    # 提交訊息有 [invite only]：只重寄邀請（testflight-invite.yml），不建置
+    if: "!contains(github.event.head_commit.message, '[invite only]')"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+      app_id: ${{ steps.asc.outputs.app_id }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=""
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY APPLE_TEAM_ID; do
+            [ -n "$(printenv $name)" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "### ⏸ 還沒設定 TestFlight 用的 Secrets：$missing" >> "$GITHUB_STEP_SUMMARY"
+            echo "到 repo 的 Settings → Secrets and variables → Actions 新增（見 README「TestFlight」）。" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.check.outputs.ready == 'true'
+        run: pip install --quiet pyjwt cryptography
+      - id: asc
+        if: steps.check.outputs.ready == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: python3 ci/asc.py prepare
+
+  # Mac：這一次專用的憑證與描述檔、封存、上傳，結束就撤銷
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      build: ${{ steps.meta.outputs.build }}
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 選 Xcode（最新的）
+        run: |
+          best=""; bestv="0"
+          for app in /Applications/Xcode*.app; do
+            v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null) || continue
+            if [ "$v" != "$bestv" ] && [ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" = "$v" ]; then best="$app"; bestv="$v"; fi
+          done
+          sudo xcode-select -s "$best/Contents/Developer"
+          xcodebuild -version
+          # 最低系統照專案的設定（iPadOS 26.0），不跟著 SDK 調高
+          echo "DEPLOY_OVERRIDE=" >> "$GITHUB_ENV"
+          echo "- 用 Xcode $bestv 建置" >> "$GITHUB_STEP_SUMMARY"
+
+      - id: meta
+        name: 版本與版號
+        run: |
+          version=$(grep -m1 "MARKETING_VERSION = " StudioXPOS.xcodeproj/project.pbxproj | sed -E 's/.*= ([^;]+);/\1/')
+          build=$(date -u +%y%m%d%H%M)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "- 版本 $version（$build）" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 金鑰、工具、暫時的鑰匙圈
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys" "$RUNNER_TEMP/signing"
+          printf '%b\n' "$ASC_PRIVATE_KEY" > "$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8"
+          echo "KEY_PATH=$RUNNER_TEMP/keys/AuthKey_$ASC_KEY_ID.p8" >> "$GITHUB_ENV"
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet pyjwt cryptography
+          echo "PY=$RUNNER_TEMP/venv/bin/python" >> "$GITHUB_ENV"
+          # 簽章用的鑰匙圈：這一次的憑證與私鑰放這裡，結束就刪掉
+          pass=$(uuidgen)
+          echo "::add-mask::$pass"
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          security create-keychain -p "$pass" "$kc"
+          security set-keychain-settings -lut 7200 "$kc"
+          security unlock-keychain -p "$pass" "$kc"
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          echo "KEYCHAIN=$kc" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASS=$pass" >> "$GITHUB_ENV"
+          # Apple 的中繼憑證（簽章鏈要完整）
+          curl -sSfL https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer -o "$RUNNER_TEMP/wwdr.cer"
+          security import "$RUNNER_TEMP/wwdr.cer" -k "$kc" -T /usr/bin/codesign || true
+
+      - id: sign
+        name: 這一次專用的憑證與描述檔（App Store Connect API）
+        run: |
+          "$PY" ci/asc.py signing --dir "$RUNNER_TEMP/signing" --name "StudioX POS CI ${{ steps.meta.outputs.build }}"
+          security import "$RUNNER_TEMP/signing/signing.p12" -k "$KEYCHAIN" -P "$(cat "$RUNNER_TEMP/signing/signing.pass")" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN" >/dev/null
+          echo "PROFILE_NAME=StudioX POS CI ${{ steps.meta.outputs.build }}" >> "$GITHUB_ENV"
+          security find-identity -v -p codesigning "$KEYCHAIN" | sed 's/[0-9A-F]\{40\}/<sha1>/'
+
+      - name: 安裝描述檔
+        run: |
+          uuid="${{ steps.sign.outputs.profile_uuid }}"
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$RUNNER_TEMP/signing/profile.mobileprovision" "$dir/$uuid.mobileprovision"
+          done
+
+      - name: 封存
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project StudioXPOS.xcodeproj \
+            -scheme StudioXPOS \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/StudioXPOS.xcarchive" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            CODE_SIGN_ENTITLEMENTS="$RUNNER_TEMP/signing/appstore.entitlements" \
+            OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN" \
+            CURRENT_PROJECT_VERSION="${{ steps.meta.outputs.build }}" \
+            $DEPLOY_OVERRIDE \
+            2>&1 | tee "$RUNNER_TEMP/archive.log" | grep -E "error:|warning:|ARCHIVE (SUCCEEDED|FAILED)" || true
+          grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/archive.log"
+
+      - name: 上傳到 App Store Connect
+        run: |
+          set -o pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$APPLE_TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>Apple Distribution</string>
+            <key>provisioningProfiles</key>
+            <dict><key>$BUNDLE_ID</key><string>$PROFILE_NAME</string></dict>
+            <key>uploadSymbols</key><true/>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/StudioXPOS.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            2>&1 | tee "$RUNNER_TEMP/export.log" | grep -E "error|warning:|EXPORT (SUCCEEDED|FAILED)|[Uu]pload" || true
+          grep -q "EXPORT SUCCEEDED" "$RUNNER_TEMP/export.log"
+          echo "- 上傳好了，Apple 正在處理" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 撤銷這一次的憑證、刪掉描述檔
+        if: always() && steps.sign.outputs.cert_id != ''
+        run: '"$PY" ci/asc.py cleanup --cert "${{ steps.sign.outputs.cert_id }}" --profile "${{ steps.sign.outputs.profile_id }}"'
+
+      - name: 清掉金鑰與鑰匙圈
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/keys" "$RUNNER_TEMP/signing"
+          [ -n "$KEYCHAIN" ] && security delete-keychain "$KEYCHAIN" || true
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/${{ steps.sign.outputs.profile_uuid }}.mobileprovision" \
+                "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/${{ steps.sign.outputs.profile_uuid }}.mobileprovision"
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: testflight-logs
+          path: |
+            ${{ runner.temp }}/archive.log
+            ${{ runner.temp }}/export.log
+          retention-days: 7
+
+  # 回到 Linux：等 Apple 處理好、寫「測試內容」、交給內部測試群組、寄 TestFlight 邀請（等待的時間不花 Mac 的分鐘數）
+  finish:
+    needs: [prepare, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      # 選填：除了帳號持有人，還要寄邀請給誰（逗號隔開的 Email）
+      TESTFLIGHT_TESTERS: ${{ secrets.TESTFLIGHT_TESTERS }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 20
+      - run: pip install --quiet pyjwt cryptography
+      - name: 等 Apple 處理、寫測試內容、交給內部測試
+        run: |
+          {
+            echo "${{ needs.build.outputs.version }}（${{ needs.build.outputs.build }}）・${GITHUB_REF_NAME}"
+            echo
+            git log -8 --no-merges --pretty=format:'・%s'
+          } > notes.txt
+          python3 ci/asc.py finish \
+            --app "${{ needs.prepare.outputs.app_id }}" \
+            --version "${{ needs.build.outputs.version }}" \
+            --build "${{ needs.build.outputs.build }}" \
+            --notes notes.txt

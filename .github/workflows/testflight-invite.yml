@@ -1,0 +1,30 @@
+# 只寄 TestFlight 邀請（不建置）：App Store Connect 的帳號持有人，加上 Secrets 的 TESTFLIGHT_TESTERS（選填）。
+# Actions → TestFlight 邀請 → Run workflow 可以隨時重寄；只改邀請的提交加 [invite only] 就不會觸發建置。
+name: TestFlight 邀請
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/testflight-invite.yml"
+      - "ci/asc.py"
+
+permissions:
+  contents: read
+
+jobs:
+  invite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BUNDLE_ID: tw.studiox.pos
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+      TESTFLIGHT_TESTERS: ${{ secrets.TESTFLIGHT_TESTERS }}
+    steps:
+      - uses: actions/checkout@v5
+      - run: pip install --quiet pyjwt cryptography
+      - name: 加密名單用的公鑰（ci/testers.enc）
+        run: python3 ci/asc.py pubkey
+      - run: python3 ci/asc.py invite
