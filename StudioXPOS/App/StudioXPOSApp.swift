@@ -102,7 +102,14 @@ struct RootView: View {
         } message: { a in
             Text(a.message)
         }
-        .task { if model.phase == .launching { model.launch() } }
+        .task {
+            if model.phase == .launching { model.launch() }
+            model.requestLandscapeIfAsked()
+        }
+        .onChange(of: model.phase) { _, p in
+            // 截圖、自動測試：鎖定畫面一出現就照參數登入、開頁
+            if p == .locked { model.applyLaunchArguments() }
+        }
         .onChange(of: scenePhase) { _, p in
             if p == .active { model.touch() }
         }

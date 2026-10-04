@@ -1,0 +1,151 @@
+# UI 截圖：在 GitHub 的 Mac 上用 iPad 模擬器打開四家示範店（餐廳咖啡、服飾、美業、健身）的每個畫面，
+# 截圖縮小後提交回這個分支的 docs/screenshots/（也放在這次執行的 artifact）。
+# 提交訊息有 [screenshots] 才跑（Mac 的分鐘數比較貴），也可以手動 Run workflow。
+# 和 StudioX Console App 的 ui-screenshots.yml 同一套做法。
+name: UI 截圖
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "StudioXPOS/**"
+      - "StudioXPOS.xcodeproj/**"
+      - "Packages/POSKit/**"
+      - ".github/workflows/ui-screenshots.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  shots:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[screenshots]')
+    concurrency:
+      group: ui-screenshots-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 選 Xcode（最新的）
+        run: |
+          best=""; bestv="0"
+          for app in /Applications/Xcode*.app; do
+            v=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$app/Contents/Info.plist" 2>/dev/null) || continue
+            if [ "$v" != "$bestv" ] && [ "$(printf '%s\n%s\n' "$bestv" "$v" | sort -V | tail -1)" = "$v" ]; then best="$app"; bestv="$v"; fi
+          done
+          sudo xcode-select -s "$best/Contents/Developer"
+          xcodebuild -version
+          echo "SIM_SDK=$(xcrun --sdk iphonesimulator --show-sdk-version)" >> "$GITHUB_ENV"
+
+      - name: 編譯（模擬器、Debug：示範模式與啟動參數只在 Debug）
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project StudioXPOS.xcodeproj \
+            -scheme StudioXPOS \
+            -configuration Debug \
+            -destination "generic/platform=iOS Simulator" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            IPHONEOS_DEPLOYMENT_TARGET="$SIM_SDK" \
+            2>&1 | tee build.log | grep -E "error:|BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build.log
+
+      - name: 選 iPad 模擬器
+        run: |
+          xcrun simctl list devices available -j > devices.json
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, re
+          d = json.load(open("devices.json"))["devices"]
+          ios = sorted([k for k in d if "iOS" in k], key=lambda k: [int(x) for x in re.findall(r"\d+", k)])
+          devs = [x for k in reversed(ios) for x in d[k]]
+          for p in ["iPad Pro 13-inch (M5)", "iPad Pro 13-inch (M4)", "iPad Air 13-inch (M3)", "iPad Pro 11-inch (M4)"]:
+              hit = next((x for x in devs if x["name"] == p), None)
+              if hit: print("IPAD=" + hit["udid"]); break
+          else:
+              print("IPAD=" + next(x for x in devs if x["name"].startswith("iPad"))["udid"])
+          PY
+
+      - name: 截圖
+        timeout-minutes: 32
+        continue-on-error: true
+        run: |
+          app="build/Build/Products/Debug-iphonesimulator/StudioXPOS.app"
+          bundle=tw.studiox.pos
+          mkdir -p shots
+          L="-landscape -autologin 1234"
+          # 名稱|啟動參數|等幾秒（預設 7）
+          scenes=(
+            "00-pairing||6"
+            "01-cafe-lock|-demo cafe -landscape"
+            "02-cafe-floor|-demo cafe $L -section floor"
+            "03-cafe-order|-demo cafe $L -section order"
+            "04-cafe-orders|-demo cafe $L -section orders"
+            "05-cafe-kitchen|-demo cafe $L -section kitchen"
+            "06-cafe-dashboard|-demo cafe $L -section dashboard"
+            "07-cafe-reservations|-demo cafe $L -section reservations"
+            "08-cafe-shift|-demo cafe $L -section shift"
+            "09-cafe-settings|-demo cafe $L -section settings"
+            "10-counter-order|-demo cafe -serviceMode counter $L -section order"
+            "11-expo|-demo cafe -workstation expo $L"
+            "20-apparel-order|-demo apparel $L -section order"
+            "21-apparel-orders|-demo apparel $L -section orders"
+            "22-apparel-dashboard|-demo apparel $L -section dashboard"
+            "30-salon-appointments|-demo salon $L -section appointments"
+            "31-salon-order|-demo salon $L -section order"
+            "32-salon-members|-demo salon $L -section members"
+            "33-salon-dashboard|-demo salon $L -section dashboard"
+            "34-salon-reception|-demo salon -workstation reception $L"
+            "40-fitness-checkin|-demo fitness $L -section checkIn"
+            "41-fitness-members|-demo fitness $L -section members"
+            "42-fitness-order|-demo fitness $L -section order"
+            "43-fitness-dashboard|-demo fitness $L -section dashboard"
+          )
+          limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+          dev="$IPAD"
+          echo "== 開機 $(date +%T)"
+          limit 60 xcrun simctl boot "$dev" || true
+          limit 300 xcrun simctl bootstatus "$dev" -b || true
+          limit 30 xcrun simctl status_bar "$dev" override --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 || true
+          limit 30 xcrun simctl ui "$dev" appearance dark || true
+          for scene in "${scenes[@]}"; do
+            IFS='|' read -r name args wait <<< "$scene"
+            echo "-- $name $(date +%T)"
+            limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
+            # 每張都重新安裝：示範模式的資料、這台的設定都從乾淨的開始
+            limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
+            limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
+            limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
+            sleep "${wait:-7}"
+            limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
+          done
+          limit 60 xcrun simctl shutdown "$dev" || true
+          ls shots | wc -l
+
+      - name: 截圖放在這次執行（逾時也放）
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: screenshots
+          path: shots/
+          if-no-files-found: ignore
+
+      - name: 縮小、提交回分支
+        if: always()
+        run: |
+          ls shots/*.png >/dev/null 2>&1 || { echo "沒有截到"; exit 0; }
+          mkdir -p docs/screenshots
+          rm -f docs/screenshots/*.jpg
+          for f in shots/*.png; do
+            sips -Z 1600 -s format jpeg -s formatOptions 72 "$f" --out "docs/screenshots/$(basename "${f%.png}").jpg" >/dev/null
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/screenshots
+          if git diff --cached --quiet; then echo "沒有變更"; exit 0; fi
+          git commit -m "UI 截圖（自動）[skip ci]"
+          for i in 1 2 3; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && break
+            sleep 5
+          done
