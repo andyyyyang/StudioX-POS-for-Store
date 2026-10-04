@@ -236,8 +236,19 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 | `legacy` | 原本的叫號伺服器（`queue.legacyUrl`，例：`https://yellowgirl.up.railway.app`）；後台代轉，iPad 不直接連 | 照舊，不用改 |
 | `native` | 後台自己的資料庫（一次一筆、鎖住再改，不會互相覆蓋；每天 `resetHour` 點後第一次用到時歸零） | 樹莓派 `server_url.txt` 改成 `{CMS 前台}/api/pos/queue/status`、`qr_url.txt` 改成 `{前台}/q?no={number}&waiting={waiting}` |
 
-開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, printOnDevice, customerUrl }`（`printOnDevice`＝沒有樹莓派的店由 iPad 的出單機印號碼牌；
-`customerUrl` 是印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉）。
+開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, customerUrl, ticket }`：
+- `customerUrl`：印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉
+- `ticket`：號碼牌的版面（**iPad 直接印**，不用樹莓派）。座標都以 58 mm 的 384 點寬為準（80 mm 的機器等比放大），預設值和樹莓派原本印的一模一樣：
+
+```json
+{ "backgroundUrl": "https://…/queue-ticket-bg.jpg", "height": 640, "copies": 1,
+  "number": { "y": 140, "size": 90, "color": "white" },
+  "waiting": { "y": 290, "size": 20, "color": "black", "text": "目前 {waiting} 人等候中" },
+  "qr": { "size": 0.45, "bottom": 100 } }
+```
+  背景圖照比例裁滿 384×`height`（cover、置中）；號碼、等候人數水平置中；QR 寬度＝`size`×384、離底部 `bottom` 點。沒有背景圖時 iPad 用自己的預設版面。
+
+**誰印**：出單機的用途勾「號碼牌」的那台 iPad。在這台取號＝馬上印；另外可以打開「也印別台取的號碼」（取代樹莓派的出單：看到 `waiting` 多了沒印過的號碼就印，同一個營業日不重複，號碼從 1 重新開始時清掉紀錄）——一家店只開一台。
 
 ### `GET /queue` → 現在的狀態
 
