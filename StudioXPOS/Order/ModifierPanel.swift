@@ -1,4 +1,7 @@
 import POSCore
+import POSInvoice
+import POSPrinting
+import POSSync
 import SwiftUI
 
 /// 選甜度、冰塊、加料（在工作區裡打開、不是跳出來的視窗：右側鍵盤一樣可以用來改數量）

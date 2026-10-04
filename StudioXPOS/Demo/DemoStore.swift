@@ -1,6 +1,7 @@
 import Foundation
 import POSCore
 import POSInvoice
+import POSPrinting
 import POSSync
 
 /// 示範模式：虛構的「晨麥手作」（台南的咖啡、早午餐、甜點、麵包），不用配對、資料只在這次開著的時候。
@@ -16,6 +17,8 @@ struct DemoStore {
             enabled: true, sellerTaxId: "04595257", sellerName: "晨麥手作有限公司", sellerAddress: "台南市中西區民族路二段1號",
             qrKey: "6E8B2A1C4D5F70819A2B3C4D5E6F7081",
             rolls: [
+                // 示範的單往回 6 個多小時：剛換期的時候會落在上一期，所以上一期也給一段
+                InvoiceRoll(id: "demo-roll-0", period: period.previous.code, track: "XC", start: 2345600, end: 2345649),
                 InvoiceRoll(id: "demo-roll-1", period: period.code, track: "XD", start: 12345600, end: 12345699),
                 InvoiceRoll(id: "demo-roll-2", period: period.next.code, track: "XF", start: 22345600, end: 22345649),
             ]

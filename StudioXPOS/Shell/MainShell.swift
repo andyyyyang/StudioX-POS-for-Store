@@ -1,4 +1,6 @@
 import POSCore
+import POSInvoice
+import POSPrinting
 import POSSync
 import SwiftUI
 
@@ -81,6 +83,8 @@ struct MainShell: View {
         .focused($focused)
         .focusEffectDisabled()
         .onAppear { focused = true }
+        // 右側鍵盤一開始問數字，外接鍵盤、掃描器打的字就回到鍵盤（剛剛在搜尋框打字也一樣）
+        .onChange(of: keypad.request?.id) { _, _ in focused = true }
         .onKeyPress(phases: .down) { press in handle(press) }
         .simultaneousGesture(TapGesture().onEnded { model.touch() })
     }

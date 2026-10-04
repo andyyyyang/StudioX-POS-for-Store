@@ -204,8 +204,15 @@ final class PrinterHub {
     }
 
     static func encoder(_ p: PrinterConfig) -> @Sendable (String) -> [UInt8] {
-        p.encoding == "utf8" ? { Array($0.utf8) } : { PrinterHub.big5($0) }
+        if p.encoding == "utf8" {
+            let f: @Sendable (String) -> [UInt8] = { s in PrinterHub.utf8(s) }
+            return f
+        }
+        let f: @Sendable (String) -> [UInt8] = { s in PrinterHub.big5(s) }
+        return f
     }
+
+    nonisolated static func utf8(_ s: String) -> [UInt8] { Array(s.utf8) }
 
     /// Big5（台灣出單機的中文）；Big5 沒有的字變成「?」
     nonisolated static func big5(_ s: String) -> [UInt8] {
