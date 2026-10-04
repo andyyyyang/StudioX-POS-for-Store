@@ -48,7 +48,12 @@ struct TicketColumn: View {
         var isLine: Bool { [.performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse].contains(self) }
     }
 
+    // 一整串修飾太長，編譯器算不完型別：拆成三段（版面、跟著選取變的事、跳出來的視窗）
     var body: some View {
+        dialogs(lifecycle(layout))
+    }
+
+    private var layout: some View {
         Group {
             if let t = model.checkoutTicket ?? model.selectedTicket {
                 content(t)
@@ -65,95 +70,113 @@ struct TicketColumn: View {
         .dockPanel(item: $panel, title: { panelTitle($0) }, subtitle: { panelSubtitle($0) }) { p in
             panelContent(p)
         }
-        .onChange(of: model.selectedTicketId) { _, _ in
-            memberOpen = false
-            selectedLineId = nil
-            panel = nil
-        }
-        .onChange(of: model.checkoutTicketId) { _, _ in
-            selectedLineId = nil
-            panel = nil
-        }
-        .onChange(of: selectedLineId) { old, new in
-            if panel?.isLine == true { panel = nil }
-            openSwipeId = nil
-            phoneQuantity = false
-            // 不選這一行了（或換一行）：問它數量的鍵盤收起來；換一行的話馬上問新的那一行
-            if old != nil, keypad.keepsSelection { keypad.cancel() }
-        }
-        // 加了新的一行：焦點到新加的那一行，原本選起來的就不選了；選起來的那一行不見了（刪掉、作廢、別台改了）也不選了
-        .onChange(of: model.selectedTicket?.activeLines.count ?? 0) { old, new in
-            guard let id = selectedLineId else { return }
-            let stillThere = model.selectedTicket?.activeLines.contains(where: { $0.id == id }) ?? false
-            if new > old || !stillThere { selectedLineId = nil }
-        }
-        // 選了一行：右側鍵盤問它的數量（數量變了、跳視窗、別的題目來了：重新決定要不要問）
-        .task(id: quantityAsk) { await askQuantity() }
-        .onDisappear {
-            if selectedLineId != nil, keypad.keepsSelection { keypad.cancel() }
-        }
-        // 規格、加料的卡打開了：右欄換成那張卡，這一行就不選了
-        .onChange(of: model.variantItem?.id) { _, id in
-            if id != nil { selectedLineId = nil }
-        }
-        .onChange(of: model.modifierItem?.id) { _, id in
-            if id != nil { selectedLineId = nil }
-        }
-        // 截圖：先選起第一行（只在 Debug、帶 -preselect）
-        .task(id: model.selectedTicketId) {
-            if preselects && LaunchArguments.preselect { preselectForScreenshot() }
-        }
-        .sheet(item: $splitting) { t in
-            SplitSheet(ticket: t)
-        }
-        .sheet(isPresented: $scanning) {
-            CodeScannerSheet(title: "掃商品條碼", types: ScanKind.product) { code in
-                model.lookup(code: code)
+    }
+
+    /// 換單、換行、加料的卡打開了：選取跟著變；選了一行就問它的數量
+    private func lifecycle<V: View>(_ v: V) -> some View {
+        v
+            .onChange(of: model.selectedTicketId) { _, _ in
+                memberOpen = false
+                selectedLineId = nil
+                panel = nil
             }
-        }
-        .alert("自訂品項", isPresented: $askingCustom) {
-            TextField("品名（例如：開瓶費）", text: $customName)
-            Button("下一步：輸入金額") {
-                let name = customName.trimmingCharacters(in: .whitespaces)
-                customName = ""
-                guard !name.isEmpty else { return }
-                Task { await model.addCustom(name: name) }
+            .onChange(of: model.checkoutTicketId) { _, _ in
+                selectedLineId = nil
+                panel = nil
             }
-            Button("取消", role: .cancel) { customName = "" }
-        }
-        .alert("備註", isPresented: Binding(get: { noteFor != nil }, set: { if !$0 { noteFor = nil } })) {
-            TextField("例如：不要香菜", text: $noteText)
-            Button("好") {
-                if let l = noteFor, let t = model.selectedTicket { model.setNote(noteText, for: l, in: t) }
-                noteFor = nil
+            .onChange(of: selectedLineId) { old, new in
+                if panel?.isLine == true { panel = nil }
+                openSwipeId = nil
+                phoneQuantity = false
+                // 不選這一行了（或換一行）：問它數量的鍵盤收起來；換一行的話馬上問新的那一行
+                if old != nil, keypad.keepsSelection { keypad.cancel() }
             }
-            Button("取消", role: .cancel) { noteFor = nil }
-        }
-        .alert("整張單的備註", isPresented: $ticketNote) {
-            TextField("例如：有過敏、先上飲料", text: $noteText)
-            Button("好") {
-                if let t = model.selectedTicket { model.setTicketNote(noteText, for: t) }
+            // 加了新的一行：焦點到新加的那一行，原本選起來的就不選了；選起來的那一行不見了（刪掉、作廢、別台改了）也不選了
+            .onChange(of: model.selectedTicket?.activeLines.count ?? 0) { old, new in
+                guard let id = selectedLineId else { return }
+                let stillThere = model.selectedTicket?.activeLines.contains(where: { $0.id == id }) ?? false
+                if new > old || !stillThere { selectedLineId = nil }
             }
-            Button("取消", role: .cancel) {}
-        }
-        .confirmationDialog("為什麼不要了？", isPresented: Binding(get: { !voidReasonFor.isEmpty }, set: { if !$0 { voidReasonFor = [] } })) {
-            ForEach(["客人取消", "點錯", "出餐太慢", "餐點問題", "招待"], id: \.self) { reason in
-                Button(reason) {
-                    let lines = voidReasonFor
-                    voidReasonFor = []
-                    if let t = model.selectedTicket { Task { await model.void(lines, in: t, reason: reason) } }
+            // 選了一行：右側鍵盤問它的數量（數量變了、跳視窗、別的題目來了：重新決定要不要問）
+            .task(id: quantityAsk) { await askQuantity() }
+            .onDisappear {
+                if selectedLineId != nil, keypad.keepsSelection { keypad.cancel() }
+            }
+            // 規格、加料的卡打開了：右欄換成那張卡，這一行就不選了
+            .onChange(of: model.variantItem?.id) { _, id in
+                if id != nil { selectedLineId = nil }
+            }
+            .onChange(of: model.modifierItem?.id) { _, id in
+                if id != nil { selectedLineId = nil }
+            }
+            // 截圖：先選起第一行（只在 Debug、帶 -preselect）
+            .task(id: model.selectedTicketId) {
+                if preselects && LaunchArguments.preselect { preselectForScreenshot() }
+            }
+    }
+
+    /// 拆單、掃條碼、自訂品項、備註、作廢的原因
+    private func dialogs<V: View>(_ v: V) -> some View {
+        v
+            .sheet(item: $splitting) { t in
+                SplitSheet(ticket: t)
+            }
+            .sheet(isPresented: $scanning) {
+                CodeScannerSheet(title: "掃商品條碼", types: ScanKind.product) { code in
+                    model.lookup(code: code)
                 }
             }
-            Button("取消", role: .cancel) { voidReasonFor = [] }
-        }
-        .confirmationDialog("作廢整張單？", isPresented: $voidingTicket) {
-            ForEach(["客人離開", "開錯單", "測試"], id: \.self) { reason in
-                Button(reason, role: .destructive) {
-                    if let t = model.selectedTicket { Task { await model.voidTicket(t, reason: reason) } }
+            .alert("自訂品項", isPresented: $askingCustom) {
+                TextField("品名（例如：開瓶費）", text: $customName)
+                Button("下一步：輸入金額") {
+                    let name = customName.trimmingCharacters(in: .whitespaces)
+                    customName = ""
+                    guard !name.isEmpty else { return }
+                    Task { await model.addCustom(name: name) }
                 }
+                Button("取消", role: .cancel) { customName = "" }
             }
-            Button("取消", role: .cancel) {}
-        }
+            .alert("備註", isPresented: noteShown) {
+                TextField("例如：不要香菜", text: $noteText)
+                Button("好") {
+                    if let l = noteFor, let t = model.selectedTicket { model.setNote(noteText, for: l, in: t) }
+                    noteFor = nil
+                }
+                Button("取消", role: .cancel) { noteFor = nil }
+            }
+            .alert("整張單的備註", isPresented: $ticketNote) {
+                TextField("例如：有過敏、先上飲料", text: $noteText)
+                Button("好") {
+                    if let t = model.selectedTicket { model.setTicketNote(noteText, for: t) }
+                }
+                Button("取消", role: .cancel) {}
+            }
+            .confirmationDialog("為什麼不要了？", isPresented: voidReasonShown) {
+                ForEach(["客人取消", "點錯", "出餐太慢", "餐點問題", "招待"], id: \.self) { reason in
+                    Button(reason) {
+                        let lines = voidReasonFor
+                        voidReasonFor = []
+                        if let t = model.selectedTicket { Task { await model.void(lines, in: t, reason: reason) } }
+                    }
+                }
+                Button("取消", role: .cancel) { voidReasonFor = [] }
+            }
+            .confirmationDialog("作廢整張單？", isPresented: $voidingTicket) {
+                ForEach(["客人離開", "開錯單", "測試"], id: \.self) { reason in
+                    Button(reason, role: .destructive) {
+                        if let t = model.selectedTicket { Task { await model.voidTicket(t, reason: reason) } }
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            }
+    }
+
+    private var noteShown: Binding<Bool> {
+        Binding(get: { noteFor != nil }, set: { if !$0 { noteFor = nil } })
+    }
+
+    private var voidReasonShown: Binding<Bool> {
+        Binding(get: { !voidReasonFor.isEmpty }, set: { if !$0 { voidReasonFor = [] } })
     }
 
     /// 截圖用：點餐頁還沒有單 → 先打開一張有點東西的單；單子有東西就選起第一行（右欄是那一行的動作）
