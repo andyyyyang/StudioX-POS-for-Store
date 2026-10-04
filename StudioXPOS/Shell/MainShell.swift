@@ -252,91 +252,131 @@ struct MainShell: View {
     }
 }
 
-/// 最左邊的側欄
+/// 最左邊的側欄：上面是做生意的頁（點餐、桌位、叫號…），下面是管理的頁（報表、交班、設定）、時間、同步、換人。
+///
+/// 頁多、螢幕矮（11 吋、mini 橫放）時不擠成一團、也不被切掉：先把鍵變矮，還放不下就把用得少的頁收進「更多」
 struct SidebarRail: View {
     @Environment(POSModel.self) private var model
+    @State private var height: CGFloat = 1000
 
     var body: some View {
-        VStack(spacing: 6) {
+        let plan = RailPlan(sections: model.visibleSections, height: height, hasModeMenu: showsModeMenu)
+        VStack(spacing: 0) {
             BrandMark()
-                .frame(width: 26, height: 26)
+                .frame(width: 24, height: 24)
                 .foregroundStyle(Theme.ink)
-                .padding(.top, 18)
+                .padding(.top, 16)
                 .padding(.bottom, 8)
                 .accessibilityLabel("StudioX POS")
 
             // 營業模式（後台開了兩種以上才能切）
-            if model.store.serviceModes.count > 1 && !model.role.isKitchen {
-                Menu {
-                    ForEach(model.store.serviceModes, id: \.self) { m in
-                        Button {
-                            model.setMode(m)
-                        } label: {
-                            if m == model.mode {
-                                Label("\(m.label)・\(m.summary)", systemImage: "checkmark")
-                            } else {
-                                Text("\(m.label)・\(m.summary)")
-                            }
-                        }
+            if showsModeMenu {
+                modeMenu
+                    .padding(.bottom, 8)
+            }
+
+            VStack(spacing: plan.spacing) {
+                ForEach(plan.main) { s in
+                    RailButton(section: s, selected: model.section == s, badge: badge(for: s), compact: plan.compact) {
+                        model.go(s)
                     }
-                } label: {
-                    Text(model.mode.label)
-                        .font(.brand(10.5, .semibold))
-                        .foregroundStyle(Theme.accentText)
-                        .lineLimit(1)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 4)
-                        .background(Theme.accentSoft, in: .capsule)
-                }
-                .accessibilityLabel("營業模式：\(model.mode.label)")
-                .padding(.bottom, 10)
-            }
-
-            ForEach(model.visibleSections) { s in
-                RailButton(section: s, selected: model.section == s, badge: badge(for: s)) {
-                    model.go(s)
                 }
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 10)
 
-            // 上班中的人（點了換人＝鎖定、讓下一位打 PIN）
-            VStack(spacing: 8) {
-                Text("上班")
-                    .font(.brand(10.5, .medium))
-                    .foregroundStyle(Theme.faint)
-                ForEach(model.staff.filter { model.isClockedIn($0) }.prefix(5)) { s in
-                    StaffAvatar(name: s.name, swatch: s.swatch, size: 30, active: s.id == model.currentStaff?.id)
+            VStack(spacing: plan.spacing) {
+                ForEach(plan.tools) { s in
+                    RailButton(section: s, selected: model.section == s, badge: badge(for: s), compact: true) {
+                        model.go(s)
+                    }
+                }
+                if !plan.more.isEmpty {
+                    RailMore(sections: plan.more, current: model.section, badge: plan.more.reduce(0) { $0 + badge(for: $1) }) { s in
+                        model.go(s)
+                    }
                 }
             }
-            .padding(.bottom, 8)
+
+            Rule()
+                .frame(width: 36)
+                .padding(.vertical, 10)
 
             RailClock()
-                .padding(.bottom, 8)
 
             SyncDot(status: model.syncStatus, demo: model.isDemo)
-                .padding(.bottom, 6)
+                .padding(.top, 6)
 
-            Button {
-                model.lock()
-            } label: {
-                VStack(spacing: 4) {
-                    HeroIcon("lock-closed", size: 18)
-                    Text(model.currentStaff.map { String($0.name.prefix(6)) } ?? "鎖定")
-                        .font(.brand(10.5, .medium))
-                        .lineLimit(1)
-                }
-                .foregroundStyle(Theme.ink2)
-                .frame(width: 70, height: 52)
-            }
-            .buttonStyle(.row)
-            .padding(.bottom, 14)
-            .accessibilityLabel("鎖定（換人）")
+            staffButton
+                .padding(.top, 6)
+                .padding(.bottom, 12)
         }
         .frame(width: Metric.rail)
         .frame(maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { height = $0 })
+        .animation(Motion.fast, value: plan)
         .background(Theme.pageAlt.opacity(0.6).ignoresSafeArea())
         .overlay(alignment: .trailing) { Rule(vertical: true).ignoresSafeArea() }
+    }
+
+    private var showsModeMenu: Bool {
+        model.store.serviceModes.count > 1 && !model.role.isKitchen
+    }
+
+    private var modeMenu: some View {
+        Menu {
+            ForEach(model.store.serviceModes, id: \.self) { m in
+                Button {
+                    model.setMode(m)
+                } label: {
+                    if m == model.mode {
+                        Label("\(m.label)・\(m.summary)", systemImage: "checkmark")
+                    } else {
+                        Text("\(m.label)・\(m.summary)")
+                    }
+                }
+            }
+        } label: {
+            Text(model.mode.label)
+                .font(.brand(10.5, .semibold))
+                .foregroundStyle(Theme.accentText)
+                .lineLimit(1)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 4)
+                .background(Theme.accentSoft, in: .capsule)
+        }
+        .accessibilityLabel("營業模式：\(model.mode.label)")
+    }
+
+    /// 現在是誰（點了＝鎖定、讓下一位打 PIN）。上班中的其他人在「交班」看
+    private var staffButton: some View {
+        let onDuty = model.staff.filter { model.isClockedIn($0) }.count
+        return Button {
+            model.lock()
+        } label: {
+            VStack(spacing: 5) {
+                if let me = model.currentStaff {
+                    StaffAvatar(name: me.name, swatch: me.swatch, size: 28)
+                        .overlay(alignment: .bottomTrailing) {
+                            HeroIcon("lock-closed", size: 9)
+                                .foregroundStyle(Theme.ink2)
+                                .frame(width: 15, height: 15)
+                                .background(Theme.page, in: .circle)
+                                .offset(x: 4, y: 3)
+                        }
+                } else {
+                    HeroIcon("lock-closed", size: 18)
+                }
+                Text(model.currentStaff.map { String($0.name.prefix(6)) } ?? "鎖定")
+                    .font(.brand(10.5, .medium))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Theme.ink2)
+            .frame(width: 70, height: 52)
+        }
+        .buttonStyle(.row)
+        .accessibilityLabel("鎖定（換人）")
+        .accessibilityValue(onDuty > 0 ? "\(onDuty) 人上班" : "")
     }
 
     private func badge(for s: AppSection) -> Int {
@@ -351,6 +391,97 @@ struct SidebarRail: View {
         case .orders: model.awaitingCheckoutCount
         default: 0
         }
+    }
+}
+
+/// 側欄怎麼排：做生意的頁在上、管理的頁在下；放不下時鍵變矮，再放不下就把用得少的收進「更多」
+struct RailPlan: Equatable {
+    var main: [AppSection] = []
+    var tools: [AppSection] = []
+    var more: [AppSection] = []
+    var compact = false
+
+    var spacing: CGFloat { compact ? 2 : 4 }
+
+    /// 管理的頁（放在下面、矮一點的鍵）
+    static let toolSections: Set<AppSection> = [.dashboard, .shift, .settings]
+
+    /// 一般的鍵、矮的鍵（含間距）
+    static let regular: CGFloat = 64
+    static let small: CGFloat = 50
+
+    /// 固定佔掉的高度：標誌、間隔、分隔線、時間、同步、換人（再留一點餘裕）
+    static func fixed(hasModeMenu: Bool) -> CGFloat {
+        48 + (hasModeMenu ? 30 : 0) + 10 + 21 + 36 + 29 + 70 + 12
+    }
+
+    init(sections: [AppSection], height: CGFloat, hasModeMenu: Bool) {
+        let work = sections.filter { !Self.toolSections.contains($0) }
+        let tools = sections.filter { Self.toolSections.contains($0) }
+        let room = height - Self.fixed(hasModeMenu: hasModeMenu)
+        if CGFloat(work.count) * Self.regular + CGFloat(tools.count) * Self.small <= room {
+            main = work
+            self.tools = tools
+            return
+        }
+        compact = true
+        if CGFloat(sections.count) * Self.small <= room {
+            main = work
+            self.tools = tools
+            return
+        }
+        // 「更多」自己也佔一格；至少留兩頁在外面
+        let slots = max(Int(room / Self.small) - 1, 2)
+        let keep = Set(sections.enumerated()
+            .sorted { (Self.rank($0.element), $0.offset) < (Self.rank($1.element), $1.offset) }
+            .prefix(slots)
+            .map(\.element))
+        main = work.filter { keep.contains($0) }
+        self.tools = tools.filter { keep.contains($0) }
+        more = sections.filter { !keep.contains($0) }
+    }
+
+    /// 越常用越小：放不下時從大的開始收
+    static func rank(_ s: AppSection) -> Int {
+        switch s {
+        case .order, .floor, .kitchen, .checkIn, .appointments: 0
+        case .queue: 1
+        case .orders: 2
+        case .reservations: 3
+        case .members: 4
+        case .shift: 5
+        case .dashboard: 6
+        case .settings: 7
+        }
+    }
+}
+
+/// 「更多」：收起來的頁。正在看其中一頁時，這顆就換成那一頁的樣子（看得出現在在哪）
+struct RailMore: View {
+    let sections: [AppSection]
+    let current: AppSection
+    var badge: Int = 0
+    let go: (AppSection) -> Void
+
+    var body: some View {
+        let showing = sections.contains(current) ? current : nil
+        Menu {
+            ForEach(sections) { s in
+                Button {
+                    go(s)
+                } label: {
+                    if s == current {
+                        Label(s.label, systemImage: "checkmark")
+                    } else {
+                        Text(s.label)
+                    }
+                }
+            }
+        } label: {
+            RailButtonLabel(icon: showing?.icon ?? "ellipsis-horizontal", label: showing?.label ?? "更多",
+                            selected: showing != nil, badge: badge, compact: true)
+        }
+        .accessibilityLabel(showing.map { "更多（現在在\($0.label)）" } ?? "更多")
     }
 }
 
@@ -384,36 +515,52 @@ struct RailButton: View {
     let section: AppSection
     let selected: Bool
     var badge: Int = 0
+    /// 矮一點的鍵（管理的頁、螢幕放不下時）
+    var compact = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
-                HeroIcon(section.icon, size: 22)
-                Text(section.label)
-                    .font(.brand(11.5, selected ? .semibold : .medium))
-            }
-            .foregroundStyle(selected ? Theme.page : Theme.ink2)
-            .frame(width: 70, height: 60)
-            .background(selected ? Theme.ink : Color.clear, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
-            .overlay(alignment: .topTrailing) {
-                if badge > 0 {
-                    Text("\(badge)")
-                        .font(.brand(10.5, .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.onAccent)
-                        .padding(.horizontal, 5)
-                        .frame(minWidth: 18, minHeight: 18)
-                        .background(Theme.accent, in: .capsule)
-                        .offset(x: -4, y: 4)
-                }
-            }
-            .contentShape(.rect)
+            RailButtonLabel(icon: section.icon, label: section.label, selected: selected, badge: badge, compact: compact)
         }
         .buttonStyle(PressScale(scale: 0.96))
         .animation(Motion.fast, value: selected)
         .accessibilityLabel(section.label)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 側欄一顆鍵的樣子（圖示＋字、選起來反白、右上角的數字）
+struct RailButtonLabel: View {
+    let icon: String
+    let label: String
+    let selected: Bool
+    var badge: Int = 0
+    var compact = false
+
+    var body: some View {
+        VStack(spacing: compact ? 3 : 5) {
+            HeroIcon(icon, size: compact ? 19 : 22)
+            Text(label)
+                .font(.brand(compact ? 10.5 : 11.5, selected ? .semibold : .medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(selected ? Theme.page : Theme.ink2)
+        .frame(width: 70, height: compact ? 48 : 60)
+        .background(selected ? Theme.ink : Color.clear, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            if badge > 0 {
+                Text("\(badge)")
+                    .font(.brand(10.5, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.onAccent)
+                    .padding(.horizontal, 5)
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Theme.accent, in: .capsule)
+                    .offset(x: -4, y: compact ? 2 : 4)
+            }
+        }
+        .contentShape(.rect)
     }
 }
 
