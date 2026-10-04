@@ -11,6 +11,8 @@ struct MenuView: View {
     @Environment(KeypadController.self) private var keypad
     @State private var categoryId: String?
     @State private var query = ""
+    /// 菜單這一區的高度（客製的卡最多到它的三分之二）
+    @State private var areaHeight: CGFloat = 700
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,15 +20,8 @@ struct MenuView: View {
                 .padding(.horizontal, 24)
                 .padding(.top, 18)
                 .padding(.bottom, 14)
-            // 規格（顏色、尺寸）與加料（甜度、冰塊）同一個位置，一次只開一張
-            if let item = model.variantItem {
-                VariantPanel(item: item)
-                    .id(item.id)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let item = model.modifierItem {
-                ModifierPanel(item: item)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
+            // 規格（顏色、尺寸）與加料（甜度、冰塊）：浮在菜單上的一張卡，不佔滿整區（菜單還看得到）；點卡外面＝不加了
+            ZStack(alignment: .bottom) {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         if query.isEmpty {
@@ -38,7 +33,26 @@ struct MenuView: View {
                     .padding(.bottom, 28)
                 }
                 .scrollIndicators(.hidden)
+                if let item = model.variantItem ?? model.modifierItem {
+                    Theme.page.opacity(0.55)
+                        .contentShape(.rect)
+                        .onTapGesture { closeCustomize() }
+                        .accessibilityHidden(true)
+                        .transition(.opacity)
+                    CustomizeCard(maxHeight: max(areaHeight * 0.66, 320), close: { closeCustomize() }) {
+                        if model.variantItem != nil {
+                            VariantPanel(item: item, card: true)
+                                .id(item.id)
+                        } else {
+                            ModifierPanel(item: item, card: true)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 20)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { areaHeight = $0 })
             if let sale = model.lastSale, model.selectedTicket == nil, Date().timeIntervalSince(sale.closedAt) < 120 {
                 LastSaleStrip(sale: sale)
             }
@@ -49,6 +63,11 @@ struct MenuView: View {
         .onAppear {
             if categoryId == nil { categoryId = model.catalog.categories.first?.id }
         }
+    }
+
+    private func closeCustomize() {
+        model.variantItem = nil
+        model.modifierItem = nil
     }
 
     // MARK: 上面

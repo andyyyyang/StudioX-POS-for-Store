@@ -16,10 +16,14 @@ struct VariantPanel: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
     let item: MenuItem
+    /// iPad：浮在菜單上的卡（CustomizeCard）——高度跟著內容、底色交給卡片
+    var card = false
 
     @State private var selectedId: String? = nil
     @State private var quantity = 1
     @State private var adding = false
+    /// 內容的高度（卡片的高度跟著它）
+    @State private var contentHeight: CGFloat = 0
 
     private var selected: ItemVariant? { item.variant(selectedId) }
     private var unit: Money { item.price(of: selected) }
@@ -54,10 +58,14 @@ struct VariantPanel: View {
                     selection
                 }
                 .padding(24)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { contentHeight = $0 })
             }
             .scrollIndicators(.hidden)
+            .frame(maxHeight: card && contentHeight > 0 ? contentHeight : .infinity)
         }
-        .background(Theme.page)
+        .background(card ? Color.clear : Theme.page)
+        // 卡片：量好高度再出現（不會先撐滿再縮）
+        .opacity(card && contentHeight == 0 ? 0 : 1)
         .dockSelection(dock)
         .onAppear { reset() }
         .onChange(of: item.id) { _, _ in reset() }
