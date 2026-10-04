@@ -9,7 +9,7 @@ import UIKit
 
 /// 側欄的每一頁
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
-    case order, floor, orders, reservations, kitchen, dashboard, shift, settings
+    case order, floor, appointments, checkIn, orders, members, reservations, kitchen, dashboard, shift, settings
 
     var id: String { rawValue }
 
@@ -17,7 +17,10 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .order: "點餐"
         case .floor: "桌位"
+        case .appointments: "預約"
+        case .checkIn: "報到"
         case .orders: "訂單"
+        case .members: "會員"
         case .reservations: "訂位"
         case .kitchen: "廚房"
         case .dashboard: "報表"
@@ -30,7 +33,10 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .order: "squares-2x2"
         case .floor: "table-cells"
+        case .appointments: "calendar"
+        case .checkIn: "qr-code"
         case .orders: "queue-list"
+        case .members: "user-group"
         case .reservations: "calendar-days"
         case .kitchen: "fire"
         case .dashboard: "chart-bar"
@@ -88,6 +94,10 @@ final class POSModel {
     private(set) var state = StoreState()
     var syncStatus = SyncStatus()
     var reservations: [Reservation] = []
+    /// 今天的團體課（健身、瑜珈）
+    var classes: [ClassSession] = []
+    /// 查過的會員（後台的資料）。帳戶（儲值金、課程卡）要加上這台還沒同步的：用 account(for:)
+    var members: [String: Member] = [:]
     /// 別台剛做的事（「A2 加點了 2 項」），畫面上閃一下
     var remoteActivity: String?
 
@@ -100,6 +110,8 @@ final class POSModel {
     var checkoutTicketId: String?
     /// 點了有加料的品項：選甜度、冰塊的那張卡
     var modifierItem: MenuItem?
+    /// 點了有規格的品項：選顏色、尺寸的那張卡
+    var variantItem: MenuItem?
     var toast: Toast?
     var alert: AlertInfo?
     var lastActivity = Date()
@@ -382,11 +394,15 @@ final class POSModel {
     func login(_ member: StaffMember) {
         currentStaff = member
         lastActivity = Date()
-        // 餐廳：一登入先看桌況；櫃台、零售：直接點餐
-        if usesTables && device.role != .kitchen && (mode == .tableService || state.openTickets.contains(where: { !$0.tableIds.isEmpty })) {
-            section = .floor
-        } else if device.role != .kitchen {
-            section = .order
+        // 照營業模式決定先看哪一頁：餐廳看桌況、美業看預約表、健身房看報到；其他直接點餐
+        if device.role != .kitchen {
+            switch mode.home {
+            case .floor: section = .floor
+            case .appointments: section = .appointments
+            case .checkIn: section = .checkIn
+            case .order: section = .order
+            }
+            if mode.home == .order && usesTables && state.openTickets.contains(where: { !$0.tableIds.isEmpty }) { section = .floor }
         }
         if device.role == .kitchen { section = .kitchen }
         if !visibleSections.contains(section) { section = visibleSections.first ?? .order }
@@ -469,6 +485,39 @@ final class POSModel {
 
     func staffMember(_ id: String?) -> StaffMember? { staff.first { $0.id == id } }
 
+    /// 排進預約表的人（設計師、教練）；後台都沒勾就是所有人
+    var bookableStaff: [StaffMember] {
+        let marked = staff.filter { $0.isActive && $0.isBookable }
+        return marked.isEmpty ? staff.filter(\.isActive) : marked
+    }
+
+    /// 抽成：品項有設用品項的，沒有用這個人的
+    func commissionBps(item: MenuItem?, staffId: String?) -> Int? {
+        item?.commissionBps ?? staffMember(staffId)?.commissionBps
+    }
+
+    // MARK: 會員帳戶
+
+    /// 記住查到的會員（之後算帳戶、顯示名字都用這份）
+    func remember(_ m: Member) { members[m.id] = m }
+
+    func member(for ref: MemberRef?) -> Member? { ref?.id.flatMap { members[$0] } }
+
+    /// 會員現在的帳戶：後台查到的＋這台記了但後台還沒算進去的（沒查過這個會員就是 nil）
+    func account(for ref: MemberRef?) -> MemberAccount? {
+        guard features.accounts, let m = member(for: ref) else { return nil }
+        return m.account(in: state)
+    }
+
+    /// 重新向後台查一次（儲值、報到之後想看後台的最新餘額）
+    @discardableResult
+    func refreshMember(_ ref: MemberRef?) async -> Member? {
+        guard let api, let phone = ref?.phone, !phone.isEmpty else { return nil }
+        guard let m = try? await api.member(phone: phone) else { return nil }
+        remember(m)
+        return m
+    }
+
     func isAvailable(_ item: MenuItem) -> Bool { state.isAvailable(item) }
 
     /// 這台現在的營業模式：設定裡選的（後台還開著那個模式），否則後台的預設
@@ -487,15 +536,26 @@ final class POSModel {
     private var usesTables: Bool { features.seating && mode.usesTables }
     private var usesKitchen: Bool { features.kitchen && mode.usesKitchen }
 
+    /// 預約表（美業、私人教練）
+    var usesAppointments: Bool { features.appointments && mode.usesAppointments }
+    /// 入場報到（健身房）
+    var usesCheckIn: Bool { features.accounts && mode.usesCheckIn }
+    /// 會員頁（美業、健身，或開了儲值與課程卡的店）
+    var usesMembersPage: Bool { features.members && (mode.wantsCustomer || features.accounts) }
+
     var visibleSections: [AppSection] {
         switch device.role {
         case .kitchen: return [.kitchen, .orders, .settings]
         case .handheld:
-            return [.order] + (usesTables ? [.floor] : []) + [.orders] + (features.reservations && usesTables ? [.reservations] : []) + [.settings]
+            return [.order] + (usesTables ? [.floor] : []) + (usesAppointments ? [.appointments] : []) + (usesCheckIn ? [.checkIn] : [])
+                + [.orders] + (usesMembersPage ? [.members] : []) + (features.reservations && usesTables ? [.reservations] : []) + [.settings]
         case .register:
             var out: [AppSection] = [.order]
             if usesTables { out.append(.floor) }
+            if usesAppointments { out.append(.appointments) }
+            if usesCheckIn { out.append(.checkIn) }
             out.append(.orders)
+            if usesMembersPage { out.append(.members) }
             if features.reservations && usesTables { out.append(.reservations) }
             if usesKitchen { out.append(.kitchen) }
             if currentStaff?.can(.viewReports) ?? true { out.append(.dashboard) }

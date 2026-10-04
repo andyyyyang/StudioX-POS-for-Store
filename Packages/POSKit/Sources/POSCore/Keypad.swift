@@ -304,6 +304,29 @@ extension KeypadSpec {
         KeypadSpec(kind: .money, title: "時價", subtitle: name, confirmLabel: "加入", minValue: 1)
     }
 
+    /// 服務時間（分鐘）
+    public static func duration(name: String, current: Int) -> KeypadSpec {
+        KeypadSpec(kind: .count, title: "時間（分鐘）", subtitle: name, initial: current > 0 ? String(current) : "",
+                   quickKeys: [30, 45, 60, 90, 120].map { QuickKey("\($0) 分", digits: String($0)) }, confirmLabel: "好", maxValue: 600, minValue: 5)
+    }
+
+    /// 自訂儲值金額
+    public static func topUp(presets: [Money] = [Money(dollars: 1_000), Money(dollars: 3_000), Money(dollars: 5_000), Money(dollars: 10_000)]) -> KeypadSpec {
+        KeypadSpec(kind: .money, title: "儲值金額", subtitle: "加到會員的儲值金", quickKeys: presets.map { QuickKey($0.short, digits: String($0.dollars)) },
+                   confirmLabel: "儲值", minValue: 1)
+    }
+
+    /// 用儲值金付：最多付到餘額或應收（先帶入可以付的最多）
+    public static func prepaid(balance: Money, due: Money) -> KeypadSpec {
+        let most = min(balance, due)
+        return KeypadSpec(kind: .money, title: "用儲值金付", subtitle: "餘額 \(balance.formatted)", initial: String(most.dollars),
+                          quickKeys: [QuickKey("全部", digits: String(most.dollars), commits: true)], confirmLabel: "扣儲值金",
+                          maxValue: most.dollars, minValue: 1)
+    }
+
+    /// 會員電話或會員編號（健身房報到：打電話號碼或掃會員卡）
+    public static let memberCode = KeypadSpec(kind: .code(minLength: 4, maxLength: 10), title: "會員", subtitle: "手機號碼或會員卡號", confirmLabel: "查詢")
+
     public static func partySize() -> KeypadSpec {
         KeypadSpec(kind: .count, title: "幾位", quickKeys: [2, 3, 4, 5, 6].map { QuickKey("\($0) 位", digits: String($0)) }, confirmLabel: "下一步", maxValue: 99, minValue: 1)
     }

@@ -7,7 +7,10 @@ public enum Templates {
     // MARK: 交易明細（收據）
 
     /// pickupNumber：櫃台、咖啡模式的取餐號碼（印在最上面、很大，客人拿著等叫號）
-    public static func saleReceipt(_ sale: SaleRecord, store: StoreProfile, reprint: Bool = false, pickupNumber: String? = nil) -> Receipt {
+    /// staffNames：服務人員 id → 名字（美業、課程每一行印是誰做的）
+    /// accountLines：結帳後的會員帳戶（「儲值金餘額 8,500」「剪髮 10 次卡 剩 9 次」）
+    public static func saleReceipt(_ sale: SaleRecord, store: StoreProfile, reprint: Bool = false, pickupNumber: String? = nil,
+                                   staffNames: [String: String] = [:], accountLines: [String] = []) -> Receipt {
         var r = Receipt()
         if let pickupNumber {
             r.add(.text("取餐號碼", ReceiptStyle(align: .center, bold: true)))
@@ -19,14 +22,23 @@ public enum Templates {
         if !store.phone.isEmpty { r.add(.text("電話 \(store.phone)", .center)) }
         r.add(.text(reprint ? "交易明細（補印）" : "交易明細", ReceiptStyle(align: .center, bold: true)))
         r.add(.rule)
-        r.add(.row("單號 \(sale.number)", sale.orderType.label + (sale.tableNames.isEmpty ? "" : " \(sale.tableNames)"), .strong))
+        let showsType = sale.serviceMode?.showsOrderType ?? true
+        let where_ = showsType ? sale.orderType.label + (sale.tableNames.isEmpty ? "" : " \(sale.tableNames)") : (sale.customerName ?? "")
+        r.add(.row("單號 \(sale.number)", where_, .strong))
         r.add(.row(TaipeiTime.dayString(sale.closedAt) + " " + TaipeiTime.clock(sale.closedAt), sale.staffName, .body))
         if sale.guests > 0 { r.add(.text("人數 \(sale.guests)", .body)) }
         r.add(.rule)
+        let perLine = sale.serviceMode?.staffPerLine ?? false
+        let title = sale.serviceMode?.staffTitle ?? "服務人員"
         for l in sale.lines {
-            r.add(.row("\(l.name) ×\(l.quantity)", l.gross.plain, .body))
+            r.add(.row("\(l.displayName) ×\(l.quantity)", l.redeem != nil ? "卡抵" : l.gross.plain, .body))
             if !l.modifiers.isEmpty { r.add(.detail(l.modifiers)) }
+            if let rd = l.redeem { r.add(.detail("用「\(rd.name)」抵 \(l.quantity) 次")) }
+            if perLine, let who = l.staffId.flatMap({ staffNames[$0] }) {
+                r.add(.detail("\(title) \(who)" + (l.assistantId.flatMap { staffNames[$0] }.map { "・助理 \($0)" } ?? "")))
+            }
         }
+        if let x = sale.exchange { r.add(.detail("換貨：原單 \(x.number) 退回 \(x.lines.reduce(0) { $0 + $1.quantity }) 件")) }
         r.add(.rule)
         r.add(.row("小計", sale.itemsGross.plain, .body))
         if sale.discount.cents > 0 { r.add(.row("折扣" + (sale.discountReason.map { "（\($0)）" } ?? ""), "−" + sale.discount.plain, .body)) }
@@ -46,6 +58,7 @@ public enum Templates {
         }
         if let m = sale.member {
             r.add(.row("會員", (m.name ?? "") + " " + m.maskedPhone, .body))
+            for line in accountLines { r.add(.detail(line)) }
         }
         if !store.receiptFooter.isEmpty {
             r.add(.feed(1))

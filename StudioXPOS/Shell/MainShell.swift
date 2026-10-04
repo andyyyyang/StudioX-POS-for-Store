@@ -98,7 +98,7 @@ struct MainShell: View {
     private var showsTicket: Bool {
         switch model.section {
         case .order: true
-        case .floor, .orders: model.selectedTicket != nil || model.checkoutTicket != nil
+        case .floor, .orders, .appointments, .checkIn, .members: model.selectedTicket != nil || model.checkoutTicket != nil
         default: false
         }
     }
@@ -123,6 +123,24 @@ struct MainShell: View {
                 PaymentView(ticketId: t.id)
             } else {
                 OrdersView()
+            }
+        case .appointments:
+            if let t = model.checkoutTicket, t.isOpen {
+                PaymentView(ticketId: t.id)
+            } else {
+                AppointmentsView()
+            }
+        case .checkIn:
+            if let t = model.checkoutTicket, t.isOpen {
+                PaymentView(ticketId: t.id)
+            } else {
+                CheckInView()
+            }
+        case .members:
+            if let t = model.checkoutTicket, t.isOpen {
+                PaymentView(ticketId: t.id)
+            } else {
+                MembersView()
             }
         case .reservations: ReservationsView()
         case .kitchen: KitchenView()
@@ -256,6 +274,9 @@ struct SidebarRail: View {
         switch s {
         case .kitchen: model.state.openTickets.reduce(0) { $0 + $1.lines.filter { $0.isActive && ($0.kitchen == .sent || $0.kitchen == .preparing) }.count }
         case .reservations: model.reservations.filter { $0.kind == .waitlist && $0.status.isActive }.count
+        case .appointments:
+            // 已到店、等著開始的預約
+            model.reservations.filter { $0.kind == .appointment && $0.status == .arrived }.count
         default: 0
         }
     }

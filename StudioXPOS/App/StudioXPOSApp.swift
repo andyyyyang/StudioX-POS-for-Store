@@ -25,12 +25,12 @@ struct StudioXPOSApp: App {
                 .onOpenURL { model.handle($0) }
         }
         .commands {
-            // 外接鍵盤：⌘1–⌘8 切換、⌘L 鎖定
+            // 外接鍵盤：⌘1–⌘9 照側欄的順序切換（只算這台看得到的頁）、⌘L 鎖定
             CommandMenu("前往") {
-                ForEach(Array(AppSection.allCases.enumerated()), id: \.element) { i, s in
+                ForEach(Array(model.visibleSections.prefix(9).enumerated()), id: \.element) { i, s in
                     Button(s.label) { model.go(s) }
                         .keyboardShortcut(KeyEquivalent(Character(String(i + 1))))
-                        .disabled(!model.visibleSections.contains(s) || model.phase != .ready)
+                        .disabled(model.phase != .ready)
                 }
                 Divider()
                 Button("鎖定") { model.lock() }

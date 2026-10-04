@@ -16,11 +16,19 @@ extension POSModel {
         keypad.cancel()
         selectedTicketId = t.id
         checkoutTicketId = t.id
-        if section != .order && section != .floor && section != .orders { section = .order }
+        if ![.order, .floor, .orders, .appointments, .checkIn, .members].contains(section) { section = .order }
+        // 換貨單：退回的商品先抵掉；抵完了（新的比較便宜或一樣）直接結帳、退差額
+        if t.exchange != nil {
+            applyExchangeCredit(t)
+            if let fresh = state.tickets[t.id], fresh.totals.isPaidInFull {
+                Task { await complete(fresh) }
+            }
+        }
     }
 
     func cancelCheckout() {
         keypad.cancel()
+        if let t = checkoutTicket, t.exchange != nil { releaseExchangeCredit(t) }
         checkoutTicketId = nil
     }
 
@@ -35,6 +43,27 @@ extension POSModel {
         guard record(.paymentAdded(PaymentAdded(ticketId: t.id, payment: p))) else { return }
         if settings.openDrawerOnCash { printers.openDrawer() }
         lastChange = p.change
+        if let fresh = state.tickets[t.id], fresh.totals.isPaidInFull { await complete(fresh) }
+    }
+
+    /// 用會員的儲值金付（餘額＝後台的＋這台還沒同步的）
+    func payWithPrepaid(_ t: Ticket) async {
+        let due = t.totals.balance
+        guard due.cents > 0, let me = currentStaff else { return }
+        guard t.member?.id != nil else {
+            show("先找會員才能用儲值金", tone: .warning)
+            await attachMember(to: t)
+            return
+        }
+        if member(for: t.member) == nil { await refreshMember(t.member) }
+        guard let acct = account(for: t.member), acct.wallet.cents > 0 else {
+            show("這位會員沒有儲值金", tone: .warning)
+            return
+        }
+        guard let amount = await keypad.askMoney(.prepaid(balance: acct.wallet, due: due)), amount.cents > 0 else { return }
+        let p = Payment(id: newID(), tender: .prepaid, amount: amount, reference: t.member?.maskedPhone, at: Date(), by: me.id, shiftId: openShift?.id)
+        guard record(.paymentAdded(PaymentAdded(ticketId: t.id, payment: p))) else { return }
+        lastChange = .zero
         if let fresh = state.tickets[t.id], fresh.totals.isPaidInFull { await complete(fresh) }
     }
 
@@ -123,9 +152,12 @@ extension POSModel {
         }
 
         var invoice: EInvoice? = nil
-        if !skipInvoice, features.invoice, invoiceSettings.enabled, t.totals.total.cents > 0 {
+        // 用儲值金付的（儲值時開過）、用課程卡抵的不重開；全部都是就不用開
+        let invoiceable = InvoiceBuilder.coverage(for: t, prepaid: store.prepaidInvoicing).amount
+        if !skipInvoice, features.invoice, invoiceSettings.enabled, invoiceable.cents > 0 {
             do {
-                invoice = try InvoiceBuilder.issue(ticket: t, settings: invoiceSettings, allocator: allocator, deviceId: device.id, at: Date())
+                invoice = try InvoiceBuilder.issue(ticket: t, settings: invoiceSettings, allocator: allocator, deviceId: device.id, at: Date(),
+                                                   prepaid: store.prepaidInvoicing)
             } catch let e as InvoiceError {
                 pendingInvoiceFailure = InvoiceFailure(ticketId: t.id, message: Self.describe(e))
                 return
@@ -139,6 +171,8 @@ extension POSModel {
         var closing = t
         closing.invoice = invoice?.stamp
         let sale = SaleRecord(ticket: closing, closedOn: device.id, shiftId: openShift?.id, closedAt: Date(), closedBy: me.id, staffName: me.name, floor: floor)
+        // 換貨單：原單的退款（換貨抵用＋發票作廢或折讓）和新單一起記
+        bodies += exchangeSettlement(for: t)
         bodies.append(.ticketClosed(TicketClosed(ticketId: t.id, sale: sale)))
         // 先寫進日誌（fsync）才印：就算出單機卡紙、App 當掉，這筆帳也在
         guard record(bodies) else { return }
@@ -148,11 +182,16 @@ extension POSModel {
         }
         // 櫃台、咖啡：客人要拿取餐號碼等叫號，一定印（號碼印在最上面、很大）
         let pickup = mode.printsPickupNumber && t.tableIds.isEmpty ? Templates.pickupNumber(t.number) : nil
+        // 會員帳戶有變（儲值、扣卡、用儲值金付）：收據一定印，讓客人看到餘額
+        let touchesAccount = sale.lines.contains { $0.redeem != nil || $0.kind == .pass || $0.kind == .storedValue }
+            || sale.payments.contains { $0.tender == .prepaid }
         if let pickup {
-            printers.print(Templates.saleReceipt(sale, store: store, pickupNumber: pickup), role: .receipt)
+            printers.print(receipt(for: sale, pickupNumber: pickup), role: .receipt)
+        } else if touchesAccount {
+            printers.print(receipt(for: sale), role: .receipt)
         } else {
             switch settings.receiptMode {
-            case "always": printers.print(Templates.saleReceipt(sale, store: store), role: .receipt)
+            case "always": printers.print(receipt(for: sale), role: .receipt)
             case "ask": receiptOffer = sale
             default: break
             }
@@ -163,10 +202,28 @@ extension POSModel {
         lastSale = sale
         checkoutTicketId = nil
         selectedTicketId = nil
-        let change = lastChange.cents > 0 ? "・找零 \(lastChange.formatted)" : ""
+        if t.exchange != nil, lastChange.cents > 0, settings.openDrawerOnCash { printers.openDrawer() }
+        let change = lastChange.cents > 0 ? (t.exchange != nil ? "・退差額 \(lastChange.formatted)" : "・找零 \(lastChange.formatted)") : ""
         let number = pickup.map { "取餐 \($0)・" } ?? ""
         show("已結帳 \(number)\(t.number) \(sale.total.formatted)\(change)")
         Task { await topUpInvoiceRolls() }
+    }
+
+    /// 交易明細：服務人員的名字、會員帳戶的餘額（儲值金、還能用的課程卡）
+    func receipt(for sale: SaleRecord, reprint: Bool = false, pickupNumber: String? = nil) -> Receipt {
+        var names: [String: String] = [:]
+        for s in staff { names[s.id] = s.name }
+        return Templates.saleReceipt(sale, store: store, reprint: reprint, pickupNumber: pickupNumber, staffNames: names,
+                                     accountLines: reprint ? [] : accountLines(for: sale.member))
+    }
+
+    /// 「儲值金餘額 8,500」「剪髮 10 次卡 剩 9 次・到 2027/3/20」
+    func accountLines(for ref: MemberRef?) -> [String] {
+        guard let acct = account(for: ref) else { return [] }
+        var out: [String] = []
+        if acct.wallet.cents != 0 || member(for: ref)?.wallet != nil { out.append("儲值金餘額 \(acct.wallet.plain)") }
+        for p in acct.usablePasses(at: Date()) { out.append("\(p.name) \(p.statusText(at: Date()))") }
+        return out
     }
 
     static func describe(_ e: InvoiceError) -> String {
@@ -182,7 +239,8 @@ extension POSModel {
     func issueLateInvoice(for sale: SaleRecord) async {
         guard let t = state.tickets[sale.ticketId] else { return }
         do {
-            let inv = try InvoiceBuilder.issue(ticket: t, settings: invoiceSettings, allocator: allocator, deviceId: device.id, at: Date())
+            let inv = try InvoiceBuilder.issue(ticket: t, settings: invoiceSettings, allocator: allocator, deviceId: device.id, at: Date(),
+                                               prepaid: store.prepaidInvoicing)
             guard record(.invoiceIssued(InvoiceIssued(ticketId: t.id, invoice: inv))) else { return }
             if inv.printed { printers.printInvoice(InvoiceProof(invoice: inv, storeName: store.name, qrKey: invoiceSettings.qrKey), detail: sale, store: store) }
             show("已補開 \(inv.stamp.display)")
@@ -199,7 +257,7 @@ extension POSModel {
     }
 
     func printReceipt(_ sale: SaleRecord, reprint: Bool = false) {
-        printers.print(Templates.saleReceipt(sale, store: store, reprint: reprint), role: .receipt)
+        printers.print(receipt(for: sale, reprint: reprint), role: .receipt)
     }
 
     /// 結帳後客人才說要打統編：作廢原本那張、用同一筆交易重開（同一期才行）
@@ -215,7 +273,8 @@ extension POSModel {
         do {
             var alloc = allocator
             alloc.markUsed(old.number)
-            let inv = try InvoiceBuilder.issue(ticket: reopened, settings: invoiceSettings, allocator: alloc, deviceId: device.id, at: Date())
+            let inv = try InvoiceBuilder.issue(ticket: reopened, settings: invoiceSettings, allocator: alloc, deviceId: device.id, at: Date(),
+                                               prepaid: store.prepaidInvoicing)
             guard record([
                 .invoiceVoided(InvoiceVoided(ticketId: t.id, number: old.number, reason: "買方資料變更", authorizedBy: auth.authorizerId)),
                 .ticketUpdated(TicketUpdated(ticketId: t.id, invoiceBuyer: buyer)),

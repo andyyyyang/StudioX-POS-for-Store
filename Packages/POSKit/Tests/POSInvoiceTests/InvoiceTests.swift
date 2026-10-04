@@ -150,4 +150,71 @@ struct InvoiceTests {
         #expect(row.first == true && row.last == true)
         #expect(row.count == (21 * 15) + 20)
     }
+
+    // MARK: 儲值金、課程卡
+
+    func salonTicket() -> Ticket {
+        var t = Ticket(id: "s", number: "A002", deviceId: "d", orderType: .takeout, openedAt: Self.oct3, openedBy: "s", businessDate: "2026-10-03", serviceMode: .salon)
+        t.lines = [
+            TicketLine(id: "cut", itemId: "cut", name: "剪髮", unitPrice: Money(dollars: 600), addedAt: Self.oct3, addedBy: "s", kind: .service,
+                       redeem: PassRedemption(passId: "card", name: "剪髮 10 次卡", value: Money(dollars: 300))),
+            TicketLine(id: "dye", itemId: "dye", name: "染髮", unitPrice: Money(dollars: 2_500), addedAt: Self.oct3, addedBy: "s", kind: .service),
+            TicketLine(id: "oil", itemId: "oil", name: "護髮油", unitPrice: Money(dollars: 500), addedAt: Self.oct3, addedBy: "s"),
+        ]
+        return t
+    }
+
+    /// 儲值時開過發票：用儲值金付的 2,000 不重開，發票只開 1,000，並列一行「儲值金扣抵」
+    @Test func prepaidAlreadyInvoicedAtTopUp() throws {
+        var t = salonTicket()
+        t.payments = [Payment(id: "p1", tender: .prepaid, amount: Money(dollars: 2_000), at: Self.oct3, by: "s"),
+                      Payment(id: "p2", tender: .cash, amount: Money(dollars: 1_000), at: Self.oct3, by: "s")]
+        let cover = InvoiceBuilder.coverage(for: t, prepaid: .atTopUp)
+        #expect(cover.excludedLineIds == ["cut"])
+        #expect(cover.prepaidDeduction == Money(dollars: 2_000))
+        #expect(cover.amount == Money(dollars: 1_000))
+        let inv = try InvoiceBuilder.issue(ticket: t, settings: settings, allocator: InvoiceAllocator(rolls: settings.rolls, used: []), deviceId: "d", at: Self.oct3, randomCode: "1234")
+        #expect(inv.totalAmount == Money(dollars: 1_000))
+        #expect(inv.items.map(\.description) == ["染髮", "護髮油", "儲值金扣抵（儲值時已開立）"])
+        #expect(Money.sum(inv.items.map(\.amount)) == inv.totalAmount)
+
+        // 全部用儲值金付：不用開
+        t.payments = [Payment(id: "p1", tender: .prepaid, amount: Money(dollars: 3_000), at: Self.oct3, by: "s")]
+        #expect(InvoiceBuilder.coverage(for: t, prepaid: .atTopUp).amount == .zero)
+        #expect(throws: InvoiceError.nothingToInvoice) {
+            try InvoiceBuilder.issue(ticket: t, settings: settings, allocator: InvoiceAllocator(rolls: settings.rolls, used: []), deviceId: "d", at: Self.oct3)
+        }
+        // 消費時才開：用儲值金付的照開
+        #expect(InvoiceBuilder.coverage(for: t, prepaid: .atRedemption).amount == Money(dollars: 3_000))
+    }
+
+    /// 消費時才開：賣儲值那一行不開發票
+    @Test func topUpNotInvoicedAtRedemptionPolicy() throws {
+        var t = salonTicket()
+        t.lines = [
+            TicketLine(id: "top", itemId: "sv", name: "儲值 5,000", unitPrice: Money(dollars: 5_000), addedAt: Self.oct3, addedBy: "s", kind: .storedValue),
+            TicketLine(id: "oil", itemId: "oil", name: "護髮油", unitPrice: Money(dollars: 500), addedAt: Self.oct3, addedBy: "s"),
+        ]
+        #expect(InvoiceBuilder.coverage(for: t, prepaid: .atRedemption).amount == Money(dollars: 500))
+        #expect(InvoiceBuilder.coverage(for: t, prepaid: .atTopUp).amount == Money(dollars: 5_500))
+        let inv = try InvoiceBuilder.issue(ticket: t, settings: settings, allocator: InvoiceAllocator(rolls: settings.rolls, used: []), deviceId: "d",
+                                           at: Self.oct3, randomCode: "1234", prepaid: .atRedemption)
+        #expect(inv.items.map(\.description) == ["護髮油"])
+        #expect(inv.totalAmount == Money(dollars: 500))
+    }
+
+    /// 品名帶規格；整單折扣只算開發票的那幾行
+    @Test func variantNamesAndDiscountShare() throws {
+        var t = salonTicket()
+        t.lines = [
+            TicketLine(id: "a", itemId: "jeans", name: "直筒褲", unitPrice: Money(dollars: 1_000), addedAt: Self.oct3, addedBy: "s", skuId: "v", variantName: "黑・M"),
+            TicketLine(id: "b", itemId: "cut", name: "剪髮", unitPrice: Money(dollars: 600), addedAt: Self.oct3, addedBy: "s",
+                       redeem: PassRedemption(passId: "card", name: "卡", value: Money(dollars: 300))),
+        ]
+        t.discount = .percent(1000)
+        let inv = try InvoiceBuilder.issue(ticket: t, settings: settings, allocator: InvoiceAllocator(rolls: settings.rolls, used: []), deviceId: "d", at: Self.oct3, randomCode: "1234")
+        #expect(inv.items.map(\.description) == ["直筒褲 黑・M", "折扣"])
+        #expect(inv.totalAmount == Money(dollars: 900))
+        #expect(Money.sum(inv.items.map(\.amount)) == inv.totalAmount)
+    }
 }

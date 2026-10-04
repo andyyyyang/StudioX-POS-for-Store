@@ -230,10 +230,15 @@ public enum AccountRules {
         if refund.tender == .prepaid && refund.amount.cents > 0 {
             out.append(AccountMove(kind: .walletCredit, memberId: memberId, amount: refund.amount, ticketId: sale.ticketId, at: at))
         }
-        // 退了哪些行、各幾個（整張退＝全部）
-        let returned: [(SaleLine, Int)] = refund.lines.isEmpty
-            ? sale.lines.map { ($0, $0.quantity) }
-            : refund.lines.compactMap { rl in sale.lines.first { $0.lineId == rl.lineId }.map { ($0, min(rl.quantity, $0.quantity)) } }
+        // 退了哪些行、各幾個：有列品項照品項；沒列品項而且退了整張的金額＝全部；只退一部分金額（沒列品項）不動卡與儲值
+        let returned: [(SaleLine, Int)]
+        if !refund.lines.isEmpty {
+            returned = refund.lines.compactMap { rl in sale.lines.first { $0.lineId == rl.lineId }.map { ($0, min(rl.quantity, $0.quantity)) } }
+        } else if refund.amount >= sale.total {
+            returned = sale.lines.map { ($0, $0.quantity) }
+        } else {
+            returned = []
+        }
         for (l, qty) in returned where qty > 0 {
             switch l.kind ?? .goods {
             case .storedValue:

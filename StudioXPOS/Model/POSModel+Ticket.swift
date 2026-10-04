@@ -8,13 +8,18 @@ import POSSync
 extension POSModel {
     // MARK: 開單
 
-    /// 開一張新單（內用帶桌號與人數；外帶、外送可以帶稱呼）
+    /// 開一張新單（內用帶桌號與人數；外帶、外送可以帶稱呼）。
+    /// 美業、健身從預約或報到開單時帶會員；服飾可以帶整單的銷售人員；換貨單帶退回的品項
     @discardableResult
-    func openTicket(type: OrderType, tableIds: [String] = [], guests: Int = 0, customerName: String? = nil) -> Ticket? {
+    func openTicket(type: OrderType, tableIds: [String] = [], guests: Int = 0, customerName: String? = nil, member: MemberRef? = nil,
+                    salespersonId: String? = nil, exchange: ExchangeCredit? = nil, appointmentId: String? = nil) -> Ticket? {
         let id = newID()
         let number = state.nextTicketNumber(deviceCode: device.code, businessDate: businessDate)
         let opened = TicketOpened(ticketId: id, number: number, orderType: type, tableIds: tableIds, guests: guests,
-                                  serviceChargeBps: store.serviceChargeBps(for: type), businessDate: businessDate, customerName: customerName)
+                                  serviceChargeBps: store.serviceChargeBps(for: type), businessDate: businessDate, customerName: customerName,
+                                  serviceMode: mode, member: member,
+                                  salespersonId: salespersonId ?? (mode.staffPerTicket ? currentStaff?.id : nil),
+                                  exchange: exchange, appointmentId: appointmentId)
         guard record(.ticketOpened(opened)) else { return nil }
         selectedTicketId = id
         return state.tickets[id]
@@ -49,6 +54,11 @@ extension POSModel {
             show("\(item.name) 今天賣完了", tone: .warning)
             return
         }
+        if item.hasVariants {
+            // 服飾：先選顏色、尺寸（VariantPanel）
+            variantItem = item
+            return
+        }
         if !catalog.groups(for: item).isEmpty {
             modifierItem = item
             return
@@ -56,21 +66,45 @@ extension POSModel {
         let qty = keypad.takeQuantity()
         var price: Money? = nil
         if item.openPrice {
-            guard let p = await keypad.askMoney(.openPrice(name: item.name)) else { return }
+            guard let p = await keypad.askMoney(item.itemKind == .storedValue ? .topUp() : .openPrice(name: item.name)) else { return }
             price = p
         }
+        guard await ensureMemberIfNeeded(for: item) else { return }
         add(item, quantity: qty, modifiers: [], note: "", price: price)
     }
 
+    /// 儲值、課程卡、會籍一定要記在會員身上：單子上還沒有會員就先查
+    func ensureMemberIfNeeded(for item: MenuItem) async -> Bool {
+        guard item.itemKind.needsMember else { return true }
+        guard let t = ensureTicket() else { return false }
+        if t.member?.id != nil { return true }
+        show("\(item.itemKind.label)要記在會員身上，先打會員電話", tone: .info)
+        await attachMember(to: t)
+        if state.tickets[t.id]?.member?.id != nil { return true }
+        show("沒有會員，不能賣\(item.itemKind.label)", tone: .warning)
+        return false
+    }
+
     /// 加進目前的單（同樣的品項、同樣的加料、還沒送出就加數量，不另起一行）
-    func add(_ item: MenuItem, quantity: Int, modifiers: [AppliedModifier], note: String, price: Money? = nil) {
+    func add(_ item: MenuItem, variant: ItemVariant? = nil, quantity: Int, modifiers: [AppliedModifier], note: String, price: Money? = nil,
+             staffId: String? = nil) {
         guard let t = ensureTicket(), let me = currentStaff else { return }
         let category = catalog.category(item.categoryId)
+        // 會籍續約：同一種還沒到期就接在後面
+        var passStart: Date? = nil
+        if let spec = item.pass, let acct = account(for: t.member) {
+            passStart = acct.renewalStart(name: item.name, spec: spec, at: Date())
+        }
+        let who = staffId ?? (mode.staffPerLine && item.itemKind == .service ? defaultPerformer(for: t) : nil)
         let line = TicketLine(
             id: newID(), itemId: item.id, name: item.name, categoryId: item.categoryId, categoryName: category?.name,
-            unitPrice: price ?? item.price, modifiers: modifiers, quantity: max(quantity, 1), note: note,
+            unitPrice: price ?? item.price(of: variant), modifiers: modifiers, quantity: max(quantity, 1), note: note,
             station: catalog.station(for: item), taxKind: item.taxKind, addedAt: Date(), addedBy: me.id,
-            productId: item.productId, variantId: item.variantId
+            productId: item.productId, variantId: variant?.productVariantId ?? item.variantId,
+            kind: item.kind, skuId: variant?.id, variantName: variant?.label, staffId: who,
+            durationMinutes: item.durationMinutes, pass: item.pass, passStartsAt: passStart,
+            credit: item.itemKind == .storedValue ? (item.openPrice ? price : item.credit ?? item.price) : nil,
+            commissionBps: commissionBps(item: item, staffId: who ?? t.salespersonId ?? me.id)
         )
         if let same = t.lines.last(where: { $0.canMerge(with: line) }) {
             record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: same.id, quantity: same.quantity + line.quantity)))
@@ -79,13 +113,30 @@ extension POSModel {
         }
     }
 
-    /// 品號／條碼
+    /// 美業、課程：新加的服務預設給誰做（預約指定的人 → 這張單上一個服務的人 → 自己是可以排預約的人就給自己）
+    func defaultPerformer(for t: Ticket) -> String? {
+        if let id = t.appointmentId, let r = reservations.first(where: { $0.id == id }), let s = r.staffId { return s }
+        if let last = t.activeLines.last(where: { $0.staffId != nil })?.staffId { return last }
+        if let me = currentStaff, bookableStaff.contains(where: { $0.id == me.id }) { return me.id }
+        return nil
+    }
+
+    /// 品號／條碼（掃到吊牌直接是那個顏色尺寸）
     func lookup(code: String) {
-        guard let item = catalog.lookup(code: code) else {
+        guard let m = catalog.match(code: code) else {
             show("找不到品號 \(code)", tone: .warning)
             return
         }
-        Task { await tap(item) }
+        guard let v = m.variant else {
+            Task { await tap(m.item) }
+            return
+        }
+        guard isAvailable(m.item), v.isAvailable else {
+            show("\(m.item.name) \(v.label) 今天不能賣", tone: .warning)
+            return
+        }
+        if let stock = v.stock, stock <= 0 { show("\(m.item.name) \(v.label) 帳上沒有庫存，照樣加入", tone: .warning) }
+        add(m.item, variant: v, quantity: keypad.takeQuantity(), modifiers: [], note: "")
     }
 
     /// 自訂品項（菜單上沒有的：「開瓶費」「外送費」）
@@ -320,11 +371,13 @@ extension POSModel {
             guard let entry = await keypad.ask(.phone, error: problem) else { return }
             do {
                 if let m = try await api.member(phone: entry.digits) {
+                    remember(m)
                     record(.ticketUpdated(TicketUpdated(ticketId: t.id, member: m.ref)))
                     show("會員 \(m.name ?? m.ref.maskedPhone)\(m.tierName.map { "・\($0)" } ?? "")")
                     return
                 }
                 let created = try await api.createMember(MemberCreate(phone: entry.digits, name: nil))
+                remember(created)
                 record(.ticketUpdated(TicketUpdated(ticketId: t.id, member: created.ref)))
                 show("新會員 \(created.ref.maskedPhone) 加入了")
                 return

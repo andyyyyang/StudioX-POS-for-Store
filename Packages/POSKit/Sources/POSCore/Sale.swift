@@ -157,7 +157,8 @@ public struct SaleRecord: Codable, Sendable, Hashable {
         var out: [String: Int] = [:]
         for r in refunds {
             if r.lines.isEmpty {
-                for l in lines { out[l.lineId] = l.quantity }
+                // 沒列品項：退了整張才算全部退；只退一部分金額不算退了哪一件
+                if r.amount >= total { for l in lines { out[l.lineId] = l.quantity } }
             } else {
                 for rl in r.lines { out[rl.lineId, default: 0] += rl.quantity }
             }

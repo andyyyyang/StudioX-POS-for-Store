@@ -92,12 +92,21 @@ public struct StaffMember: Codable, Sendable, Hashable, Identifiable {
     /// 頭像的色（Swatch）
     public var swatch: Swatch
     public var isActive: Bool
+    /// 職稱（「總監」「設計師」「助理」「教練」；沒有就不顯示）
+    public var title: String?
+    /// 排進預約表（設計師、教練）
+    public var bookable: Bool?
+    /// 預設抽成（萬分比；品項自己有設就用品項的）
+    public var commissionBps: Int?
 
     public init(id: String, name: String, role: StaffRole, pinHash: String, pinSalt: String, pinIterations: Int = Staff.defaultIterations,
-                swatch: Swatch = .sand, isActive: Bool = true) {
+                swatch: Swatch = .sand, isActive: Bool = true, title: String? = nil, bookable: Bool? = nil, commissionBps: Int? = nil) {
         self.id = id; self.name = name; self.role = role; self.pinHash = pinHash; self.pinSalt = pinSalt
         self.pinIterations = pinIterations; self.swatch = swatch; self.isActive = isActive
+        self.title = title; self.bookable = bookable; self.commissionBps = commissionBps
     }
+
+    public var isBookable: Bool { bookable ?? false }
 
     public func can(_ p: Permission) -> Bool { role >= p.minimumRole }
 
