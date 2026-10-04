@@ -292,6 +292,24 @@ struct StoreStateTests {
         #expect(t.lines.map(\.id) == ["l1"])
     }
 
+    /// 內用改成外帶（單子頁首的用餐方式）：ticket.updated＋ticket.moved 到沒有桌子 → 桌子馬上是空桌（不用清桌）、服務費拿掉、標題變外帶
+    @Test func dineInToTakeoutFreesTheTable() throws {
+        var d = Device("A")
+        var ev = [open(&d)]
+        ev.append(d.emit(.linesAdded(LinesAdded(ticketId: "t1", lines: [Fixture.line("l1", "珍奶", 60)]))))
+        #expect(StoreState.replay(ev).status(of: "t1") == .ordering)
+        ev.append(d.emit(.ticketUpdated(TicketUpdated(ticketId: "t1", orderType: .takeout, serviceChargeBps: 0))))
+        ev.append(d.emit(.ticketMoved(TicketMoved(ticketId: "t1", tableIds: []))))
+        let s = StoreState.replay(ev)
+        let t = try #require(s.tickets["t1"])
+        #expect(t.orderType == .takeout)
+        #expect(t.tableIds.isEmpty)
+        #expect(t.totals.serviceCharge == .zero)
+        #expect(t.title(floor: Fixture.floor) == "外帶 A001")
+        #expect(s.openTickets(at: "t1").isEmpty)
+        #expect(s.status(of: "t1") == .available)
+    }
+
     @Test func splitAndMerge() throws {
         var d = Device("A")
         var ev = [open(&d)]

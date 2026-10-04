@@ -95,7 +95,7 @@ struct MenuView: View {
 
     // MARK: 上面
 
-    /// 頁首：標題｜搜尋。自訂品項、掃條碼、開新單、用餐方式都在右欄（單子的動作）
+    /// 頁首：現在看的分類｜搜尋。自訂品項、掃條碼、開新單在右欄（單子的動作）；內用／外帶／外送在單子的頁首
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
             // 單子的名字在中間那一欄已經有了：這裡只寫現在看的是哪一類（省下一整行給品項）

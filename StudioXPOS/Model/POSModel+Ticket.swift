@@ -58,6 +58,13 @@ extension POSModel {
         return OrderType.allCases.filter { $0 != mode.defaultOrderType }
     }
 
+    /// 單子頁首可以切換的用餐方式（內用／外帶／外送的分段控制）。
+    /// 有用餐方式的模式三種都可以：全外帶的攤子開單時不多放「開內用單」（otherOrderTypes），但偶爾有人坐下來吃、有人叫外送，單子上照樣改得了。
+    /// 服飾、美業、課程沒有用餐方式：空的（頁首不顯示）
+    var ticketOrderTypes: [OrderType] {
+        mode.showsOrderType ? OrderType.allCases : []
+    }
+
     /// 目前這張單；沒有就照營業模式開一張（櫃台、零售：外帶；餐廳、咖啡：內用，不選桌直接點）
     func ensureTicket() -> Ticket? {
         if let t = selectedTicket { return t }
@@ -228,8 +235,32 @@ extension POSModel {
         record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, clearDiscount: true)))
     }
 
-    func setNote(_ note: String, for line: TicketLine, in t: Ticket) {
-        record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: line.id, note: note)))
+    /// 一行或好幾行（單子上「選取」勾起來的）用同一個備註：同一次記（一起成功、一起不成功）
+    func setNote(_ note: String, for lines: [TicketLine], in t: Ticket) {
+        let bodies = lines.filter(\.isActive).map { EventBody.lineUpdated(LineUpdated(ticketId: t.id, lineId: $0.id, note: note)) }
+        guard !bodies.isEmpty else { return }
+        record(bodies)
+    }
+
+    /// 好幾行打一樣的折扣（單子上「選取」的「整筆折扣」）：鍵盤問一次、授權一次（照折得最多的那一行算，和一行的折扣同一個上限），
+    /// 每一行各記一筆、同一次記。折價（元）是每一行折一樣多，最多是最便宜那一行的金額
+    func discount(_ lines: [TicketLine], in t: Ticket, kind: Discount.Kind) async {
+        let targets = lines.filter { $0.isActive && $0.gross.cents > 0 }
+        guard let base = targets.map(\.gross).min() else { return }
+        guard var d = await askDiscount(kind: kind, base: base) else { return }
+        guard let auth = await authorizeDiscount(d, base: base, what: "\(targets.count) 項") else { return }
+        d.authorizedBy = auth.authorizerId
+        let bodies = targets.map { EventBody.lineUpdated(LineUpdated(ticketId: t.id, lineId: $0.id, discount: d, authorizedBy: auth.authorizerId)) }
+        guard record(bodies) else { return }
+        show("\(targets.count) 項都是 \(d.label)", tone: .neutral)
+    }
+
+    /// 好幾行一起取消折扣（回到原價）
+    func clearDiscount(_ lines: [TicketLine], in t: Ticket) {
+        let bodies = lines.filter { $0.isActive && $0.discount != nil }
+            .map { EventBody.lineUpdated(LineUpdated(ticketId: t.id, lineId: $0.id, clearDiscount: true)) }
+        guard !bodies.isEmpty else { return }
+        record(bodies)
     }
 
     func setCourse(_ course: Int, for line: TicketLine, in t: Ticket) {
@@ -302,8 +333,15 @@ extension POSModel {
         record(.ticketUpdated(TicketUpdated(ticketId: t.id, guests: g)))
     }
 
+    /// 換用餐方式（服務費跟著換）。改成外帶、外送而且單子在桌上：桌子空出來（ticket.moved 到沒有桌子，和換用餐方式同一次記）。
+    /// 要不要先問由畫面決定（單子欄頁首：「A2 的桌子會空出來」）
     func setOrderType(_ type: OrderType, for t: Ticket) {
-        record(.ticketUpdated(TicketUpdated(ticketId: t.id, orderType: type, serviceChargeBps: store.serviceChargeBps(for: type))))
+        guard type != t.orderType else { return }
+        let freed = type == .dineIn ? [] : t.tableIds
+        var bodies: [EventBody] = [.ticketUpdated(TicketUpdated(ticketId: t.id, orderType: type, serviceChargeBps: store.serviceChargeBps(for: type)))]
+        if !freed.isEmpty { bodies.append(.ticketMoved(TicketMoved(ticketId: t.id, tableIds: []))) }
+        guard record(bodies), !freed.isEmpty else { return }
+        show("\(t.number) 改成\(type.label)・\(floor.tableNames(freed)) 空出來了", tone: .neutral)
     }
 
     func setTicketNote(_ note: String, for t: Ticket) {
@@ -343,8 +381,14 @@ extension POSModel {
 
     /// 送單：還沒送出的（第 0 道＝馬上做）送到廚房；第 2、3 道等「催菜」
     func send(_ t: Ticket) {
-        let lines = t.unsentLines.filter { $0.course <= 1 }
-        guard !lines.isEmpty else {
+        send(t.unsentLines.filter { $0.course <= 1 }, in: t)
+    }
+
+    /// 只送這幾行（整張單的「送單」、單子上「選取」勾起來的「送廚房」；勾了第 2、3 道也一起送，等於先催）。已經送出的不再送
+    func send(_ lines: [TicketLine], in t: Ticket) {
+        let ids = Set(lines.map(\.id))
+        let toSend = t.unsentLines.filter { ids.contains($0.id) }
+        guard !toSend.isEmpty else {
             show("沒有新的品項要送", tone: .neutral)
             return
         }
@@ -352,9 +396,9 @@ extension POSModel {
         let printHere = settings.printKitchenTickets && mode.usesKitchen
         // 這台沒有廚房出單機（前場的手機）：事件上註記，櫃台的 iPad 幫忙印（POSModel+KitchenRelay）
         let relay = printHere && !printers.hasKitchenPrinter
-        record(.linesSent(LinesSent(ticketId: t.id, lineIds: lines.map(\.id), relayPrint: relay ? (first ? "new" : "add") : nil)))
-        if printHere && !relay { printKitchen(t, lines: lines, mode: first ? .new : .add) }
-        show("已送出 \(lines.reduce(0) { $0 + $1.quantity }) 項")
+        guard record(.linesSent(LinesSent(ticketId: t.id, lineIds: toSend.map(\.id), relayPrint: relay ? (first ? "new" : "add") : nil))) else { return }
+        if printHere && !relay { printKitchen(t, lines: toSend, mode: first ? .new : .add) }
+        show("已送出 \(toSend.reduce(0) { $0 + $1.quantity }) 項")
     }
 
     /// 催菜：第 n 道開始做

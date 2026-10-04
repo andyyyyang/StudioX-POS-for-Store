@@ -14,6 +14,9 @@ import SwiftUI
 ///   - 不用打數字的選擇（設計師、課程卡、規格、折扣的種類、用餐方式…）蓋住右欄（.dockPanel）
 ///   - 手勢：往左滑＝刪除（還沒送出的滑到底直接刪；送出去的只露出「作廢…」）；往右滑＝−1、+1（滑到底＝+1）
 ///   - 刪掉還沒送出的不留紀錄（lines.removed，下面可以「復原」）；送出去的作廢照樣記、印作廢單，但單子上不再列出來
+///   - 頁首：標題（桌號／稱呼／單號）＋叫號的號碼、一行「阿珠・23:19」、用餐方式的分段控制（內用／外帶／外送，點一下就改）
+///   - 頁首右上「選取」：一次勾好幾行（點一行＝勾／不勾，不能滑、不問數量）；右欄換成勾起來的這幾行一起的動作
+///     （大鍵：刪除或作廢…；動作鍵：整筆折扣、備註、拆成新單、送廚房）。「完成」、×、換單＝不選了
 /// 服飾多了整張單的銷售人員與換貨；美業、課程多了會員條（儲值金、課程卡）、每一行的設計師／教練與助理、用課程卡抵。
 struct TicketColumn: View {
     @Environment(POSModel.self) private var model
@@ -23,7 +26,8 @@ struct TicketColumn: View {
     /// 手機：「掃碼（會員・載具・折價券）」放進整張單的「⋯」。點餐頁下面那條（看不到的單子欄）不放：掃碼鍵在頁首（同一個動作只出現一次）
     var offersScan = true
     @State private var splitting: Ticket?
-    @State private var noteFor: TicketLine?
+    /// 備註要寫在哪幾行（一行；或「選取」勾起來的好幾行，用同一個備註）
+    @State private var noteFor: [TicketLine] = []
     @State private var noteText = ""
     @State private var ticketNote = false
     @State private var voidReasonFor: [TicketLine] = []
@@ -44,10 +48,14 @@ struct TicketColumn: View {
     /// 手機：按了「數量」才問（一選起來就升起整個鍵盤會把單子蓋掉；快速 −1／+1 用往右滑）
     @State private var phoneQuantity = false
     @State private var openSwipeId: String? = nil
+    /// 頁首的「選取」：一次勾好幾行（右欄換成這幾行一起的動作）；不選某一行、不能滑、不問數量
+    @State private var selecting = false
+    /// 勾起來的行
+    @State private var checked: Set<String> = []
 
-    /// 蓋住右欄的選擇：這一行的（設計師、助理、課程卡、規格、折扣、座位）、整張單的（折扣、更多、銷售人員）
+    /// 蓋住右欄的選擇：這一行的（設計師、助理、課程卡、規格、折扣、座位）、整張單的（折扣、更多、銷售人員）、勾起來的幾行的（折扣）
     private enum TicketPanel: String, Identifiable {
-        case performer, assistant, passes, variant, lineDiscount, lineCourse, ticketDiscount, ticketMore, salesperson
+        case performer, assistant, passes, variant, lineDiscount, lineCourse, ticketDiscount, ticketMore, salesperson, batchDiscount
         var id: String { rawValue }
         var isLine: Bool { [.performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse].contains(self) }
     }
@@ -76,17 +84,19 @@ struct TicketColumn: View {
         }
     }
 
-    /// 換單、換行、加料的卡打開了：選取跟著變；選了一行就問它的數量
+    /// 換單、換行、加料的卡打開了：選取跟著變；選了一行就問它的數量。換單、結帳＝「選取」結束（勾的清掉）
     private func lifecycle<V: View>(_ v: V) -> some View {
         v
             .onChange(of: model.selectedTicketId) { _, _ in
                 memberOpen = false
                 selectedLineId = nil
                 panel = nil
+                endSelecting()
             }
             .onChange(of: model.checkoutTicketId) { _, _ in
                 selectedLineId = nil
                 panel = nil
+                endSelecting()
             }
             .onChange(of: selectedLineId) { old, new in
                 if panel?.isLine == true { panel = nil }
@@ -95,8 +105,10 @@ struct TicketColumn: View {
                 // 不選這一行了（或換一行）：問它數量的鍵盤收起來；換一行的話馬上問新的那一行
                 if old != nil, keypad.keepsSelection { keypad.cancel() }
             }
-            // 加了新的一行：焦點到新加的那一行，原本選起來的就不選了；選起來的那一行不見了（刪掉、作廢、別台改了）也不選了
+            // 加了新的一行：焦點到新加的那一行，原本選起來的就不選了；選起來的那一行不見了（刪掉、作廢、別台改了）也不選了。
+            // 「選取」中勾起來的不見了（刪除、作廢、拆走）：拿掉；勾的全處理掉了＝選取結束
             .onChange(of: model.selectedTicket?.activeLines.count ?? 0) { old, new in
+                pruneChecked()
                 guard let id = selectedLineId else { return }
                 let stillThere = model.selectedTicket?.activeLines.contains(where: { $0.id == id }) ?? false
                 if new > old || !stillThere { selectedLineId = nil }
@@ -106,12 +118,12 @@ struct TicketColumn: View {
             .onDisappear {
                 if selectedLineId != nil, keypad.keepsSelection { keypad.cancel() }
             }
-            // 規格、加料的卡打開了：右欄換成那張卡，這一行就不選了
+            // 規格、加料的卡打開了：右欄換成那張卡，這一行就不選了（「選取」也結束：右欄只對應一樣東西）
             .onChange(of: model.variantItem?.id) { _, id in
-                if id != nil { selectedLineId = nil }
+                if id != nil { selectedLineId = nil; endSelecting() }
             }
             .onChange(of: model.modifierItem?.id) { _, id in
-                if id != nil { selectedLineId = nil }
+                if id != nil { selectedLineId = nil; endSelecting() }
             }
             // 截圖：先選起第一行（只在 Debug、帶 -preselect）
             .task(id: model.selectedTicketId) {
@@ -147,10 +159,13 @@ struct TicketColumn: View {
             .alert("備註", isPresented: noteShown) {
                 TextField("例如：不要香菜", text: $noteText)
                 Button("好") {
-                    if let l = noteFor, let t = model.selectedTicket { model.setNote(noteText, for: l, in: t) }
-                    noteFor = nil
+                    let lines = noteFor
+                    noteFor = []
+                    if let t = model.selectedTicket { model.setNote(noteText, for: lines, in: t) }
                 }
-                Button("取消", role: .cancel) { noteFor = nil }
+                Button("取消", role: .cancel) { noteFor = [] }
+            } message: {
+                if noteFor.count > 1 { Text("勾起來的 \(noteFor.count) 項都用這個備註") }
             }
             .alert("整張單的備註", isPresented: $ticketNote) {
                 TextField("例如：有過敏、先上飲料", text: $noteText)
@@ -185,7 +200,7 @@ struct TicketColumn: View {
     }
 
     private var noteShown: Binding<Bool> {
-        Binding(get: { noteFor != nil }, set: { if !$0 { noteFor = nil } })
+        Binding(get: { !noteFor.isEmpty }, set: { if !$0 { noteFor = [] } })
     }
 
     private var voidReasonShown: Binding<Bool> {
@@ -267,11 +282,13 @@ struct TicketColumn: View {
     private func content(_ t: Ticket) -> some View {
         let x = t.totals
         let editable = model.checkoutTicketId == nil
+        // 「選取」中不能滑（點一行＝勾／不勾）
+        let swipes = editable && !selecting
         return VStack(spacing: 0) {
             header(t)
                 .padding(.horizontal, 18)
-                .padding(.top, 18)
-                .padding(.bottom, 12)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
             Rule()
             if t.activeLines.isEmpty {
                 VStack(spacing: 8) {
@@ -293,14 +310,15 @@ struct TicketColumn: View {
                         LazyVStack(spacing: 0) {
                             ForEach(t.activeLines) { line in
                                 SwipeRow(id: line.id, openId: $openSwipeId,
-                                         leading: editable ? [minusKey(line), plusKey(line)] : [],
-                                         trailing: editable ? [deleteKey(line)] : [],
-                                         fullLeading: editable ? plusKey(line) : nil,
-                                         fullTrailing: editable && !line.isSent ? deleteKey(line) : nil,
-                                         enabled: editable) {
+                                         leading: swipes ? [minusKey(line), plusKey(line)] : [],
+                                         trailing: swipes ? [deleteKey(line)] : [],
+                                         fullLeading: swipes ? plusKey(line) : nil,
+                                         fullTrailing: swipes && !line.isSent ? deleteKey(line) : nil,
+                                         enabled: swipes) {
                                     LineRow(line: line, ticket: t, editable: editable,
-                                            selected: editable && selectedLineId == line.id,
-                                            onSelect: { select(line) })
+                                            selected: swipes && selectedLineId == line.id,
+                                            selecting: editable && selecting, checked: checked.contains(line.id),
+                                            onSelect: { tapLine(line) })
                                         .background { lineBackdrop }
                                 }
                                 .id(line.id)
@@ -331,6 +349,7 @@ struct TicketColumn: View {
                 .padding(18)
         }
         .animation(Motion.spring, value: selectedLineId)
+        .animation(Motion.fast, value: selecting)
     }
 
     /// 單子欄的底（不透明）：iPad 是暖紙色上一層淡淡的右欄色；手機在 sheet 裡，和 sheet 同一個暖紙色
@@ -343,6 +362,15 @@ struct TicketColumn: View {
 
     /// 一行的底（和單子欄同一個顏色、不透明：往左右滑時後面的鍵不會透出來）
     private var lineBackdrop: some View { ground }
+
+    /// 點一行：「選取」中＝勾／不勾；不然＝選起來
+    private func tapLine(_ line: TicketLine) {
+        if selecting {
+            toggleChecked(line)
+        } else {
+            select(line)
+        }
+    }
 
     /// 點一行：選起來（右欄換成那一行的動作，鍵盤問它的數量）；再點一次取消
     private func select(_ line: TicketLine) {
@@ -364,37 +392,20 @@ struct TicketColumn: View {
         return t.lines.first { $0.id == id && $0.isActive }
     }
 
+    /// 頁首（越矮越好，單子才看得到更多行）：
+    ///   A036  (24 號)                     選取      ← 標題（桌號／稱呼／單號）＋叫號的號碼；右上「選取」（選取中：全選、完成）
+    ///   阿珠・23:19          [內用｜外帶｜外送]      ← 誰開的、幾點；用餐方式（放不下就換到下一行）
+    /// 下面才是（有的話）銷售人員、待結帳、換貨、會員條、整張單的備註
     private func header(_ t: Ticket) -> some View {
         let editable = model.checkoutTicketId == nil
         return VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .center, spacing: 10) {
-                    Text(headerTitle(t))
-                        .font(.brand(22, .semibold))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    Spacer(minLength: 0)
-                    if let q = t.queueNumber, q > 0 {
-                        queueBadge(q)
-                    }
-                }
-                HStack(spacing: 6) {
-                    Text(t.number)
-                    Text("・")
-                    Text(model.staffName(t.openedBy))
-                    Text("・")
-                    Text(TaipeiTime.clock(t.openedAt))
-                }
-                .font(.brand(12.5, .regular))
-                .monospacedDigit()
-                .foregroundStyle(Theme.muted)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 4) {
+                titleRow(t, editable: editable)
+                metaRow(t, editable: editable)
             }
-            // 一排狀態（不是按鈕）：用餐方式與人數、銷售人員、已印結帳單；要改在右欄
-            if showsChipRow(t) {
+            // 一排狀態（不是按鈕）：銷售人員、已印結帳單；要改在右欄
+            if model.mode.staffPerTicket || t.billPrintedAt != nil {
                 HStack(spacing: 8) {
-                    if showsOrderChip(t) { StatusBadge(orderChipText(t), tone: .neutral) }
                     if model.mode.staffPerTicket { salespersonTag(t) }
                     if t.billPrintedAt != nil { StatusBadge(billBadge(t), tone: .warning) }
                 }
@@ -427,12 +438,90 @@ struct TicketColumn: View {
         .animation(Motion.fast, value: memberOpen)
     }
 
-    /// 單子的標題；有叫號的號碼時號碼在右邊的標籤上，標題就不再寫一次（「外帶 A023」＋「24 號」）
+    /// 第一行：標題＋叫號的號碼；右上「選取」（選取中：「全選／全不選」「完成」）。結帳中、還沒點東西：沒有「選取」
+    private func titleRow(_ t: Ticket, editable: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(headerTitle(t))
+                .font(.brand(22, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .layoutPriority(1)
+            if let q = t.queueNumber, q > 0 {
+                queueBadge(q)
+            }
+            Spacer(minLength: 0)
+            if editable && (selecting || !t.activeLines.isEmpty) {
+                selectControls(t)
+                    // 字貼齊右邊（和金額對齊）；按的範圍照樣有左右的留白
+                    .padding(.trailing, -8)
+            }
+        }
+    }
+
+    /// 「選取」／選取中的「全選」「完成」：只有字的小鈕
+    private func selectControls(_ t: Ticket) -> some View {
+        HStack(spacing: 2) {
+            if selecting {
+                Button(allChecked(t) ? "全不選" : "全選") { toggleAll(t) }
+                    .buttonStyle(HeaderTextButtonStyle(strong: false))
+            }
+            Button(selecting ? "完成" : "選取") {
+                if selecting { endSelecting() } else { beginSelecting() }
+            }
+            .buttonStyle(HeaderTextButtonStyle())
+            .accessibilityHint(selecting ? "不選了，回到一次點一行" : "一次勾好幾行：一起刪除、作廢、打折、寫備註、拆成新單")
+        }
+    }
+
+    /// 第二行：「阿珠・23:19」；右邊是用餐方式（內用／外帶／外送）。放不下（桌號、人數讓這一行變長）就把用餐方式換到下一行，字不截斷
+    @ViewBuilder
+    private func metaRow(_ t: Ticket, editable: Bool) -> some View {
+        let types = model.ticketOrderTypes
+        if types.count > 1 {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 10) {
+                    metaText(t)
+                    Spacer(minLength: 0)
+                    orderTypeSwitch(t, types: types, editable: editable)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    metaText(t)
+                    orderTypeSwitch(t, types: types, editable: editable)
+                }
+            }
+        } else {
+            metaText(t)
+        }
+    }
+
+    private func metaText(_ t: Ticket) -> some View {
+        Text(metaLine(t))
+            .font(.brand(12.5, .regular))
+            .monospacedDigit()
+            .foregroundStyle(Theme.muted)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// 「阿珠・23:19」；標題不是單號（桌號、稱呼）時前面加單號，有人數加人數：「A036・4 位・阿珠・23:19」
+    private func metaLine(_ t: Ticket) -> String {
+        var parts: [String] = []
+        if headerTitle(t) != t.number { parts.append(t.number) }
+        if t.guests > 0 { parts.append("\(t.guests) 位") }
+        parts.append(model.staffName(t.openedBy))
+        parts.append(TaipeiTime.clock(t.openedAt))
+        return parts.joined(separator: "・")
+    }
+
+    /// 單子的標題：內用有桌子＝桌號；有稱呼＝稱呼；美業、課程＝會員；不然＝單號。
+    /// 用餐方式在旁邊的分段控制、叫號的號碼在旁邊的標籤，標題不再寫一次（以前是「外帶 A036」＋「●外帶」＋「24 號」）
     private func headerTitle(_ t: Ticket) -> String {
-        guard t.queueNumber != nil else { return t.title(floor: model.floor) }
-        var plain = t
-        plain.queueNumber = nil
-        return plain.title(floor: model.floor)
+        if t.orderType == .dineIn && !t.tableIds.isEmpty { return model.floor.tableNames(t.tableIds) }
+        if let name = t.customerName, !name.isEmpty { return name }
+        if t.serviceMode?.showsOrderType == false, let m = t.member { return m.name ?? m.maskedPhone }
+        return t.number
     }
 
     /// 叫號的號碼（結帳時取的、排隊叫到的）：「24 號」
@@ -456,20 +545,41 @@ struct TicketColumn: View {
         return model.role.hasDrawer ? "\(from)送來結帳" : "已送到結帳櫃台"
     }
 
-    /// 用餐方式＋人數的標籤：有內用的模式，或這張單本來就有桌子、人數
-    private func showsOrderChip(_ t: Ticket) -> Bool {
+    /// 這張單記人數：有內用的模式，或這張單本來就有桌子、人數（「更多…」的「人數」）
+    private func tracksGuests(_ t: Ticket) -> Bool {
         model.mode.showsOrderType || !t.tableIds.isEmpty || t.guests > 0
     }
 
-    private func showsChipRow(_ t: Ticket) -> Bool {
-        showsOrderChip(t) || model.mode.staffPerTicket || t.billPrintedAt != nil
+    // MARK: 用餐方式
+
+    /// 用餐方式：內用／外帶／外送（分段控制）。點一下就改，服務費跟著換（model.setOrderType）。
+    /// 結帳中只看不改：已經在收錢了，服務費一變應收就變；要改先按右欄的「回到點餐」
+    private func orderTypeSwitch(_ t: Ticket, types: [OrderType], editable: Bool) -> some View {
+        OrderTypeSwitch(types: types, selected: t.orderType, enabled: editable) { type in
+            pickOrderType(type, for: t)
+        }
     }
 
-    private func orderChipText(_ t: Ticket) -> String {
-        var parts: [String] = []
-        if model.mode.showsOrderType { parts.append(t.orderType.label) }
-        if t.guests > 0 { parts.append("\(t.guests) 位") }
-        return parts.isEmpty ? "人數" : parts.joined(separator: "・")
+    /// 點了一段：內用改成外帶、外送而且單子在桌上＝先問（右欄的面板：「A2 的桌子會空出來」），好了才改、桌子空出來
+    private func pickOrderType(_ type: OrderType, for t: Ticket) {
+        guard model.checkoutTicketId == nil, type != t.orderType else { return }
+        model.touch()
+        guard type != .dineIn, !t.tableIds.isEmpty else {
+            model.setOrderType(type, for: t)
+            return
+        }
+        let tables = model.floor.tableNames(t.tableIds)
+        let id = t.id
+        // 這一欄自己的面板（更多…、折扣…）收起來：確認的面板才看得到
+        panel = nil
+        Task {
+            let yes = await model.confirm(title: "改成\(type.label)？", message: "\(tables) 的桌子會空出來：這張單不再算在桌上，桌位圖上 \(tables) 變成空桌。",
+                                          confirmLabel: "改成\(type.label)", confirmDetail: "\(tables) 空出來",
+                                          keepLabel: "不改（留在 \(tables)）")
+            // 問的時候單子可能被別台結帳、作廢，或這台已經進了結帳
+            guard yes, model.checkoutTicketId == nil, let now = model.state.tickets[id], now.isOpen else { return }
+            model.setOrderType(type, for: now)
+        }
     }
 
 
@@ -634,10 +744,11 @@ struct TicketColumn: View {
 
     // MARK: - 右欄：整張單
 
-    /// 右欄要放什麼：結帳中不放（付款畫面自己放）；選了某一行放那一行；不然放整張單（沒有單就是開單）
+    /// 右欄要放什麼：結帳中不放（付款畫面自己放）；「選取」中放勾起來的幾行；選了某一行放那一行；不然放整張單（沒有單就是開單）
     private var dock: DockSelection? {
         guard model.checkoutTicketId == nil else { return nil }
         guard let t = model.selectedTicket else { return emptyPage }
+        if selecting { return batchSelection(t) }
         if let line = selectedLine(in: t) { return lineSelection(line, in: t) }
         return ticketPage(t)
     }
@@ -666,8 +777,7 @@ struct TicketColumn: View {
     /// 整張單：大鍵＝送單（餐廳有還沒送的）或結帳；動作鍵只放常用的，其他在「更多…」「折扣…」的面板
     private func ticketPage(_ t: Ticket) -> DockSelection {
         let unsent = t.unsentLines.filter { $0.course <= 1 }
-        // 餐廳：先送廚房、吃完再結帳；櫃台、咖啡：結帳時一起送（沒有「送單」）；美業沒有廚房，只有結帳
-        let canSend = model.features.kitchen && model.mode.usesKitchen && !model.mode.payFirst && !unsent.isEmpty
+        let canSend = sendsFromTicket && !unsent.isEmpty
         let checkout = checkoutAction(t)
         var actions: [POSAction] = []
         if canSend { actions.append(checkout) }
@@ -677,6 +787,11 @@ struct TicketColumn: View {
             return .page("ticket-\(t.id)", primary: POSAction("送單 \(count)", icon: "fire") { model.send(t) }, accent: true, actions: actions)
         }
         return .page("ticket-\(t.id)", primary: checkout, accent: model.takesPayment, actions: actions)
+    }
+
+    /// 單子上有「送單」「送廚房」：餐廳先送廚房、吃完再結帳；櫃台、咖啡結帳時一起送（沒有「送單」）；美業沒有廚房，只有結帳
+    private var sendsFromTicket: Bool {
+        model.features.kitchen && model.mode.usesKitchen && !model.mode.payFirst
     }
 
     /// 結帳；不收錢的崗位（報到接待、前場的手機）：送到結帳櫃台（單子變成待結帳、櫃台跳出來），請客人過去結
@@ -745,7 +860,7 @@ struct TicketColumn: View {
         }
         actions.append(POSAction("備註…", icon: "pencil-square") {
             noteText = line.note
-            noteFor = line
+            noteFor = [line]
         })
         actions.append(POSAction(line.discount == nil ? "折扣・改價…" : "折扣（\(line.discount?.label ?? "")）…", icon: "tag") { panel = .lineDiscount })
         if isClassic {
@@ -761,6 +876,134 @@ struct TicketColumn: View {
         return DockSelection(id: "line-\(line.id)", kind: "這一行", title: line.displayName, detail: lineDetail(line),
                              badge: lineBadge(line), primary: phonePrimary, accent: false, actions: actions,
                              compact: model.isPhone, clear: { selectedLineId = nil })
+    }
+
+    // MARK: - 右欄：「選取」勾起來的幾行
+
+    /// 勾起來的這幾行：卡片（選取・已選 3 項・合計）＋動作鍵（整筆折扣、備註、拆成新單、送廚房）。
+    /// 大鍵：都還沒送出＝刪除（下面可以復原）；有送出去的＝作廢…（問原因、要主管）。× 或頁首的「完成」＝不選了
+    private func batchSelection(_ t: Ticket) -> DockSelection {
+        let lines = checkedLines(in: t)
+        let hasLines = !lines.isEmpty
+        var actions: [POSAction] = [
+            POSAction("整筆折扣…", icon: "tag", enabled: hasLines) { panel = .batchDiscount },
+            POSAction("備註…", icon: "pencil-square", enabled: hasLines) {
+                noteText = sharedNote(lines)
+                noteFor = lines
+            },
+            // 全部勾了就不是拆單（拆出來的和原本的一樣）
+            POSAction("拆成新單", icon: "scissors", enabled: hasLines && lines.count < t.activeLines.count) {
+                splitOff(lines, from: t)
+            },
+        ]
+        let unsent = lines.filter { !$0.isSent }
+        if sendsFromTicket && !unsent.isEmpty {
+            let count = unsent.reduce(0) { $0 + $1.quantity }
+            actions.append(POSAction("送廚房 \(count)", icon: "fire") {
+                model.send(unsent, in: t)
+                endSelecting()
+            })
+        }
+        return DockSelection(id: "batch-\(t.id)", kind: "選取", title: "已選 \(lines.count) 項",
+                             detail: hasLines ? batchDetail(lines) : "點單子上的品項勾起來；頁首的「全選」一次勾全部",
+                             primary: batchPrimary(lines, in: t), accent: false, actions: actions,
+                             compact: model.isPhone, clear: { endSelecting() })
+    }
+
+    /// 大鍵：都還沒送出＝「刪除 3 項」（lines.removed，下面跳「已刪除 3 項・復原」）；
+    /// 有送出去的＝「作廢…」（和一行的作廢同一個流程：問原因、要主管、廚房印作廢單；一起勾的還沒送出的直接拿掉）
+    private func batchPrimary(_ lines: [TicketLine], in t: Ticket) -> POSAction? {
+        guard !lines.isEmpty else { return nil }
+        let sentCount = lines.filter(\.isSent).count
+        if sentCount == 0 {
+            return POSAction("刪除 \(lines.count) 項", icon: "trash", destructive: true) {
+                model.removeLines(lines, in: t)
+            }
+        }
+        let title = sentCount == lines.count ? "作廢 \(lines.count) 項…" : "刪除・作廢 \(lines.count) 項…"
+        return POSAction(title, icon: "x-circle", destructive: true) {
+            voidReasonFor = lines
+        }
+    }
+
+    /// 「合計 NT$420・2 項已送出」：勾起來的這幾行加起來（課程卡抵的不收錢、不算）
+    private func batchDetail(_ lines: [TicketLine]) -> String {
+        let total = Money.sum(lines.filter { $0.redeem == nil }.map { $0.gross - $0.lineDiscount })
+        var parts = ["合計 \(total.formatted)"]
+        let sentCount = lines.filter(\.isSent).count
+        if sentCount > 0 { parts.append("\(sentCount) 項已送出") }
+        return parts.joined(separator: "・")
+    }
+
+    /// 勾起來的行（照單子上的順序；已經不在單子上的不算）
+    private func checkedLines(in t: Ticket) -> [TicketLine] {
+        t.activeLines.filter { checked.contains($0.id) }
+    }
+
+    /// 勾起來的都是同一個備註就帶進來（改一個字比較快）；不一樣就空白
+    private func sharedNote(_ lines: [TicketLine]) -> String {
+        let notes = Set(lines.map(\.note))
+        return notes.count == 1 ? (notes.first ?? "") : ""
+    }
+
+    /// 拆成新單：勾起來的整行搬到新的一張（和「拆單」同一個事件：model.split）。新單會選起來，「選取」跟著結束
+    private func splitOff(_ lines: [TicketLine], from t: Ticket) {
+        var moving: [String: Int] = [:]
+        for l in lines { moving[l.id] = l.quantity }
+        model.split(t, moving: moving)
+    }
+
+    /// 頁首的「選取」：開始勾。選起來的那一行、滑開的那一行、蓋著的面板、左邊的規格加料卡都收起來（右欄只對應一樣東西）
+    private func beginSelecting() {
+        selectedLineId = nil
+        openSwipeId = nil
+        panel = nil
+        checked = []
+        model.variantItem = nil
+        model.modifierItem = nil
+        selecting = true
+        model.touch()
+    }
+
+    /// 「完成」、×、換單、結帳、打開規格加料卡：不選了（勾的清掉）
+    private func endSelecting() {
+        if panel == .batchDiscount { panel = nil }
+        guard selecting || !checked.isEmpty else { return }
+        selecting = false
+        checked = []
+    }
+
+    private func toggleChecked(_ line: TicketLine) {
+        guard line.isActive else { return }
+        if checked.contains(line.id) {
+            checked.remove(line.id)
+        } else {
+            checked.insert(line.id)
+        }
+        model.touch()
+    }
+
+    /// 「全選」：勾全部；全部都勾了是「全不選」
+    private func toggleAll(_ t: Ticket) {
+        let all = Set(t.activeLines.map(\.id))
+        checked = allChecked(t) ? [] : all
+        model.touch()
+    }
+
+    private func allChecked(_ t: Ticket) -> Bool {
+        !t.activeLines.isEmpty && t.activeLines.allSatisfy { checked.contains($0.id) }
+    }
+
+    /// 單子的行變了：勾起來的不見了（刪除、作廢、拆走、別台改了）就拿掉；勾的全處理掉了、或單子空了＝「選取」結束
+    private func pruneChecked() {
+        guard selecting else { return }
+        let active = Set(model.selectedTicket?.activeLines.map(\.id) ?? [])
+        let kept = checked.intersection(active)
+        if active.isEmpty || (!checked.isEmpty && kept.isEmpty) {
+            endSelecting()
+        } else if kept != checked {
+            checked = kept
+        }
     }
 
     // MARK: - 右側鍵盤：選起來那一行的數量
@@ -782,10 +1025,10 @@ struct TicketColumn: View {
         return QuantityAsk(lineId: id, quantity: line.quantity, sent: line.isSent, paused: quantityPaused, yielding: keypad.isAskingOther)
     }
 
-    /// 跳視窗（備註、作廢的原因）、蓋住右欄的面板、拆單、掃條碼：問數量的鍵盤先讓開，關掉再回來問
+    /// 跳視窗（備註、作廢的原因）、蓋住右欄的面板（包括「改成外帶？」的確認）、拆單、掃條碼：問數量的鍵盤先讓開，關掉再回來問
     private var quantityPaused: Bool {
-        noteFor != nil || !voidReasonFor.isEmpty || panel != nil || ticketNote || voidingTicket
-            || askingCustom || askingCoupon || model.scanRequest != nil || splitting != nil
+        !noteFor.isEmpty || !voidReasonFor.isEmpty || panel != nil || ticketNote || voidingTicket
+            || askingCustom || askingCoupon || model.scanRequest != nil || splitting != nil || model.confirmRequest != nil
     }
 
     /// 點了一行：右側鍵盤直接問它的數量（帶入現在的數量，打數字＝換掉；−1、+1、2 個、3 個一按就改；大鍵確認）。
@@ -935,6 +1178,7 @@ struct TicketColumn: View {
         case .ticketDiscount: "整張單的折扣"
         case .ticketMore: "這張單"
         case .salesperson: "銷售人員"
+        case .batchDiscount: "整筆折扣"
         }
     }
 
@@ -943,6 +1187,7 @@ struct TicketColumn: View {
         guard let t = model.selectedTicket else { return nil }
         switch p {
         case .salesperson: return "整張單的業績算給誰"
+        case .batchDiscount: return "已選 \(checkedLines(in: t).count) 項・每一項打一樣的折扣"
         default: return "\(t.number)・\(t.title(floor: model.floor))"
         }
     }
@@ -951,7 +1196,9 @@ struct TicketColumn: View {
     private func panelContent(_ p: TicketPanel) -> some View {
         if let t = model.selectedTicket {
             VStack(alignment: .leading, spacing: 8) {
-                if p.isLine {
+                if p == .batchDiscount {
+                    batchDiscountPanel(in: t)
+                } else if p.isLine {
                     if let line = selectedLine(in: t) {
                         linePanel(p, line: line, in: t)
                     }
@@ -1033,8 +1280,28 @@ struct TicketColumn: View {
                     model.setCourse(3, for: line, in: t)
                 }
             }
-        case .ticketDiscount, .ticketMore, .salesperson:
+        case .ticketDiscount, .ticketMore, .salesperson, .batchDiscount:
             EmptyView()
+        }
+    }
+
+    /// 勾起來的這幾行一起打折：鍵盤問一次、授權一次（照折得最多的那一行算），每一行打一樣的折扣（model.discount(lines…)）
+    @ViewBuilder
+    private func batchDiscountPanel(in t: Ticket) -> some View {
+        let lines = checkedLines(in: t)
+        DockChoice(title: "打折（%）", detail: "每一項打一樣的折，在右邊打要折掉的 %", enabled: !lines.isEmpty) {
+            panel = nil
+            Task { await model.discount(lines, in: t, kind: .percent) }
+        }
+        DockChoice(title: "折價（元）", detail: "每一項折一樣多，在右邊打折掉多少錢", enabled: !lines.isEmpty) {
+            panel = nil
+            Task { await model.discount(lines, in: t, kind: .amount) }
+        }
+        if lines.contains(where: { $0.discount != nil }) {
+            DockChoice(title: "取消折扣", detail: "勾起來的都回到原價") {
+                panel = nil
+                model.clearDiscount(lines, in: t)
+            }
         }
     }
 
@@ -1065,16 +1332,8 @@ struct TicketColumn: View {
                 }
             }
         case .ticketMore:
-            if model.mode.showsOrderType {
-                Eyebrow("用餐方式")
-                ForEach(OrderType.allCases, id: \.self) { type in
-                    DockChoice(title: type.label, selected: t.orderType == type) {
-                        panel = nil
-                        model.setOrderType(type, for: t)
-                    }
-                }
-            }
-            if showsOrderChip(t) {
+            // 用餐方式在單子的頁首（內用／外帶／外送的分段控制），這裡不再放一份
+            if tracksGuests(t) {
                 DockChoice(title: "人數", detail: "在右邊打幾位", trailing: t.guests > 0 ? "\(t.guests) 位" : nil) {
                     panel = nil
                     Task { await model.setGuests(t) }
@@ -1128,7 +1387,7 @@ struct TicketColumn: View {
             staffChoices(salespeople, selected: t.salespersonId, none: "不指定（算給開單的人）") { id in
                 model.setSalesperson(id, for: t)
             }
-        case .performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse:
+        case .performer, .assistant, .passes, .variant, .lineDiscount, .lineCourse, .batchDiscount:
             EmptyView()
         }
     }
@@ -1173,10 +1432,83 @@ struct TicketColumn: View {
     }
 }
 
+// MARK: - 頁首的小元件
+
+/// 單子頁首的用餐方式：小的分段控制（選到的那一段墨色實心，和其他頁的切換同一種）。
+/// 不能改（結帳中）：選到的照樣看得出來，其他的淡掉
+private struct OrderTypeSwitch: View {
+    let types: [OrderType]
+    let selected: OrderType
+    var enabled = true
+    let pick: (OrderType) -> Void
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(types, id: \.self) { type in
+                Button {
+                    pick(type)
+                } label: {
+                    Text(type.label)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 11)
+                        .frame(height: 32)
+                }
+                .buttonStyle(OrderTypeSegmentStyle(selected: type == selected))
+                .accessibilityAddTraits(type == selected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                .strokeBorder(Theme.line, lineWidth: 1)
+        }
+        .disabled(!enabled)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("用餐方式")
+        .accessibilityHint(enabled ? "" : "結帳中不能改；要改先回到點餐")
+    }
+}
+
+private struct OrderTypeSegmentStyle: ButtonStyle {
+    let selected: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.brand(13.5, selected ? .semibold : .medium))
+            .foregroundStyle(selected ? Theme.page : (isEnabled ? Theme.ink2 : Theme.faint))
+            .background(selected ? Theme.ink : (configuration.isPressed ? Theme.press : Color.clear),
+                        in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))
+            .contentShape(.rect)
+            .animation(Motion.fast, value: selected)
+    }
+}
+
+/// 單子頁首只有字的小鈕（選取、完成、全選）：品牌橘的字（strong）或墨色的字；按下去底色深一點
+private struct HeaderTextButtonStyle: ButtonStyle {
+    var strong = true
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.brand(14.5, strong ? .semibold : .medium))
+            .foregroundStyle(strong ? Theme.accentText : Theme.ink2)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .frame(minHeight: 34)
+            .background(configuration.isPressed ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radiusSm))
+            .contentShape(.rect)
+            .animation(Motion.fast, value: configuration.isPressed)
+    }
+}
+
 // MARK: - 一行
 
 /// 單子上的一行：只顯示（數量、名字、規格、時間、設計師、卡抵、狀態），不放按鈕。
 /// 點一下選起來（品牌橘的框），右欄換成這一行的動作、鍵盤問它的數量；再點一下取消。左右滑在 TicketColumn（SwipeRow）。
+/// 「選取」中：左邊多一個勾選的圓圈，點一下＝勾／不勾（勾了是淡淡的品牌橘底）。
 /// 作廢的行不會出現在這裡（單子欄只列還要的）
 struct LineRow: View {
     @Environment(POSModel.self) private var model
@@ -1184,6 +1516,9 @@ struct LineRow: View {
     let ticket: Ticket
     let editable: Bool
     var selected = false
+    /// 頁首按了「選取」：一次勾好幾行
+    var selecting = false
+    var checked = false
     var onSelect: () -> Void = {}
 
     private var item: MenuItem? { line.itemId.flatMap { model.catalog.item($0) } }
@@ -1210,16 +1545,28 @@ struct LineRow: View {
                     .allowsHitTesting(false)
             }
         }
-        .accessibilityHint(editable && line.isActive ? (selected ? "再點一下取消選取" : "點一下，右邊的鍵盤改這一行的數量；左右滑可以加減、刪除") : "")
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(hint)
+        .accessibilityAddTraits(selected || (selecting && checked) ? .isSelected : [])
         .animation(Motion.spring, value: line.redeem)
         .animation(Motion.fast, value: selected)
+        .animation(Motion.fast, value: checked)
+    }
+
+    private var hint: String {
+        guard editable && line.isActive else { return "" }
+        if selecting { return checked ? "點一下取消勾選" : "點一下勾起來" }
+        return selected ? "再點一下取消選取" : "點一下，右邊的鍵盤改這一行的數量；左右滑可以加減、刪除"
     }
 
     // MARK: 這一行（只顯示）
 
     private func summary(_ passes: [MemberPass]) -> some View {
         HStack(alignment: .top, spacing: 12) {
+            if selecting {
+                checkCircle
+                    .padding(.trailing, -2)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
             quantityBox
 
             VStack(alignment: .leading, spacing: 3) {
@@ -1263,13 +1610,36 @@ struct LineRow: View {
             priceColumn
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 12)
+        // 緊一點，單子看得到更多行；最矮也有 52（數量方塊 34＋上下 9），手指照樣點得到
+        .padding(.vertical, 9)
+        .frame(minHeight: 52)
         .contentShape(.rect)
+    }
+
+    /// 「選取」中：勾選的圓圈（勾了＝品牌橘實心＋白色的勾）；和數量方塊一樣高、置中
+    private var checkCircle: some View {
+        ZStack {
+            Circle()
+                .fill(checked ? Theme.accent : Theme.surface)
+            Circle()
+                .strokeBorder(checked ? Theme.accent : Theme.faint, lineWidth: 1.5)
+            if checked {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Theme.onAccent)
+            }
+        }
+        .frame(width: 24, height: 24)
+        .frame(height: 34)
+        .accessibilityHidden(true)
     }
 
     @ViewBuilder
     private var rowBackground: some View {
-        if selected {
+        if selecting && checked {
+            // 勾起來的：淡淡的品牌橘底（右欄的「已選 3 項」就是這幾行）
+            Theme.accentSoft
+        } else if selected {
             // 選起來的：亮一階的底、左邊一條品牌橘、外框（右欄對應的就是這一行）
             (line.redeem != nil ? Theme.accentSoft : Theme.surface)
                 .overlay(alignment: .leading) { Rectangle().fill(Theme.accent).frame(width: 4) }
