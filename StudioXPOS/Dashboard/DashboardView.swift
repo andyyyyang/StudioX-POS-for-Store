@@ -59,6 +59,16 @@ struct DashboardView: View {
         }
         .scrollIndicators(.hidden)
         .task(id: date) { await loadIfNeeded(date) }
+        .dockSelection(pageDock)
+    }
+
+    /// 這一頁沒選東西時的動作（右欄）：到訂單看進行中的單（這台有訂單頁才有）
+    private var pageDock: DockSelection? {
+        guard model.visibleSections.contains(.orders) else { return nil }
+        let count = model.state.openTickets.count
+        return DockSelection.page("dashboard", actions: [
+            POSAction(count > 0 ? "看進行中的單（\(count)）" : "看訂單", icon: "queue-list") { model.go(.orders) },
+        ])
     }
 
     // MARK: - 上面
@@ -582,7 +592,7 @@ private struct DashDelta: View {
     }
 
     private var background: Color {
-        if onAccent { return Color.white.opacity(0.2) }
+        if onAccent { return Theme.onAccent.opacity(0.2) }
         return up ? Tone.active.background : Tone.danger.background
     }
 }
@@ -1251,26 +1261,11 @@ private struct DashControlsPanel: View {
 
 // MARK: - 現在
 
-/// 現在開著的單（不分今天、這一班：就是此刻的桌況）。整張卡點一下到「訂單」看進行中的單（卡片上不放按鈕）
+/// 現在開著的單（不分今天、這一班：就是此刻的桌況）。只是看；「看進行中的單」在右欄（這一頁的動作）
 private struct DashFloorNowPanel: View {
     @Environment(POSModel.self) private var model
 
-    /// 這台有訂單頁（廚房這類崗位沒有）
-    private var canOpen: Bool { model.visibleSections.contains(.orders) }
-
     var body: some View {
-        Button {
-            model.go(.orders)
-        } label: {
-            content
-                .contentShape(.rect)
-        }
-        .buttonStyle(.press)
-        .allowsHitTesting(canOpen)
-        .accessibilityHint(canOpen ? "到訂單看進行中的單" : "")
-    }
-
-    private var content: some View {
         let tickets = model.state.openTickets
         let value = Money.sum(tickets.map { $0.totals.total })
         let guests = tickets.reduce(0) { $0 + $1.guests }
@@ -1282,14 +1277,6 @@ private struct DashFloorNowPanel: View {
                     LiveDot()
                 }
                 Spacer(minLength: 8)
-                if canOpen {
-                    HStack(spacing: 4) {
-                        Text("看單")
-                            .font(.brand(13, .medium))
-                        HeroIcon("chevron-right", size: 13)
-                    }
-                    .foregroundStyle(Theme.muted)
-                }
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(String(tickets.count))

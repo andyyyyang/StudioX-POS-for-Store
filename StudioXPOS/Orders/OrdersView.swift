@@ -11,12 +11,11 @@ import SwiftUI
 ///   │ ● 點餐中 1   │ ● 出餐中 2        │ ● 用餐中 1   │ ● 待結帳 1  │
 ///   │ ┌─────────┐  │ ┌──────────────┐  │              │ ┌─────────┐ │
 ///   │ │A5   A021│  │ │A2 4位・34分 ●●○│  │              │ │A7   A019│ │
-///   │ │NT$ 320  │  │ │NT$ 1,320     │  │              │ │[ 結帳 →]│ │
+///   │ │NT$ 320  │  │ │NT$ 1,320     │  │              │ │NT$ 860  │ │
 ///   │ └─────────┘  │ └──────────────┘  │              │ └─────────┘ │
-///   │ 選起來的：A2・A021・NT$1,320 ··························· [ 點餐 ] │
 ///   └──────────────────────────────────────────────────────────────┘
-///   卡片點一下＝選起來（右邊出現單子：送單、結帳、印結帳單都在那裡）；下面固定一條「點餐」。
-///   卡片上只有「待結帳」那一欄有一個「結帳」快捷。
+///   卡片上沒有按鈕：點一下選起來（橘框），右欄出現這張單：大鍵「結帳」（不能收錢的崗位是「點餐」），
+///   動作鍵「點餐」「印結帳單」「作廢」。再點一下或右欄的 × 取消選取。
 ///
 /// 全部（左邊一天的清單、右邊明細）
 ///   ┌ ‹ 今天・10月4日 ›   ┬───────────────────────────────────────┐
@@ -25,11 +24,11 @@ import SwiftUI
 ///   │ A2・4 位   已結帳  │ [林小涵 金卡會員]                        │
 ///   │  NT$2,680  13:40  │ 品項（規格、設計師、卡抵）…  金額          │
 ///   │ 王小美     已換貨  │ 付款・發票・換貨・退款                    │
-///   │                   │ [⋯][ 換貨 ][ 補印收據 ··············· ]   │
 ///   └───────────────────┴────────────────────────────────────────┘
+///   點一筆選起來、明細在中間；動作都在右欄：大鍵「補印收據」，動作鍵「換貨」「補印證明聯」「改統編／載具」「補開發票」「退款」。
 ///
-/// 明細不用系統的 sheet：sheet 會蓋住右側鍵盤，而退款金額、統編、愛心碼、換貨件數、主管 PIN 都要在鍵盤上打，
-/// 所以明細、退款、換貨、改統編都在工作區裡，鍵盤一直按得到。
+/// 左邊選、右邊做（docs/DESIGN.md）：退款、換貨、改統編的選項（品項、退回方式、原因、規格）是不用打數字的選擇，
+/// 用 .dockPanel 蓋住右欄；件數、金額、統編、愛心碼、主管 PIN 在右欄的鍵盤問，問的時候面板讓開、問完回來。
 ///
 /// 「全部」一次看一天：今天、昨天直接讀這台的狀態；更早的跟後台要（`model.history`），只能看、補印收據。
 struct OrdersView: View {
@@ -37,7 +36,7 @@ struct OrdersView: View {
 
     @State private var tab: OrdersTab = .open
     @State private var query = ""
-    /// 「全部」選中的那一張（ticketId）。寬的時候沒選就看最新的一張；窄的時候沒選就不開明細
+    /// 「全部」選中的那一張（ticketId）。沒選就不開明細（再點一下或右欄的 × 取消）
     @State private var selectedId: String?
     /// 「全部」看哪一天（nil＝今天：過了營業日的分界會自己換到新的一天）
     @State private var day: String?
@@ -45,6 +44,10 @@ struct OrdersView: View {
     @State private var offlineDays: Set<String> = []
     /// 按了「已處理」的衝突：只在這個畫面藏起來、不記事件（不發明新的事件種類；真正結案在後台）
     @State private var dismissedConflicts: Set<String> = []
+    /// 選起來的衝突（右欄：大鍵「已處理」、動作「看單」）
+    @State private var selectedConflictId: String?
+    /// 要作廢的那張進行中的單（右欄蓋上「作廢的原因」）
+    @State private var voidingTicketId: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,6 +57,142 @@ struct OrdersView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .dockSelection(dockItem)
+        .dockPanel(isPresented: Binding(get: { voidingTicketId != nil }, set: { if !$0 { voidingTicketId = nil } }),
+                   title: "作廢整張單", subtitle: voidSubtitle) {
+            voidChoices
+        }
+        .onAppear {
+            if LaunchArguments.preselect { preselectLatestSale() }
+        }
+    }
+
+    // MARK: - 右欄：選起來的那一筆
+
+    /// 衝突 → 看板選的單（進行中）→「全部」選的進行中的單。已結帳的那一筆由明細自己交上去（裡面的優先）
+    private var dockItem: DockSelection? {
+        if let c = selectedConflict { return conflictDock(c) }
+        switch tab {
+        case .open:
+            guard let t = model.selectedTicket else { return nil }
+            return ticketDock(t) { model.selectedTicketId = nil }
+        case .all:
+            guard let id = selectedId, let t = model.state.tickets[id], t.isOpen else { return nil }
+            return ticketDock(t) { selectedId = nil }
+        }
+    }
+
+    /// 這台有點餐頁、這個崗位能開單（報到接待、只收錢的櫃台沒有「點餐」）
+    private var canOrderHere: Bool {
+        model.role.takesOrders && model.visibleSections.contains(.order)
+    }
+
+    /// 進行中的單：大鍵「結帳」（不能收錢的崗位是「點餐」）；動作「點餐」「印結帳單」「作廢」
+    private func ticketDock(_ t: Ticket, clear: @escaping @MainActor () -> Void) -> DockSelection {
+        let orderAction: POSAction? = canOrderHere
+            ? POSAction(t.exchange != nil ? "加要換的商品" : "點餐", icon: "plus-circle") {
+                model.selectedTicketId = t.id
+                model.go(.order)
+            }
+            : nil
+        let checkout: POSAction? = model.role.takesPayment
+            ? POSAction("結帳", icon: "credit-card", enabled: !t.activeLines.isEmpty) { model.beginCheckout(t) }
+            : nil
+        var actions: [POSAction] = []
+        if checkout != nil, let orderAction { actions.append(orderAction) }
+        actions.append(POSAction("印結帳單", icon: "printer", enabled: !t.activeLines.isEmpty) {
+            model.printBill(t)
+            model.show("已送出 \(t.title(floor: model.floor)) 的結帳單")
+        })
+        actions.append(POSAction("作廢整張單", icon: "trash", destructive: true) { voidingTicketId = t.id })
+        let lane = OrdersLane.of(t, kitchen: model.features.kitchen)
+        var detail = [t.number]
+        if t.guests > 0 { detail.append("\(t.guests) 位") }
+        detail.append("\(t.itemCount) 項")
+        detail.append(t.totals.total.formatted)
+        return DockSelection(
+            id: "orders-ticket-\(t.id)",
+            kind: t.exchange != nil ? "換貨單" : "單子",
+            title: t.title(floor: model.floor),
+            detail: detail.joined(separator: "・"),
+            badge: DockBadge(lane.title, tone: lane.tone),
+            primary: checkout ?? orderAction,
+            accent: checkout != nil,
+            actions: actions,
+            clear: { clear() }
+        )
+    }
+
+    private var selectedConflict: Conflict? {
+        guard let id = selectedConflictId else { return nil }
+        return model.state.visibleConflicts(hiding: dismissedConflicts).first(where: { $0.id == id })
+    }
+
+    /// 衝突：大鍵「已處理」（只在這個畫面藏起來）；有那張單的話動作「看單」
+    private func conflictDock(_ c: Conflict) -> DockSelection {
+        var actions: [POSAction] = []
+        if canOpen(c) {
+            actions.append(POSAction("看單", icon: "eye") {
+                selectedConflictId = nil
+                open(c)
+            })
+        }
+        return DockSelection(
+            id: "orders-conflict-\(c.id)",
+            kind: "兩台不一致",
+            title: c.ordersKindLabel,
+            detail: "\(c.message)・\(c.at.shortText)",
+            badge: DockBadge("要處理", tone: .danger),
+            primary: POSAction("已處理", icon: "check") {
+                _ = dismissedConflicts.insert(c.id)
+                selectedConflictId = nil
+            },
+            accent: false,
+            actions: actions,
+            clear: { selectedConflictId = nil }
+        )
+    }
+
+    // MARK: 作廢整張單（右欄的面板選原因；已送廚房、收了錢的要主管授權，在 model 裡問）
+
+    private var voidingTicket: Ticket? { voidingTicketId.flatMap { model.state.tickets[$0] } }
+
+    private var voidSubtitle: String {
+        guard let t = voidingTicket else { return "" }
+        return "\(t.number)・\(t.title(floor: model.floor))・選一個原因就作廢"
+    }
+
+    private var voidChoices: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(["客人離開", "開錯單", "測試"], id: \.self) { reason in
+                DockChoice(title: reason) { voidTicket(reason: reason) }
+            }
+            Text("已經送廚房或收了錢的單要主管授權；收了錢的請先退回付款。")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+        }
+    }
+
+    private func voidTicket(reason: String) {
+        guard let t = voidingTicket else {
+            voidingTicketId = nil
+            return
+        }
+        voidingTicketId = nil
+        if model.selectedTicketId == t.id { model.selectedTicketId = nil }
+        if selectedId == t.id { selectedId = nil }
+        Task { await model.voidTicket(t, reason: reason) }
+    }
+
+    // MARK: 截圖用（只在 Debug 帶 -preselect）：打開「全部」、選起最近結帳的一筆
+
+    private func preselectLatestSale() {
+        guard let s = model.state.closedSales().last else { return }
+        select(tab: .all)
+        day = s.businessDate == model.businessDate ? nil : s.businessDate
+        selectedId = s.ticketId
     }
 
     // MARK: - 上面
@@ -93,6 +232,7 @@ struct OrdersView: View {
         // 「全部」要左右兩欄的寬度：收起右邊的單子欄
         if t == .all && model.checkoutTicketId == nil { model.selectedTicketId = nil }
         selectedId = nil
+        selectedConflictId = nil
         withAnimation(Motion.fast) { tab = t }
     }
 
@@ -104,17 +244,26 @@ struct OrdersView: View {
         if !list.isEmpty {
             VStack(spacing: 8) {
                 ForEach(list) { c in
-                    OrdersConflictRow(
-                        conflict: c,
-                        canOpen: canOpen(c),
-                        open: { open(c) },
-                        dismiss: { _ = dismissedConflicts.insert(c.id) }
-                    )
+                    OrdersConflictRow(conflict: c, selected: selectedConflictId == c.id) {
+                        selectConflict(c)
+                    }
                 }
             }
             .padding(.horizontal, 28)
             .padding(.bottom, 16)
         }
+    }
+
+    /// 點一下選起來（同時只選一筆：取消選起來的單）；再點一下取消
+    private func selectConflict(_ c: Conflict) {
+        if selectedConflictId == c.id {
+            selectedConflictId = nil
+        } else {
+            selectedConflictId = c.id
+            selectedId = nil
+            if tab == .open && model.checkoutTicketId == nil { model.selectedTicketId = nil }
+        }
+        model.touch()
     }
 
     private func canOpen(_ c: Conflict) -> Bool {
@@ -182,24 +331,9 @@ struct OrdersView: View {
                     }
                     .scrollIndicators(.hidden)
                 }
-                // 選起來的那一張：動作在下面固定的一條（送單、結帳、印結帳單在右邊的單子裡）
-                if let t = boardSelection(in: openTickets), canOrderHere {
-                    OrdersBoardSelectionBar(ticket: t)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
             }
             .animation(Motion.fast, value: model.selectedTicketId)
         }
-    }
-
-    private func boardSelection(in list: [Ticket]) -> Ticket? {
-        guard let id = model.selectedTicketId else { return nil }
-        return list.first(where: { $0.id == id })
-    }
-
-    /// 這台有點餐頁、這個崗位能開單（報到接待、只收錢的櫃台沒有「點餐」）
-    private var canOrderHere: Bool {
-        model.role.takesOrders && model.visibleSections.contains(.order)
     }
 
     // MARK: 全部：一天的清單＋明細
@@ -263,10 +397,10 @@ struct OrdersView: View {
         GeometryReader { geo in
             if geo.size.width >= 680 {
                 HStack(spacing: 0) {
-                    master(list, date: date, archive: dayArchive, currentId: current(in: list, autoSelect: true)?.id)
+                    master(list, date: date, archive: dayArchive, currentId: selectedId)
                         .frame(width: min(340, max(300, geo.size.width * 0.36)))
                     Rule(vertical: true)
-                    detailPane(current(in: list, autoSelect: true), archive: dayArchive, close: nil)
+                    detailPane(current(in: list, autoSelect: false), archive: dayArchive, close: nil)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .background(Theme.surface)
                 }
@@ -277,6 +411,7 @@ struct OrdersView: View {
                     master(list, date: date, archive: dayArchive, currentId: selectedId)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     if let e = current(in: list, autoSelect: false) {
+                        // 蓋住清單的暗幕（深、淺色都用黑的半透明）
                         Color.black.opacity(0.22)
                             .contentShape(.rect)
                             .onTapGesture { selectedId = nil }
@@ -336,7 +471,9 @@ struct OrdersView: View {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(list) { e in
                                 Button {
-                                    selectedId = e.id
+                                    // 點一下選起來、再點一下取消；同時只選一筆
+                                    selectedId = selectedId == e.id ? nil : e.id
+                                    selectedConflictId = nil
                                     model.touch()
                                 } label: {
                                     OrdersEntryRow(entry: e, selected: e.id == currentId, refunds: entryRefunds(e, archive: archive))
@@ -414,12 +551,12 @@ struct OrdersView: View {
     private func detailPane(_ entry: OrdersEntry?, archive: DayHistory?, close: (() -> Void)?) -> some View {
         switch entry {
         case .none:
-            EmptyState(icon: "queue-list", title: "選一張單", message: "左邊點一下，明細出現在這裡")
+            EmptyState(icon: "queue-list", title: "選一張單", message: "左邊點一下，明細出現在這裡、動作在右邊")
         case .some(.open(let t)):
             OrdersOpenDetail(ticket: t, close: close, openTicket: { show(ticketId: $0) })
                 .id(t.id)
         case .some(.closed(let s)):
-            OrdersSaleDetail(sale: s, archive: archive, close: close, openTicket: { show(ticketId: $0) })
+            OrdersSaleDetail(sale: s, archive: archive, close: close, deselect: { selectedId = nil }, openTicket: { show(ticketId: $0) })
                 .id(s.ticketId)
         }
     }
@@ -556,7 +693,7 @@ private struct OrdersLaneColumn: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(tickets) { t in
-                            OrdersTicketCard(ticket: t, lane: lane)
+                            OrdersTicketCard(ticket: t)
                         }
                     }
                     .padding(.bottom, 24)
@@ -590,17 +727,12 @@ private struct OrdersLaneColumn: View {
     private var laneTotal: Money { Money.sum(tickets.map { $0.totals.total }) }
 }
 
-/// 看板上的一張單：整張點一下＝選起來（右邊出現單子、下面出現「點餐」）。
-/// 卡片上不放按鈕列；只有「待結帳」那一欄有一個「結帳」快捷（印了結帳單，下一步一定是結帳）
+/// 看板上的一張單：整張點一下＝選起來（橘框；右欄出現這張單的動作），再點一下取消。卡片上沒有按鈕
 private struct OrdersTicketCard: View {
     @Environment(POSModel.self) private var model
     let ticket: Ticket
-    let lane: OrdersLane
 
     private var selected: Bool { model.selectedTicketId == ticket.id }
-
-    /// 收錢的崗位才有（報到接待開了單交給櫃台）；選起來時右邊單子裡就有「結帳」，卡片上不重複
-    private var showsQuickCheckout: Bool { lane == .billing && model.role.takesPayment && !selected }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -608,9 +740,6 @@ private struct OrdersTicketCard: View {
             metaRow
             Rule(color: Theme.hair)
             amountRow
-            if showsQuickCheckout {
-                quickCheckout
-            }
         }
         .padding(16)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
@@ -692,58 +821,6 @@ private struct OrdersTicketCard: View {
                 StatusBadge("已印結帳單", tone: .warning)
             }
         }
-    }
-
-    /// 待結帳的快捷：一按就到收款
-    private var quickCheckout: some View {
-        Button {
-            model.beginCheckout(ticket)
-        } label: {
-            Text("結帳")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.brand(.primary, size: .sm, fullWidth: true, arrow: true))
-        .disabled(ticket.activeLines.isEmpty)
-    }
-}
-
-/// 看板選起來的那一張：固定在看板下面的一條。只放「點餐」：送單、結帳、印結帳單、作廢都在右邊的單子裡，不重複
-private struct OrdersBoardSelectionBar: View {
-    @Environment(POSModel.self) private var model
-    let ticket: Ticket
-
-    var body: some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(ticket.title(floor: model.floor))・\(ticket.number)")
-                    .font(.brand(15.5, .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                Text("\(ticket.itemCount) 項・\(ticket.totals.total.formatted)")
-                    .font(.brand(13, .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-            }
-            Spacer(minLength: 12)
-            Button {
-                model.selectedTicketId = nil
-                model.touch()
-            } label: {
-                HeroIcon("x-mark", size: 15)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 40))
-            .accessibilityLabel("取消選取")
-            ActionBar(primary: POSAction(ticket.exchange != nil ? "加要換的商品" : "點餐", icon: "plus-circle") {
-                model.selectedTicketId = ticket.id
-                model.go(.order)
-            }, fillPrimary: false)
-        }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 12)
-        .background(Theme.surface)
-        .overlay(alignment: .top) { Rule() }
     }
 }
 
@@ -1291,35 +1368,26 @@ private struct OrdersLinkRow: View {
     let linkTitle: String
     let run: () -> Void
 
+    /// 整列是連結（跳到那一張、選起來），不是按鈕
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            HeroIcon(icon, size: 16)
-                .foregroundStyle(Theme.ink2)
-            Text(text)
-                .font(.brand(14.5, .medium))
-                .foregroundStyle(Theme.ink)
-            Spacer(minLength: 8)
-            Button(linkTitle, action: run)
-                .buttonStyle(.brand(.quiet, size: .sm))
+        Button(action: run) {
+            HStack(alignment: .center, spacing: 10) {
+                HeroIcon(icon, size: 16)
+                    .foregroundStyle(Theme.ink2)
+                Text(text)
+                    .font(.brand(14.5, .medium))
+                    .foregroundStyle(Theme.ink)
+                Spacer(minLength: 8)
+                Text(linkTitle)
+                    .font(.brand(13.5, .medium))
+                    .foregroundStyle(Theme.accentText)
+                HeroIcon("chevron-right", size: 13)
+                    .foregroundStyle(Theme.accentText)
+            }
+            .padding(.vertical, 6)
+            .contentShape(.rect)
         }
-    }
-}
-
-/// 明細最下面那一條按鈕
-private struct OrdersDetailBottomBar<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(spacing: 14) {
-            content
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .top) { Rule() }
+        .buttonStyle(.row)
     }
 }
 
@@ -1362,33 +1430,7 @@ private struct OrdersOpenDetail: View {
                 .padding(24)
             }
             .scrollIndicators(.hidden)
-            if checkoutAction != nil || orderAction != nil {
-                OrdersDetailBottomBar {
-                    // 一個主要：能收錢的崗位是「結帳」（品牌橘）、不能收錢的是「點餐」
-                    if let pay = checkoutAction {
-                        ActionBar(primary: pay, secondary: orderAction.map { [$0] } ?? [], size: .lg, accent: true)
-                    } else {
-                        ActionBar(primary: orderAction, size: .lg)
-                    }
-                }
-            }
-        }
-    }
-
-    /// 結帳要能收錢的崗位（櫃台、前場）；報到接待開了單交給櫃台
-    private var checkoutAction: POSAction? {
-        guard model.role.takesPayment else { return nil }
-        return POSAction("結帳", icon: "credit-card", enabled: !ticket.activeLines.isEmpty) {
-            model.beginCheckout(ticket)
-        }
-    }
-
-    /// 點餐要能開單的崗位，而且這台有點餐頁
-    private var orderAction: POSAction? {
-        guard model.role.takesOrders, model.visibleSections.contains(.order) else { return nil }
-        return POSAction(ticket.exchange != nil ? "加要換的商品" : "點餐", icon: "plus-circle") {
-            model.selectedTicketId = ticket.id
-            model.go(.order)
+            // 動作（結帳、點餐、印結帳單、作廢）在右欄：OrdersView 交上去
         }
     }
 
@@ -1513,8 +1555,11 @@ private struct OrdersSaleDetail: View {
     /// 後台那一天的資料（超過兩天的單：只能看、補印收據）；這台還有的是 nil
     let archive: DayHistory?
     let close: (() -> Void)?
+    /// 取消選取（右欄的 ×）
+    let deselect: () -> Void
     let openTicket: (String) -> Void
 
+    /// 右欄蓋著的面板：退款、換貨、改統編／載具
     @State private var form: OrdersDetailForm?
     @State private var showCarrier = false
     @State private var carrier = ""
@@ -1527,6 +1572,10 @@ private struct OrdersSaleDetail: View {
     @State private var refundMode: OrdersRefundMode?
     /// 照品項退：每一行退幾件（lineId → 件數）
     @State private var refundPicked: [String: Int] = [:]
+    /// 換貨：每一行退回幾件（lineId → 件數）。放在這裡、不放在面板裡：鍵盤問件數時面板會先拿掉
+    @State private var exchangePicked: [String: Int] = [:]
+    /// 換貨面板正在選「同款換規格」的那一行
+    @State private var swapLineId: String?
 
     // 讀最新的：結帳後改統編、補開、退款、換規格都記在 tickets 上（sales 只存結帳那一刻）
     private var ticket: Ticket? { model.state.tickets[sale.ticketId] }
@@ -1589,13 +1638,16 @@ private struct OrdersSaleDetail: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 26) {
+                        if let f = form {
+                            Banner(text: "\(formTitle(f))：在右邊選，件數、金額在右邊的鍵盤打", tone: .info)
+                        }
                         OrdersDetailHero(amount: sale.total, status: statusText, tone: statusTone,
                                          byline: "經手 \(sale.staffName)", detail: heroDetail)
                         if let c = OrdersCustomerCard.info(member: sale.member, customerName: sale.customerName) {
                             OrdersCustomerCard(name: c.name, detail: c.detail)
                         }
-                        if let form {
-                            formView(form)
+                        if showCarrier {
+                            carrierCard
                                 .id("orders-form")
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
@@ -1607,33 +1659,49 @@ private struct OrdersSaleDetail: View {
                         if !refunds.isEmpty {
                             refundList
                         }
+                        if !isEditable {
+                            Text("超過兩天的單請到後台處理（退款、換貨、發票）；這裡可以補印收據。")
+                                .textRole(.xs)
+                                .foregroundStyle(Theme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .padding(24)
-                    .animation(Motion.fast, value: form)
+                    .animation(Motion.fast, value: showCarrier)
                 }
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)
-                .onChange(of: form) { _, f in
-                    guard f != nil else { return }
+                .onChange(of: showCarrier) { _, on in
+                    guard on else { return }
                     withAnimation(Motion.ease) { proxy.scrollTo("orders-form", anchor: .top) }
                 }
             }
-            bottomBar
+        }
+        .dockSelection(saleDock)
+        .dockPanel(isPresented: formBinding(.refund), title: "退款", subtitle: "\(sale.number)・最多可退 \(refundable.formatted)") {
+            refundPanel
+        }
+        .dockPanel(isPresented: formBinding(.exchange), title: "換貨", subtitle: exchangeSubtitle) {
+            exchangePanel
+        }
+        .dockPanel(isPresented: formBinding(.buyer), title: "改統編／載具",
+                   subtitle: "會作廢 \(stamp?.display ?? "原發票")、用同一筆交易重開一張（同一期才行，要店長授權）") {
+            buyerPanel
         }
     }
 
-    @ViewBuilder
-    private func formView(_ f: OrdersDetailForm) -> some View {
+    private func formTitle(_ f: OrdersDetailForm) -> String {
         switch f {
-        case .buyer:
-            buyerForm
-        case .refund:
-            refundForm
-        case .exchange:
-            OrdersExchangeForm(sale: sale, currentNames: swapState.names, currentSkus: swapState.skus) {
-                form = nil
-            }
+        case .buyer: "改統編／載具"
+        case .refund: "退款"
+        case .exchange: "換貨"
         }
+    }
+
+    private func formBinding(_ f: OrdersDetailForm) -> Binding<Bool> {
+        Binding(get: { form == f }, set: { on in
+            if on { form = f } else if form == f { form = nil }
+        })
     }
 
     // MARK: 上面
@@ -1857,144 +1925,122 @@ private struct OrdersSaleDetail: View {
         return parts.joined(separator: "・")
     }
 
-    // MARK: 下面：補印收據（主要）、換貨（會換貨的店）、其他收進「⋯」
+    // MARK: 右欄：大鍵「補印收據」；動作鍵：換貨、補印證明聯、改統編／載具、補開發票、退款（紅字、最後）
 
-    private var bottomBar: some View {
-        OrdersDetailBottomBar {
-            ActionBar(primary: reprintAction, secondary: secondaryActions, more: moreActions, size: .lg)
-            if !isEditable {
-                Text("超過兩天的單請到後台處理（退款、換貨、發票）；這裡可以補印收據。")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    /// 最常用的：客人回來要收據（更早的單也可以）
-    private var reprintAction: POSAction {
-        POSAction("補印收據", icon: "printer") {
+    private var saleDock: DockSelection {
+        let reprint = POSAction("補印收據", icon: "printer") {
             model.printReceipt(sale, reprint: true)
             model.show("已送出補印 \(sale.number)", tone: .neutral)
         }
-    }
-
-    /// 會換貨的店（服飾）換貨很常用，露在外面；餐廳、美業這張單換不了就不出現
-    private var secondaryActions: [POSAction] {
-        guard canExchangeNow else { return [] }
-        return [POSAction("換貨", icon: "arrows-right-left") { toggle(.exchange) }]
-    }
-
-    /// 少用的收在「⋯」：發票的事，最後是退款（紅字；打開退款表單，送出前選方式、原因，要授權的會問主管）
-    private var moreActions: [POSAction] {
-        var out: [POSAction] = []
+        var actions: [POSAction] = []
+        if canExchangeNow {
+            actions.append(POSAction("換貨", icon: "arrows-right-left") { open(.exchange) })
+        }
         if canReprintProof {
-            out.append(POSAction("補印證明聯", icon: "document-duplicate") {
+            actions.append(POSAction("補印證明聯", icon: "document-duplicate") {
                 Task { await model.reprintInvoice(for: sale) }
             })
         }
         if canChangeBuyer {
-            out.append(POSAction("改統編／載具", icon: "pencil-square") { reveal(.buyer) })
+            actions.append(POSAction("改統編／載具", icon: "pencil-square") { open(.buyer) })
         }
         if canIssueLate {
-            out.append(POSAction("補開發票", icon: "document-text") {
+            actions.append(POSAction("補開發票", icon: "document-text") {
                 Task { await model.issueLateInvoice(for: sale) }
             })
         }
-        if canRefund {
-            let title = refundable.cents > 0 ? "退款" : "已全部退款"
-            out.append(POSAction(title, icon: "receipt-refund", destructive: true, enabled: refundable.cents > 0) { reveal(.refund) })
+        // 退款：打開右欄的退款面板（送出前選方式、原因；要授權的在鍵盤問主管 PIN）
+        if canRefund && refundable.cents > 0 {
+            actions.append(POSAction("退款", icon: "receipt-refund", destructive: true) { open(.refund) })
         }
-        return out
+        var primary = reprint
+        var accent = false
+        if showCarrier {
+            // 正在打手機條碼：大鍵變成「使用這個載具」，補印收據移到動作鍵
+            primary = POSAction("使用這個載具", icon: "check", enabled: !carrier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                applyCarrier()
+            }
+            accent = true
+            actions.insert(reprint, at: 0)
+            actions.append(POSAction("不改載具", icon: "x-mark") {
+                showCarrier = false
+                carrier = ""
+                carrierError = nil
+            })
+        }
+        return DockSelection(
+            id: "orders-sale-\(sale.ticketId)",
+            kind: isEditable ? "交易" : "交易・後台的資料",
+            title: "\(sale.number)・\(sale.ordersTitle)",
+            detail: "\(sale.total.formatted)・\(sale.closedAt.dayText) \(sale.closedAt.clockText)・經手 \(sale.staffName)",
+            badge: DockBadge(statusText, tone: statusTone),
+            primary: primary,
+            accent: accent,
+            actions: actions,
+            clear: { deselect() }
+        )
     }
 
-    private func toggle(_ f: OrdersDetailForm) {
-        form = form == f ? nil : f
+    /// 從右欄的動作鍵打開面板（一次一個；改載具的欄位收起來）
+    private func open(_ f: OrdersDetailForm) {
         showCarrier = false
         carrierError = nil
         showAllTenders = false
+        if f == .exchange { swapLineId = nil }
+        form = f
     }
 
-    /// 從「⋯」選的：打開那一張表單（已經開著就留著，不要又收起來）
-    private func reveal(_ f: OrdersDetailForm) {
-        guard form != f else { return }
-        toggle(f)
-    }
+    // MARK: 改統編／載具（右欄的面板選種類；統編、愛心碼在鍵盤打；手機條碼在左邊打字或掃）
 
-    // MARK: 改統編／載具
-
-    private var buyerForm: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Eyebrow("改統編／載具")
-                Spacer(minLength: 8)
-                Button("收起") { toggle(.buyer) }
-                    .buttonStyle(.brand(.quiet, size: .sm))
+    private var buyerPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            DockChoice(title: "統編", detail: "在鍵盤打 8 碼", selected: buyerKind == .business) {
+                Task { await askTaxId() }
             }
-            Text("會作廢 \(stamp?.display ?? "原發票")、用同一筆交易重開一張（同一期才行，要店長授權）。")
-                .textRole(.small)
-                .foregroundStyle(Theme.ink2)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 8) {
-                Button("統編") {
-                    Task { await askTaxId() }
-                }
-                .buttonStyle(.choice(buyerKind == .business, height: 48))
-
-                Button("手機條碼") {
-                    showCarrier.toggle()
-                    carrierError = nil
-                }
-                .buttonStyle(.choice(showCarrier || buyerKind == .carrier, height: 48))
-
-                Button("捐贈") {
-                    Task { await askLoveCode() }
-                }
-                .buttonStyle(.choice(buyerKind == .donation, height: 48))
-
-                Button("紙本") {
-                    Task { await change(to: .paper) }
-                }
-                .buttonStyle(.choice(buyerKind == .paper, height: 48))
-                .disabled(buyerKind == .paper)
+            DockChoice(title: "手機條碼／自然人憑證", detail: "在左邊打或掃", selected: buyerKind == .carrier) {
+                form = nil
+                showCarrier = true
+                carrierError = nil
             }
-            if showCarrier {
-                carrierField
+            DockChoice(title: "捐贈", detail: "在鍵盤打愛心碼", selected: buyerKind == .donation) {
+                Task { await askLoveCode() }
             }
-            Text("統編、愛心碼在右側鍵盤打；手機條碼可以掃或手打。")
-                .textRole(.xs)
-                .foregroundStyle(Theme.muted)
+            DockChoice(title: "紙本", detail: "印證明聯", selected: buyerKind == .paper, enabled: buyerKind != .paper) {
+                Task { await change(to: .paper) }
+            }
         }
-        .padding(18)
-        .background(Theme.press, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
     }
 
-    private var carrierField: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                TextField("/ABC+123（或自然人憑證）", text: $carrier)
-                    .font(.brand(17, .medium))
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit { applyCarrier() }
-                    .padding(.horizontal, 12)
-                    .frame(height: 46)
-                    .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous)
-                            .strokeBorder(Theme.line, lineWidth: 1)
-                    }
-                Button("使用") { applyCarrier() }
-                    .buttonStyle(.brand(.primary, size: .md))
-                    .disabled(carrier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
+    /// 手機條碼：文字欄位留在左邊（右欄的大鍵是「使用這個載具」）
+    private var carrierCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Eyebrow("改成手機條碼／自然人憑證")
+            TextField("/ABC+123（或自然人憑證）", text: $carrier)
+                .font(.brand(17, .medium))
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .onSubmit { applyCarrier() }
+                .padding(.horizontal, 12)
+                .frame(height: 46)
+                .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous)
+                        .strokeBorder(Theme.line, lineWidth: 1)
+                }
             if let carrierError {
                 Text(carrierError)
                     .font(.brand(13, .medium))
                     .foregroundStyle(Theme.dangerFG)
+            } else {
+                Text("會作廢 \(stamp?.display ?? "原發票")、重開一張存到這個載具；打好按右邊的「使用這個載具」。")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .padding(18)
+        .background(Theme.press, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
     }
 
     private func applyCarrier() {
@@ -2030,11 +2076,12 @@ private struct OrdersSaleDetail: View {
     private func change(to buyer: InvoiceBuyer) async {
         let before = stamp?.number
         await model.changeBuyer(of: sale, to: buyer)
-        // 號碼換了＝重開成功；不同期、取消授權時號碼不變，表單留著
+        // 號碼換了＝重開成功；不同期、取消授權時號碼不變，面板留著
         if stamp?.number != before {
             form = nil
             showCarrier = false
             carrier = ""
+            carrierError = nil
         }
     }
 
@@ -2066,59 +2113,43 @@ private struct OrdersSaleDetail: View {
 
     private var selectedTender: Tender { refundTender ?? suggestedTenders.first ?? .card }
 
-    private var refundForm: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Eyebrow("退款")
-                Spacer(minLength: 8)
-                Text("最多可退 \(refundable.formatted)")
-                    .font(.brand(14, .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.ink)
-            }
+    /// 右欄的退款面板：怎麼退、退哪些、退回哪裡、原因，最下面送出（金額照品項算；照金額退的在鍵盤打）
+    private var refundPanel: some View {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
-                OptionChip(title: "照品項退", selected: currentRefundMode == .items) { refundMode = .items }
-                OptionChip(title: "照金額退", selected: currentRefundMode == .amount) { refundMode = .amount }
+                DockChoice(title: "照品項退", selected: currentRefundMode == .items) { refundMode = .items }
+                DockChoice(title: "照金額退", selected: currentRefundMode == .amount) { refundMode = .amount }
             }
             if currentRefundMode == .items {
                 refundItems
             }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("退回")
-                    .font(.brand(13, .medium))
-                    .foregroundStyle(Theme.muted)
-                    .frame(width: 34, alignment: .leading)
-                FlowLayout(spacing: 8, rowSpacing: 8) {
-                    ForEach(shownTenders, id: \.self) { t in
-                        OptionChip(title: t.label, detail: t == .prepaid ? "存回會員" : nil, selected: selectedTender == t) { refundTender = t }
-                    }
-                    if !showAllTenders && allowedTenders.count > suggestedTenders.count {
-                        Button("其他方式") { showAllTenders = true }
-                            .buttonStyle(.brand(.quiet, size: .md))
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("退回")
+                ForEach(shownTenders, id: \.self) { t in
+                    DockChoice(title: t.label, detail: t == .prepaid ? "存回會員的儲值金" : nil, selected: selectedTender == t) {
+                        refundTender = t
                     }
                 }
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("原因")
-                    .font(.brand(13, .medium))
-                    .foregroundStyle(Theme.muted)
-                    .frame(width: 34, alignment: .leading)
-                FlowLayout(spacing: 8, rowSpacing: 8) {
-                    ForEach(OrdersRefundReason.allCases) { r in
-                        OptionChip(title: r.rawValue, selected: refundReason == r) { refundReason = r }
-                    }
+                if !showAllTenders && allowedTenders.count > suggestedTenders.count {
+                    DockChoice(title: "其他方式…") { showAllTenders = true }
                 }
             }
-            if refundReason == .other {
-                TextField("說明（選填）", text: $otherReason)
-                    .font(.brand(15.5, .regular))
-                    .padding(.horizontal, 12)
-                    .frame(height: 44)
-                    .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous)
-                            .strokeBorder(Theme.line, lineWidth: 1)
-                    }
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("原因")
+                ForEach(OrdersRefundReason.allCases) { r in
+                    DockChoice(title: r.rawValue, selected: refundReason == r) { refundReason = r }
+                }
+                if refundReason == .other {
+                    TextField("說明（選填）", text: $otherReason)
+                        .font(.brand(15.5, .regular))
+                        .padding(.horizontal, 12)
+                        .frame(height: 44)
+                        .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous)
+                                .strokeBorder(Theme.line, lineWidth: 1)
+                        }
+                }
             }
             if stamp != nil && !isVoided {
                 Text("同一期整張退：發票作廢；部分退款或跨期：開折讓單（印在退款單上）。")
@@ -2130,30 +2161,39 @@ private struct OrdersSaleDetail: View {
                 Text("客人只是要換尺寸、換別件？用「換貨」，不用先退款。")
                     .textRole(.xs)
                     .foregroundStyle(Theme.accentText)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            switch currentRefundMode {
-            case .items:
-                Button {
-                    Task { await runRefund(lines: effectiveRefundPicks.filter { $0.value > 0 }) }
-                } label: {
-                    Text(itemRefundTotal.cents > 0 ? "退 \(itemRefundTotal.formatted)・\(selectedTender.label)" : "選要退的品項")
-                        .monospacedDigit()
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.danger, size: .md, fullWidth: true, arrow: true))
-                .disabled(itemRefundTotal.cents <= 0)
-            case .amount:
-                Button {
-                    Task { await runRefund(lines: [:]) }
-                } label: {
-                    Text("下一步・在右側鍵盤打金額")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.danger, size: .md, fullWidth: true, arrow: true))
-            }
+            refundSubmit
         }
-        .padding(18)
-        .background(Theme.press, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+    }
+
+    /// 送出：照品項＝直接退算好的金額；照金額＝下一步在鍵盤打。要授權的在鍵盤問主管 PIN（model.refund 裡）
+    @ViewBuilder
+    private var refundSubmit: some View {
+        switch currentRefundMode {
+        case .items:
+            Button {
+                Task { await runRefund(lines: effectiveRefundPicks.filter { $0.value > 0 }) }
+            } label: {
+                Text(itemRefundTotal.cents > 0 ? "退 \(itemRefundTotal.formatted)・\(selectedTender.label)" : "先選要退的品項")
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.brand(.danger, size: .lg, fullWidth: true))
+            .disabled(itemRefundTotal.cents <= 0)
+        case .amount:
+            Button {
+                Task { await runRefund(lines: [:]) }
+            } label: {
+                Text("下一步・在鍵盤打金額")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.brand(.danger, size: .lg, fullWidth: true))
+        }
     }
 
     // MARK: 照品項退
@@ -2227,65 +2267,54 @@ private struct OrdersSaleDetail: View {
         let lines = sale.lines.filter { (limits[$0.lineId] ?? 0) > 0 }
         let paidDone = completesPaidLines
         let whole = completesSale
-        if lines.isEmpty {
-            Text("每一件都退過了；還有金額可以退的話用「照金額退」")
-                .textRole(.small)
-                .foregroundStyle(Theme.muted)
-        } else {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 8) {
+            Eyebrow("退哪些・點一下選；多件的在鍵盤打件數")
+            if lines.isEmpty {
+                Text("每一件都退過了；還有金額可以退的話用「照金額退」")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
                 ForEach(lines, id: \.lineId) { l in
-                    refundRow(l, limit: limits[l.lineId] ?? 0, unlocked: paidDone)
-                    if l.lineId != lines.last?.lineId {
-                        Rule(color: Theme.hair)
+                    refundChoice(l, limit: limits[l.lineId] ?? 0, unlocked: paidDone)
+                }
+                HStack(spacing: 8) {
+                    DockChoice(title: "全部選") { pickAll(limits) }
+                    DockChoice(title: "清除", enabled: refundPicked.values.contains(where: { $0 > 0 })) { refundPicked = [:] }
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(itemRefundTotal.cents > 0 ? "退 \(itemRefundTotal.formatted)" : "還沒選")
+                        .font(.brand(16, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(itemRefundTotal.cents > 0 ? Theme.ink : Theme.muted)
+                    if whole {
+                        StatusBadge("全部退完", tone: .warning)
                     }
                 }
-            }
-            .padding(.horizontal, 14)
-            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(itemRefundTotal.cents > 0 ? "退 \(itemRefundTotal.formatted)" : "還沒選")
-                    .font(.brand(16, .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(itemRefundTotal.cents > 0 ? Theme.ink : Theme.muted)
-                if whole {
-                    StatusBadge("全部退完", tone: .warning)
+                .padding(.top, 4)
+                if whole && (sale.serviceCharge.cents > 0 || sale.tip.cents > 0) {
+                    Text("全部退完：服務費、小費也一起退。")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
                 }
-                Spacer(minLength: 8)
-                Button("全部選") { pickAll(limits) }
-                    .buttonStyle(.brand(.quiet, size: .sm))
-                if !refundPicked.isEmpty {
-                    Button("清除") { refundPicked = [:] }
-                        .buttonStyle(.brand(.quiet, size: .sm))
-                }
-            }
-            if whole && (sale.serviceCharge.cents > 0 || sale.tip.cents > 0) {
-                Text("全部退完：服務費、小費也一起退。")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
             }
         }
     }
 
-    /// 一行：收錢的照原單實收；卡抵的不退錢，收錢的都選滿時才能一起取消（還回次數）
-    private func refundRow(_ l: SaleLine, limit: Int, unlocked: Bool) -> some View {
-        let redeemed = l.redeem != nil
-        let locked = redeemed && !unlocked
+    /// 一行：收錢的照原單實收；卡抵的不退錢，收錢的都選滿時才能一起取消（還回次數）。
+    /// 只能退一件的點一下選／取消；多件的在鍵盤打件數
+    private func refundChoice(_ l: SaleLine, limit: Int, unlocked: Bool) -> some View {
+        let locked = l.redeem != nil && !unlocked
         let count = locked ? 0 : (refundPicked[l.lineId] ?? 0)
         let name = swapState.names[l.lineId].map { "\(l.name) \($0)" } ?? l.displayName
-        return OrdersExchangeLineRow(
-            title: name,
-            detail: refundRowDetail(l, limit: limit, count: count, locked: locked),
-            count: count,
-            limit: limit,
-            canSwap: false,
-            swapping: false,
-            set: { refundPicked[l.lineId] = $0 },
-            ask: { Task { await askRefundCount(l, limit: limit) } },
-            toggleSwap: {}
-        )
-        .padding(.vertical, 10)
-        .disabled(locked)
-        .opacity(locked ? 0.5 : 1)
+        return DockChoice(title: name, detail: refundRowDetail(l, limit: limit, count: count, locked: locked),
+                          trailing: "\(count)／\(limit)", selected: count > 0, enabled: !locked) {
+            if limit <= 1 {
+                refundPicked[l.lineId] = count > 0 ? nil : 1
+            } else {
+                Task { await askRefundCount(l, limit: limit) }
+            }
+        }
     }
 
     private func refundRowDetail(_ l: SaleLine, limit: Int, count: Int, locked: Bool) -> String {
@@ -2337,355 +2366,209 @@ private struct OrdersSaleDetail: View {
             refundPicked = [:]
         }
     }
-}
 
-// MARK: - 換貨
+    // MARK: 換貨（右欄的面板：選要退回的件數、同款換規格；件數多的在鍵盤打）
 
-/// 換貨：每一行選要退回幾件（右側鍵盤也可以打）；同款同價換規格當場換，換別的商品開一張換貨單到點餐
-private struct OrdersExchangeForm: View {
-    @Environment(POSModel.self) private var model
-    let sale: SaleRecord
-    /// 換過規格的行現在的規格（名字、規格 id）
-    let currentNames: [String: String]
-    let currentSkus: [String: String]
-    let close: () -> Void
-
-    @State private var picked: [String: Int] = [:]
-    /// 正在選「同款換規格」的那一行
-    @State private var swapLineId: String?
-
-    var body: some View {
-        let returnable = model.returnableQuantities(sale)
-        let lines = sale.lines.filter { (returnable[$0.lineId] ?? 0) > 0 }
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Eyebrow("換貨")
-                Spacer(minLength: 8)
-                Button("收起", action: close)
-                    .buttonStyle(.brand(.quiet, size: .sm))
-            }
-            Text(hint)
-                .textRole(.small)
-                .foregroundStyle(Theme.ink2)
-                .fixedSize(horizontal: false, vertical: true)
-            if lines.isEmpty {
-                Text("這張單沒有可以換的商品了（服務、課程卡、儲值不能換）")
-                    .textRole(.small)
-                    .foregroundStyle(Theme.muted)
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(lines, id: \.lineId) { l in
-                        lineBlock(l, limit: returnable[l.lineId] ?? 0)
-                        if l.lineId != lines.last?.lineId {
-                            Rule(color: Theme.hair)
-                        }
-                    }
-                }
-                footer
-            }
-        }
-        .padding(18)
-        .background(Theme.press, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
-    }
-
-    private var hint: String {
-        let deadline = model.store.exchangeDays > 0 ? "結帳 \(model.store.exchangeDays) 天內可以換。" : ""
-        return "\(deadline)選要退回的件數再按「換別的商品」：新的比較貴補差額、比較便宜退現金，都在結帳時算。同款同價換尺寸、顏色，按「同款換規格」當場換，不用結帳。"
+    private var exchangeSubtitle: String {
+        let deadline = model.store.exchangeDays > 0 ? "結帳 \(model.store.exchangeDays) 天內可以換・" : ""
+        return "\(deadline)\(sale.number)"
     }
 
     @ViewBuilder
-    private func lineBlock(_ l: SaleLine, limit: Int) -> some View {
-        let item = l.itemId.flatMap { model.catalog.item($0) }
-        let variantName = currentNames[l.lineId] ?? l.variantName
-        VStack(alignment: .leading, spacing: 12) {
-            OrdersExchangeLineRow(
-                title: variantName.map { "\(l.name) \($0)" } ?? l.name,
-                detail: "買 \(l.quantity) 件・可換 \(limit) 件・每件 \(l.unitPrice.formatted)",
-                count: picked[l.lineId] ?? 0,
-                limit: limit,
-                canSwap: item?.hasVariants == true,
-                swapping: swapLineId == l.lineId,
-                set: { picked[l.lineId] = $0 },
-                ask: { Task { await askCount(l, limit: limit) } },
-                toggleSwap: { withAnimation(Motion.fast) { swapLineId = swapLineId == l.lineId ? nil : l.lineId } }
-            )
-            if swapLineId == l.lineId, let item {
-                OrdersVariantGrid(item: item, unitPrice: l.unitPrice, currentSkuId: currentSkus[l.lineId] ?? l.skuId) { v in
-                    swap(l, to: v, limit: limit)
+    private var exchangePanel: some View {
+        let returnable = model.returnableQuantities(sale)
+        let lines = sale.lines.filter { (returnable[$0.lineId] ?? 0) > 0 }
+        if let id = swapLineId, let l = lines.first(where: { $0.lineId == id }), let item = l.itemId.flatMap({ model.catalog.item($0) }) {
+            variantChoices(l, item: item, limit: returnable[l.lineId] ?? 0)
+        } else if lines.isEmpty {
+            Text("這張單沒有可以換的商品了（服務、課程卡、儲值不能換）")
+                .textRole(.small)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Eyebrow("退回哪些・點一下選；多件的在鍵盤打件數")
+                    ForEach(lines, id: \.lineId) { l in
+                        exchangeChoice(l, limit: returnable[l.lineId] ?? 0)
+                    }
                 }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+                let swappable = lines.filter { l in l.itemId.flatMap { model.catalog.item($0) }?.hasVariants == true }
+                if !swappable.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Eyebrow("同款同價換尺寸、顏色（當場換，不用結帳）")
+                        ForEach(swappable, id: \.lineId) { l in
+                            DockChoice(title: "換規格：\(l.name)", detail: "現在 \(swapState.names[l.lineId] ?? l.variantName ?? "原規格")") {
+                                swapLineId = l.lineId
+                            }
+                        }
+                    }
+                }
+                exchangeFooter
             }
         }
-        .padding(.vertical, 12)
     }
 
-    private var footer: some View {
-        let count = picked.values.reduce(0, +)
+    private func exchangeChoice(_ l: SaleLine, limit: Int) -> some View {
+        let count = exchangePicked[l.lineId] ?? 0
+        let variant = swapState.names[l.lineId] ?? l.variantName
+        return DockChoice(title: variant.map { "\(l.name) \($0)" } ?? l.name,
+                          detail: "買 \(l.quantity) 件・可換 \(limit) 件・每件 \(l.unitPrice.formatted)",
+                          trailing: "\(count)／\(limit)", selected: count > 0) {
+            if limit <= 1 {
+                exchangePicked[l.lineId] = count > 0 ? nil : 1
+            } else {
+                Task { await askExchangeCount(l, limit: limit) }
+            }
+        }
+    }
+
+    /// 新的比較貴補差額、比較便宜退現金，都在結帳時算
+    private var exchangeFooter: some View {
+        let count = exchangePicked.values.reduce(0, +)
         return VStack(alignment: .leading, spacing: 10) {
-            Text(count > 0 ? "退回 \(count) 件，抵 \(creditPreview.formatted)（照原單實收）" : "還沒選要退回的件數")
-                .font(.brand(14, .semibold))
+            Text(count > 0 ? "退回 \(count) 件，抵 \(exchangeCredit.formatted)（照原單實收）" : "還沒選要退回的件數")
+                .font(.brand(14.5, .semibold))
                 .monospacedDigit()
                 .foregroundStyle(count > 0 ? Theme.ink : Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("新的比較貴補差額、比較便宜退現金，都在結帳時算。")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
             Button {
                 startExchange()
             } label: {
                 Text("換別的商品・到點餐加新的")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.brand(.primary, size: .md, fullWidth: true, arrow: true))
+            .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
             .disabled(count == 0)
         }
     }
 
+    /// 同款換規格：每個規格一列；價格不同、停售、沒貨、現在這個都按不了
+    private func variantChoices(_ l: SaleLine, item: MenuItem, limit: Int) -> some View {
+        let current = swapState.skus[l.lineId] ?? l.skuId
+        let qty = min(max(exchangePicked[l.lineId] ?? 0, 1), limit)
+        return VStack(alignment: .leading, spacing: 8) {
+            Eyebrow("\(l.name)・換成哪個規格（\(qty) 件）")
+            ForEach(item.activeVariants) { v in
+                let state = OrdersSwapAvailability(item: item, variant: v, unitPrice: l.unitPrice, currentSkuId: current)
+                DockChoice(title: v.label, detail: state.detail, selected: v.id == current, enabled: state.enabled) {
+                    swap(l, to: v, limit: limit)
+                }
+            }
+            DockChoice(title: "回到換貨") { swapLineId = nil }
+            Text("價格不同的請用「換別的商品」補差價。件數照上一頁選的（沒選就是 1 件）。")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     /// 退回的這些值多少（和換貨單結帳時算的一樣：照原單實收、扣掉已經退過的）
-    private var creditPreview: Money {
-        let already = sale.refundedQuantities(model.state.tickets[sale.ticketId]?.refunds ?? [])
+    private var exchangeCredit: Money {
+        let already = sale.refundedQuantities(refunds)
         var sum = Money.zero
-        for (lineId, q) in picked where q > 0 {
+        for (lineId, q) in exchangePicked where q > 0 {
             sum += sale.refundAmount(lineId: lineId, quantity: q, alreadyRefunded: already[lineId] ?? 0)
         }
         return sum
     }
 
-    /// 件數多的時候在右側鍵盤打
-    private func askCount(_ l: SaleLine, limit: Int) async {
-        let current = picked[l.lineId] ?? 0
+    private func askExchangeCount(_ l: SaleLine, limit: Int) async {
+        let current = exchangePicked[l.lineId] ?? 0
         let spec = KeypadSpec(kind: .count, title: "退回幾件", subtitle: "\(l.displayName)・最多 \(limit) 件",
                               initial: current > 0 ? String(current) : "", confirmLabel: "好", maxValue: limit, minValue: 0)
         guard let n = await model.keypad.askNumber(spec) else { return }
-        picked[l.lineId] = min(n, limit)
+        exchangePicked[l.lineId] = n > 0 ? min(n, limit) : nil
     }
 
     private func swap(_ l: SaleLine, to v: ItemVariant, limit: Int) {
-        let qty = min(max(picked[l.lineId] ?? 0, 1), limit)
+        let qty = min(max(exchangePicked[l.lineId] ?? 0, 1), limit)
         model.swapVariant(in: sale, lineId: l.lineId, quantity: qty, to: v, reason: "換規格")
-        picked[l.lineId] = nil
+        exchangePicked[l.lineId] = nil
         swapLineId = nil
     }
 
     private func startExchange() {
-        let returning = picked.filter { $0.value > 0 }
+        let returning = exchangePicked.filter { $0.value > 0 }
         guard !returning.isEmpty else { return }
+        form = nil
         model.startExchange(from: sale, returning: returning)
     }
 }
 
-/// 一行：名字、可換幾件、「同款換規格」、件數（− 3／5 ＋；點數字用右側鍵盤打）
-private struct OrdersExchangeLineRow: View {
-    let title: String
+/// 同款換規格：這個規格能不能換、旁邊的小字
+private struct OrdersSwapAvailability {
+    let enabled: Bool
     let detail: String
-    let count: Int
-    let limit: Int
-    let canSwap: Bool
-    let swapping: Bool
-    let set: (Int) -> Void
-    let ask: () -> Void
-    let toggleSwap: () -> Void
 
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.brand(15.5, .medium))
-                    .foregroundStyle(Theme.ink)
-                Text(detail)
-                    .textRole(.xs)
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.muted)
-            }
-            Spacer(minLength: 8)
-            if canSwap {
-                Button(action: toggleSwap) {
-                    Text("同款換規格")
-                }
-                .buttonStyle(.brand(swapping ? .primary : .ghost, size: .sm))
-            }
-            stepper
+    init(item: MenuItem, variant v: ItemVariant, unitPrice: Money, currentSkuId: String?) {
+        var ok = false
+        var text = "可換"
+        if v.id == currentSkuId {
+            text = "現在這個"
+        } else if !v.isAvailable {
+            text = "停售"
+        } else if item.price(of: v) != unitPrice {
+            text = "價格不同 \(item.price(of: v).short)"
+        } else if let stock = v.stock {
+            ok = stock > 0
+            text = stock > 0 ? "剩 \(stock)" : "沒貨"
+        } else {
+            ok = true
         }
-    }
-
-    private var stepper: some View {
-        HStack(spacing: 0) {
-            Button {
-                set(max(count - 1, 0))
-            } label: {
-                HeroIcon("minus", size: 14)
-                    .frame(width: 38, height: 38)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .disabled(count <= 0)
-            .opacity(count <= 0 ? 0.35 : 1)
-            .accessibilityLabel("少一件")
-
-            Button(action: ask) {
-                Text("\(count)／\(limit)")
-                    .font(.brand(15, .semibold))
-                    .monospacedDigit()
-                    .frame(minWidth: 54, minHeight: 38)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("退回 \(count) 件，最多 \(limit) 件，點一下在右側鍵盤打")
-
-            Button {
-                set(min(count + 1, limit))
-            } label: {
-                HeroIcon("plus", size: 14)
-                    .frame(width: 38, height: 38)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .disabled(count >= limit)
-            .opacity(count >= limit ? 0.35 : 1)
-            .accessibilityLabel("多一件")
-        }
-        .foregroundStyle(Theme.ink)
-        .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous)
-                .strokeBorder(Theme.line, lineWidth: 1)
-        }
-    }
-}
-
-/// 同款換規格：顏色 × 尺寸的表；價格不同、停售、沒貨、現在這個都按不了
-private struct OrdersVariantGrid: View {
-    let item: MenuItem
-    /// 原本賣的單價：只能換同價的（不同價要「換別的商品」補差價）
-    let unitPrice: Money
-    let currentSkuId: String?
-    let choose: (ItemVariant) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if dimensions == 2 {
-                grid
-            } else {
-                FlowLayout(spacing: 8, rowSpacing: 8) {
-                    ForEach(item.activeVariants) { v in
-                        cell(v, label: v.label)
-                            .frame(width: 104)
-                    }
-                }
-            }
-            Text("灰的是價格不同、停售、沒貨或現在這個；價格不同請用「換別的商品」。")
-                .textRole(.xs)
-                .foregroundStyle(Theme.muted)
-        }
-        .padding(14)
-        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius, style: .continuous))
-    }
-
-    private var dimensions: Int { item.optionNames?.count ?? (item.activeVariants.first?.options.count ?? 1) }
-
-    private var grid: some View {
-        let rows = item.optionValues(0)
-        let cols = item.optionValues(1)
-        return Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 6) {
-            GridRow {
-                Text(item.optionNames?.first ?? "")
-                    .font(.brand(12, .medium))
-                    .foregroundStyle(Theme.muted)
-                ForEach(cols, id: \.self) { c in
-                    Text(c)
-                        .font(.brand(12.5, .semibold))
-                        .foregroundStyle(Theme.ink2)
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            ForEach(rows, id: \.self) { r in
-                GridRow {
-                    Text(r)
-                        .font(.brand(14, .semibold))
-                        .foregroundStyle(Theme.ink)
-                    ForEach(cols, id: \.self) { c in
-                        cell(item.variant(matching: [r, c]), label: c)
-                    }
-                }
-            }
-        }
-    }
-
-    private func cell(_ v: ItemVariant?, label: String) -> some View {
-        let state = availability(v)
-        return Button {
-            if let v { choose(v) }
-        } label: {
-            VStack(spacing: 1) {
-                Text(label)
-                    .font(.brand(14, .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                Text(state.detail)
-                    .font(.brand(11, .regular))
-                    .monospacedDigit()
-                    .opacity(0.75)
-            }
-        }
-        .buttonStyle(.choice(v != nil && v?.id == currentSkuId, height: 50))
-        .disabled(!state.enabled)
-        .opacity(state.enabled || v?.id == currentSkuId ? 1 : 0.4)
-        .accessibilityLabel("\(label)，\(state.detail)")
-    }
-
-    private func availability(_ v: ItemVariant?) -> (enabled: Bool, detail: String) {
-        guard let v else { return (false, "沒有") }
-        if v.id == currentSkuId { return (false, "現在這個") }
-        if !v.isAvailable { return (false, "停售") }
-        if item.price(of: v) != unitPrice { return (false, item.price(of: v).short) }
-        if let s = v.stock {
-            return s > 0 ? (true, "剩 \(s)") : (false, "沒貨")
-        }
-        return (true, "可換")
+        enabled = ok
+        detail = text
     }
 }
 
 // MARK: - 衝突
 
+/// 一則衝突：整條點一下選起來（橘框），右欄大鍵「已處理」、動作「看單」；再點一下取消
 private struct OrdersConflictRow: View {
     let conflict: Conflict
-    let canOpen: Bool
-    let open: () -> Void
-    let dismiss: () -> Void
+    let selected: Bool
+    let select: () -> Void
 
-    /// 整條點一下＝看那張單（有的話）；右邊只留一個「已處理」
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: open) {
-                HStack(spacing: 12) {
-                    HeroIcon("exclamation-triangle", size: 18)
+        Button(action: select) {
+            HStack(spacing: 12) {
+                HeroIcon("exclamation-triangle", size: 18)
+                    .foregroundStyle(Theme.dangerFG)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(conflict.message)
+                        .font(.brand(14.5, .medium))
                         .foregroundStyle(Theme.dangerFG)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(conflict.message)
-                            .font(.brand(14.5, .medium))
-                            .foregroundStyle(Theme.dangerFG)
-                            .lineLimit(2)
-                        Text(canOpen ? "\(kindLabel)・\(conflict.at.shortText)・點一下看單" : "\(kindLabel)・\(conflict.at.shortText)")
-                            .textRole(.xs)
-                            .foregroundStyle(Theme.muted)
-                    }
-                    Spacer(minLength: 8)
-                    if canOpen {
-                        HeroIcon("chevron-right", size: 14)
-                            .foregroundStyle(Theme.muted)
-                    }
+                        .lineLimit(2)
+                    Text("\(conflict.ordersKindLabel)・\(conflict.at.shortText)")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
                 }
-                .contentShape(.rect)
+                Spacer(minLength: 8)
             }
-            .buttonStyle(.plain)
-            .allowsHitTesting(canOpen)
-            .accessibilityHint(canOpen ? "看單" : "")
-            Button("已處理", action: dismiss)
-                .buttonStyle(.brand(.ghost, size: .sm))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Tone.danger.background, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(selected ? Theme.accent : Color.clear, lineWidth: 1.5)
+            }
+            .contentShape(.rect)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Tone.danger.background, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        .buttonStyle(.press)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
+}
 
-    private var kindLabel: String {
-        switch conflict.kind {
+extension Conflict {
+    /// 「兩台都結帳」「結帳後又收款」…
+    fileprivate var ordersKindLabel: String {
+        switch kind {
         case .doubleClose: "兩台都結帳"
         case .paymentAfterClose: "結帳後又收款"
         case .linesAfterClose: "結帳後又加點"
@@ -2693,7 +2576,6 @@ private struct OrdersConflictRow: View {
         }
     }
 }
-
 
 // MARK: - 小工具
 

@@ -382,6 +382,20 @@ private struct SettingsDeviceSection: View {
             syncPanel
             meshPanel
         }
+        .dockSelection(pageDock)
+    }
+
+    /// 右欄（這一頁的動作）：大鍵「立即同步」；動作鍵「重新抓設定」
+    private var pageDock: DockSelection {
+        DockSelection.page(
+            "settings-device",
+            primary: POSAction(syncing ? "同步中…" : "立即同步", icon: "arrow-path", enabled: !syncing && !model.isDemo) {
+                Task { await syncNow() }
+            },
+            actions: [POSAction(refreshing ? "更新中…" : "重新抓設定", icon: "arrow-down-tray", enabled: !refreshing) {
+                Task { await refresh() }
+            }]
+        )
     }
 
     private var identityPanel: some View {
@@ -433,20 +447,7 @@ private struct SettingsDeviceSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Rule(color: Theme.hair)
-            // 一個主要：立即同步；「重新抓設定」少用，收進「⋯」
-            HStack(spacing: 0) {
-                ActionBar(
-                    primary: POSAction(syncing ? "同步中…" : "立即同步", icon: "arrow-path", enabled: !syncing && !model.isDemo) {
-                        Task { await syncNow() }
-                    },
-                    more: [POSAction(refreshing ? "更新中…" : "重新抓設定（菜單、人員、桌位、發票號碼）", icon: "arrow-down-tray", enabled: !refreshing) {
-                        Task { await refresh() }
-                    }],
-                    fillPrimary: false
-                )
-                Spacer(minLength: 0)
-            }
-            Text("單子每 15 秒自動同步、有新動作時馬上送；「立即同步」現在就送出、拉回別台的。「⋯」裡的「重新抓設定」重抓菜單、人員、桌位與發票號碼。")
+            Text("單子每 15 秒自動同步、有新動作時馬上送；右邊的「立即同步」現在就送出、拉回別台的，「重新抓設定」重抓菜單、人員、桌位與發票號碼。")
                 .textRole(.xs)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -846,18 +847,7 @@ private struct SettingsPrinterList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            HStack(alignment: .bottom, spacing: 16) {
-                SettingsHeading(title: "出單機", detail: "網路（Wi-Fi、網路線，埠 9100）或藍牙 BLE 的熱感機；每台自己選 58 或 80 mm。設定存在這台 iPad。")
-                Spacer(minLength: 8)
-                Button(action: add) {
-                    Label {
-                        Text("新增出單機")
-                    } icon: {
-                        HeroIcon("plus", size: 16)
-                    }
-                }
-                .buttonStyle(.brand(.primary, size: .md))
-            }
+            SettingsHeading(title: "出單機", detail: "網路（Wi-Fi、網路線，埠 9100）或藍牙 BLE 的熱感機；每台自己選 58 或 80 mm。設定存在這台 iPad。點一台編輯；新增在右邊。")
             if printers.printers.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("還沒有出單機")
@@ -890,6 +880,8 @@ private struct SettingsPrinterList: View {
             }
             recent
         }
+        // 右欄（這一頁的動作）：大鍵「新增出單機」
+        .dockSelection(DockSelection.page("settings-printers", primary: POSAction("新增出單機", icon: "plus") { add() }))
     }
 
     @ViewBuilder
@@ -1087,6 +1079,7 @@ private struct SettingsPrintPreview: View {
                             .scaledToFit()
                             .frame(maxWidth: 300)
                             .padding(12)
+                            // 印出來的證明聯：熱感紙是白的（單據例外，深、淺色都一樣）
                             .background(Color.white, in: .rect(cornerRadius: Metric.radius))
                             .accessibilityLabel("證明聯")
                     }
@@ -1166,8 +1159,8 @@ private struct SettingsPrinterEditor: View {
             rolesPanel
             encodingPanel
             drawerPanel
-            footer
         }
+        .dockSelection(editorDock)
         .onDisappear { BluetoothPrinters.shared.stopScan() }
         .confirmationDialog("刪除「\(config.name)」？", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("刪除", role: .destructive, action: delete)
@@ -1177,19 +1170,13 @@ private struct SettingsPrinterEditor: View {
         }
     }
 
+    /// 表單在左邊；儲存、測試列印、刪除在右欄。回列表＝右欄的 ×
     private var header: some View {
-        HStack(alignment: .center, spacing: 14) {
-            Button(action: cancel) {
-                HeroIcon("arrow-left", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 38))
-            .accessibilityLabel("回出單機列表")
-            VStack(alignment: .leading, spacing: 2) {
-                Eyebrow(isNew ? "新增出單機" : "編輯出單機")
-                Text(trimmedName.isEmpty ? "未命名" : trimmedName)
-                    .textRole(.h3)
-                    .foregroundStyle(Theme.ink)
-            }
+        VStack(alignment: .leading, spacing: 2) {
+            Eyebrow(isNew ? "出單機・新增" : "出單機・編輯")
+            Text(trimmedName.isEmpty ? "未命名" : trimmedName)
+                .textRole(.h3)
+                .foregroundStyle(Theme.ink)
         }
     }
 
@@ -1416,18 +1403,41 @@ private struct SettingsPrinterEditor: View {
 
     // MARK: 存
 
-    /// 「⋯」（刪除，紅字、要確認）｜測試列印｜加入／儲存（品牌橘）
-    private var footer: some View {
-        HStack(spacing: 0) {
-            ActionBar(
-                primary: POSAction(isNew ? "加入" : "儲存", icon: "check", enabled: canSave) { save() },
-                secondary: [POSAction("測試列印", icon: "printer", enabled: canConnect) { testPrint() }],
-                more: isNew ? [] : [POSAction("刪除這台出單機", icon: "trash", destructive: true) { confirmDelete = true }],
-                size: .lg,
-                accent: true,
-                fillPrimary: false
-            )
-            Spacer(minLength: 0)
+    /// 右欄：選起來的這台出單機。大鍵「加入／儲存」（品牌橘）；動作鍵「測試列印」、藍牙的「搜尋」、「刪除」（紅字、要確認）。× 回列表（不存）
+    private var editorDock: DockSelection {
+        var actions: [POSAction] = [POSAction("測試列印", icon: "printer", enabled: canConnect) { testPrint() }]
+        if config.connection == .bluetooth {
+            actions.append(POSAction(BluetoothPrinters.shared.scanning ? "停止搜尋" : "搜尋藍牙出單機", icon: "magnifying-glass") {
+                if BluetoothPrinters.shared.scanning {
+                    BluetoothPrinters.shared.stopScan()
+                } else {
+                    BluetoothPrinters.shared.startScan()
+                }
+            })
+        }
+        if !isNew {
+            actions.append(POSAction("刪除這台", icon: "trash", destructive: true) { confirmDelete = true })
+        }
+        return DockSelection(
+            id: "settings-printer-\(config.id)",
+            kind: isNew ? "新增出單機" : "出單機",
+            title: trimmedName.isEmpty ? "未命名" : trimmedName,
+            detail: dockDetail,
+            badge: canSave ? nil : DockBadge(trimmedName.isEmpty ? "要取名字" : "還沒設定連線", tone: .warning),
+            primary: POSAction(isNew ? "加入" : "儲存", icon: "check", enabled: canSave) { save() },
+            accent: true,
+            actions: actions,
+            clear: { cancel() }
+        )
+    }
+
+    /// 「網路・192.168.1.50・80 mm」「藍牙・58 mm・MTP-II」
+    private var dockDetail: String {
+        switch config.connection {
+        case .network:
+            return "網路・\(trimmedHost.isEmpty ? "沒有 IP" : trimmedHost)・\(config.paper.label)"
+        case .bluetooth:
+            return "藍牙・\(config.paper.label)・\(config.peripheralName ?? "還沒選裝置")"
         }
     }
 
@@ -1468,26 +1478,16 @@ private struct SettingsBluetoothPicker: View {
                 .padding(14)
                 .background(Tone.active.background, in: .rect(cornerRadius: Metric.radius, style: .continuous))
             }
+            // 「搜尋藍牙出單機」在右欄（動作鍵）；這裡只顯示狀態與找到的機器（點一台選起來）
             HStack(spacing: 12) {
-                Button {
-                    if bluetooth.scanning {
-                        bluetooth.stopScan()
-                    } else {
-                        bluetooth.startScan()
-                    }
-                } label: {
-                    Label {
-                        Text(bluetooth.scanning ? "停止搜尋" : "搜尋附近的藍牙出單機")
-                    } icon: {
-                        HeroIcon("magnifying-glass", size: 16)
-                    }
-                }
-                // 編輯畫面的主要動作是下面的「儲存」；搜尋用細框
-                .buttonStyle(.brand(.ghost, size: .md))
                 if bluetooth.scanning {
                     ProgressView()
                         .controlSize(.small)
                     Text("搜尋中…")
+                        .textRole(.small)
+                        .foregroundStyle(Theme.muted)
+                } else if bluetooth.found.isEmpty {
+                    Text("按右邊的「搜尋藍牙出單機」找附近的機器")
                         .textRole(.small)
                         .foregroundStyle(Theme.muted)
                 }
@@ -1660,6 +1660,17 @@ private struct SettingsInvoiceSection: View {
                 rollsPanel
             }
         }
+        .dockSelection(pageDock)
+    }
+
+    /// 右欄（這一頁的動作）：「向後台要號碼」（有開發票才有）
+    private var pageDock: DockSelection? {
+        guard enabled else { return nil }
+        return DockSelection.page("settings-invoice", actions: [
+            POSAction(requesting ? "要號碼中…" : "向後台要號碼", icon: "arrow-down-tray", enabled: !requesting) {
+                Task { await topUp() }
+            },
+        ])
     }
 
     private var statusPanel: some View {
@@ -1709,23 +1720,9 @@ private struct SettingsInvoiceSection: View {
         let allocator = model.allocator
         let current = model.invoicePeriod.code
         return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 8) {
-                Eyebrow("號碼段・\(rolls.count) 本")
-                Spacer(minLength: 8)
-                Button {
-                    Task { await topUp() }
-                } label: {
-                    Label {
-                        Text(requesting ? "要號碼中…" : "向後台要號碼")
-                    } icon: {
-                        HeroIcon("arrow-down-tray", size: 16)
-                    }
-                }
-                .buttonStyle(.brand(.ghost, size: .sm))
-                .disabled(requesting)
-            }
+            Eyebrow("號碼段・\(rolls.count) 本")
             if rolls.isEmpty {
-                Text("這台還沒有號碼段。連上網路後按「向後台要號碼」。")
+                Text("這台還沒有號碼段。連上網路後按右邊的「向後台要號碼」。")
                     .textRole(.small)
                     .foregroundStyle(Theme.muted)
             } else {
@@ -1905,6 +1902,9 @@ private struct SettingsDataSection: View {
             SettingsHeading(title: "資料", detail: "每個動作先寫進這台 iPad 的日誌（一筆接一筆、有雜湊鏈），再送到後台；當機、沒電也不會掉。")
             checkPanel
         }
+        // 右欄（這一頁的動作）：大鍵「檢查這台的資料」；解除配對／結束示範是紅字的動作鍵（要確認；解除配對還要店長授權）
+        .dockSelection(DockSelection.page("settings-data", primary: POSAction("檢查這台的資料", icon: "shield-check") { runCheck() },
+                                          actions: leaveActions))
         .confirmationDialog("解除配對？", isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button("解除配對並清掉這台的資料", role: .destructive) {
                 Task { await model.unpair() }
@@ -1925,13 +1925,7 @@ private struct SettingsDataSection: View {
 
     private var checkPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 8) {
-                Eyebrow("檢查資料")
-                Spacer(minLength: 8)
-                // 一個主要：檢查；解除配對／結束示範是危險的，收進「⋯」（紅字，按了要確認；解除配對還要店長授權）
-                ActionBar(primary: POSAction("檢查這台的資料", icon: "shield-check") { runCheck() },
-                          more: leaveActions, size: .sm, fillPrimary: false)
-            }
+            Eyebrow("檢查資料")
             if let check {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     StatusBadge(check.ok ? "完整" : "有問題", tone: check.ok ? .active : .danger)
@@ -1966,7 +1960,7 @@ private struct SettingsDataSection: View {
         .panel(padding: 22)
     }
 
-    /// 「⋯」裡的：示範模式是「結束示範」；配對了的是「解除配對」
+    /// 右欄的紅字動作鍵：示範模式是「結束示範」；配對了的是「解除配對」
     private var leaveActions: [POSAction] {
         if model.isDemo {
             return [POSAction("結束示範", icon: "x-circle", destructive: true) { confirmEndDemo = true }]
@@ -1978,8 +1972,8 @@ private struct SettingsDataSection: View {
     }
 
     private var leaveNote: String? {
-        if model.isDemo { return "現在是虛構的「晨麥手作」，資料只在這次開著的時候；要結束示範、回到配對畫面，按「⋯」。" }
-        if model.pairing != nil { return "這台不用了或要換店：按「⋯」→「解除配對」（要店長以上授權），會清掉這台的單、班、設定與登入資訊。" }
+        if model.isDemo { return "現在是虛構的「晨麥手作」，資料只在這次開著的時候；要結束示範、回到配對畫面，按右邊的「結束示範」。" }
+        if model.pairing != nil { return "這台不用了或要換店：按右邊的「解除配對」（要店長以上授權），會清掉這台的單、班、設定與登入資訊。" }
         return nil
     }
 

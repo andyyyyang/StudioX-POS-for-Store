@@ -7,19 +7,18 @@ import SwiftUI
 
 /// 交班：開班（零用金）→ 營業中的錢櫃（應有現金、存入取出、只開錢櫃、X 帳）→ 點錢交班（Z 帳）。
 ///
-///   ┌ Cash drawer ──────────────────────────────────────────────┐
-///   │ ┌錢櫃裡應該有 NT$ 8,420──────────────┐ ┌錢櫃進出────────┐  │
-///   │ │零用金／現金收款／退款／存入／取出   │ │存入 找零備用 +500│  │
-///   │ │[⋯][ 存入 ｜ 取出 ]                  │ │                  │  │
-///   │ ┌Close the shift──────────────────────────────────────────┐│
-///   │ │① 點錢 [1000 ×3][500 ×2][100 ×12]…[2000、200]            ││
-///   │ │   [⋯][一個一個點]          點到／應有／差額               ││
-///   │ │② 備註                          ③ 交班單預覽［交班並列印］ ││
-///   │ ┌打卡（點一個人）┐  ┌今天交過的班 ⋯┐                        │
-///   └──────────────────────────────────────────────────────────┘
+///   ┌ Cash drawer ─────────────────────────────────────┬ 右欄 ─────────────┐
+///   │ ┌錢櫃裡應該有 NT$ 8,420─────┐ ┌錢櫃進出────────┐ │ [一個一個點][存入] │
+///   │ │零用金／現金收款／存入／取出│ │存入 找零備用 +500│ │ [取出][只開錢櫃]   │
+///   │ ┌Close the shift──────────────────────────────────┐│ [印 X 帳][重點]    │
+///   │ │① 點錢 [1000 ×3][500 ×2]…[2000、200]  點到／應有  ││ 1  2  3 …          │
+///   │ │② 備註                     ③ 交班單預覽           ││ [   交班並列印   ] │
+///   │ ┌打卡（點一個人）┐  ┌今天交過的班（點一班）┐       │                    │
+///   └─────────────────────────────────────────────────────┴────────────────────┘
 ///
-/// 整頁只有一個主要動作：「交班並列印」（品牌橘）。錢櫃卡片只露「存入｜取出」一組，
-/// 「只開錢櫃」「印 X 帳」收進「⋯」；打卡點一個人、動作出現在名單下面；補印交班單在「今天交過的班」的「⋯」。
+/// 左邊選、右邊做：工作區只有資訊與選擇（面額格、打卡名單、交過的班）；動作都在右欄。
+/// 沒選東西時右欄是這一頁的動作（大鍵「交班並列印」或「開班」）；選了一個人是「上班／下班」，選了一班是「補印」。
+/// 存入、取出：右欄蓋上原因（不用打數字），選了原因再在鍵盤打金額（要授權的先問主管 PIN）。
 ///
 /// 每個數字都在右側鍵盤打：點錢時點一個面額、鍵盤問張數，畫面上即時算差多少。
 struct ShiftView: View {
@@ -30,9 +29,12 @@ struct ShiftView: View {
     @State private var note = ""
     /// 2000、200 很少見：面額最後一格「2000、200」點了才出來
     @State private var showRare = false
-    /// 存入／取出：先選原因（下一步才在鍵盤打金額）
+    /// 存入／取出：右欄蓋上原因，選了原因再在鍵盤打金額
     @State private var moveKind: CashMoveKind?
     @State private var closing = false
+    /// 打卡名單選起來的人、今天交過的班選起來的那一班（同時只選一個）
+    @State private var selectedStaffId: String?
+    @State private var selectedShiftId: String?
 
     var body: some View {
         ScrollView {
@@ -44,8 +46,20 @@ struct ShiftView: View {
                 } else {
                     ShiftOpenHero()
                 }
-                ShiftAttendancePanel()
-                ShiftHistoryPanel()
+                ShiftAttendancePanel(selectedId: selectedStaffId) { id in
+                    withAnimation(Motion.fast) {
+                        selectedStaffId = selectedStaffId == id ? nil : id
+                        selectedShiftId = nil
+                    }
+                    model.touch()
+                }
+                ShiftHistoryPanel(selectedId: selectedShiftId) { id in
+                    withAnimation(Motion.fast) {
+                        selectedShiftId = selectedShiftId == id ? nil : id
+                        selectedStaffId = nil
+                    }
+                    model.touch()
+                }
             }
             .padding(.horizontal, 28)
             .padding(.top, 22)
@@ -53,6 +67,117 @@ struct ShiftView: View {
         }
         .scrollIndicators(.hidden)
         .scrollDismissesKeyboard(.interactively)
+        .dockSelection(dock)
+        .dockPanel(isPresented: Binding(get: { moveKind != nil }, set: { if !$0 { moveKind = nil } }),
+                   title: moveTitle, subtitle: "選了原因，下一步在鍵盤打金額") {
+            reasonChoices
+        }
+    }
+
+    // MARK: - 右欄
+
+    /// 選起來的人／那一班勝過這一頁的動作
+    private var dock: DockSelection? {
+        if let id = selectedStaffId, let member = model.staff.first(where: { $0.id == id }) {
+            return staffDock(member)
+        }
+        if let id = selectedShiftId, let shift = model.state.shifts[id] {
+            return shiftDock(shift)
+        }
+        return pageDock
+    }
+
+    /// 營業中：大鍵「交班並列印」；動作鍵「一個一個點」「存入」「取出」「只開錢櫃」「印 X 帳」「重點」。還沒開班：大鍵「開班」
+    private var pageDock: DockSelection {
+        guard let shift = model.openShift else {
+            return DockSelection.page("shift", primary: POSAction("開班", icon: "banknotes") {
+                Task { await model.startShift() }
+            }, accent: true)
+        }
+        var actions: [POSAction] = [
+            POSAction("一個一個點", icon: "calculator") { Task { await countAll() } },
+            POSAction("存入", icon: "arrow-down-tray") { moveKind = .payIn },
+            POSAction("取出", icon: "arrow-up") { moveKind = .payOut },
+            POSAction("只開錢櫃", icon: "banknotes") { Task { await model.moveCash(.noSale, reason: "換零錢") } },
+            POSAction("印 X 帳", icon: "printer") {
+                model.printXReport()
+                model.show("已送出 X 帳（不關班）", tone: .neutral)
+            },
+        ]
+        if !counted.counts.isEmpty {
+            actions.append(POSAction("重點", icon: "arrow-path", destructive: true) { counted = CashCount() })
+        }
+        let primary = POSAction(closing ? "交班中…" : "交班並列印", icon: "check", enabled: !counted.counts.isEmpty && !closing) {
+            close(shift)
+        }
+        return DockSelection.page("shift", primary: primary, accent: true, actions: actions)
+    }
+
+    /// 打卡：選起來的人，大鍵「上班」或「下班」
+    private func staffDock(_ member: StaffMember) -> DockSelection {
+        let on = model.isClockedIn(member)
+        let action = POSAction(on ? "下班" : "上班", icon: on ? "arrow-right-start-on-rectangle" : "clock") {
+            model.toggleClock(member)
+            withAnimation(Motion.fast) { selectedStaffId = nil }
+        }
+        return DockSelection(
+            id: "shift-staff-\(member.id)",
+            kind: "打卡",
+            title: member.name,
+            detail: "\(member.role.label)・今天 \(model.hoursToday(member))",
+            badge: DockBadge(on ? "上班中" : "沒上班", tone: on ? .active : .neutral),
+            primary: action,
+            accent: false,
+            clear: { selectedStaffId = nil }
+        )
+    }
+
+    /// 今天交過的班：選起來的那一班，大鍵「補印」
+    private func shiftDock(_ shift: Shift) -> DockSelection {
+        let expected = shift.expectedAtClose ?? model.state.expectedCash(shiftId: shift.id)
+        let result = ShiftDifference.describe(counted: shift.counted?.total, expected: expected)
+        return DockSelection(
+            id: "shift-closed-\(shift.id)",
+            kind: "交過的班",
+            title: "\(shift.openedAt.clockText)–\(shift.closedAt?.clockText ?? "")",
+            detail: "\(model.staffName(shift.openedBy)) 開・\(model.staffName(shift.closedBy)) 交・應有 \(expected.formatted)",
+            badge: DockBadge(result.text, tone: result.tone),
+            primary: POSAction("補印交班單", icon: "printer") { model.reprintShiftReport(shift) },
+            accent: false,
+            clear: { selectedShiftId = nil }
+        )
+    }
+
+    // MARK: 存入、取出的原因（右欄的面板）
+
+    private var moveTitle: String {
+        switch moveKind {
+        case .some(.payIn): "存入的原因"
+        case .some(.payOut): "取出的原因"
+        case .some(.noSale), .none: "開錢櫃的原因"
+        }
+    }
+
+    private var moveReasons: [String] {
+        switch moveKind {
+        case .some(.payIn): ["找零備用", "其他"]
+        case .some(.payOut): ["買菜", "付廠商", "其他"]
+        case .some(.noSale), .none: ["換零錢"]
+        }
+    }
+
+    private var reasonChoices: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(moveReasons, id: \.self) { r in
+                DockChoice(title: r) { move(r) }
+            }
+        }
+    }
+
+    private func move(_ reason: String) {
+        guard let kind = moveKind else { return }
+        moveKind = nil
+        Task { await model.moveCash(kind, reason: reason) }
     }
 
     // MARK: - 上面
@@ -80,20 +205,11 @@ struct ShiftView: View {
         let report = ShiftReport(shift: shift, state: model.state, now: Date())
         let expected = model.state.expectedCash(shiftId: shift.id)
         return HStack(alignment: .top, spacing: 20) {
-            ShiftDrawerCard(shift: shift, report: report, expected: expected, moveKind: moveKind,
-                            pick: { kind in withAnimation(Motion.fast) { moveKind = moveKind == kind ? nil : kind } },
-                            choose: { reason in move(reason) },
-                            cancel: { withAnimation(Motion.fast) { moveKind = nil } })
+            ShiftDrawerCard(shift: shift, report: report, expected: expected)
             ShiftMovesPanel(shift: shift)
                 .frame(width: 320)
         }
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func move(_ reason: String) {
-        guard let kind = moveKind else { return }
-        moveKind = nil
-        Task { await model.moveCash(kind, reason: reason) }
     }
 
     // MARK: - 交班
@@ -115,10 +231,8 @@ struct ShiftView: View {
                     stepNote
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                ShiftReportPreview(report: preview, canClose: !counted.counts.isEmpty, closing: closing) {
-                    close(shift)
-                }
-                .frame(width: 300)
+                ShiftReportPreview(report: preview, canClose: !counted.counts.isEmpty)
+                    .frame(width: 300)
             }
         }
         .panel(padding: 24)
@@ -126,7 +240,7 @@ struct ShiftView: View {
 
     private func stepCount(expected: Money) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            ShiftStepLabel(number: 1, title: "點錢", detail: "點一個面額，在右側鍵盤打張數；或按「一個一個點」照順序問")
+            ShiftStepLabel(number: 1, title: "點錢", detail: "點一個面額，在右側鍵盤打張數；或按右邊的「一個一個點」照順序問")
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 118), spacing: 10)], spacing: 10) {
                 ForEach(denominations, id: \.self) { d in
                     ShiftDenominationCell(denomination: d, count: counted.count(d)) {
@@ -139,13 +253,6 @@ struct ShiftView: View {
                         withAnimation(Motion.fast) { showRare.toggle() }
                     }
                 }
-            }
-            // 主要動作是下面的「交班並列印」；這裡只有一個次要的「一個一個點」，「重點」收進「⋯」
-            HStack(spacing: 0) {
-                ActionBar(secondary: [POSAction("一個一個點", icon: "calculator") { Task { await countAll() } }],
-                          more: counted.counts.isEmpty ? [] : [POSAction("重點（清掉點到的）", icon: "arrow-path", destructive: true) { counted = CashCount() }],
-                          fillPrimary: false)
-                Spacer(minLength: 0)
             }
             ShiftCountResult(counted: counted, expected: expected)
         }
@@ -219,18 +326,13 @@ private struct ShiftOpenHero: View {
                 .foregroundStyle(Theme.ink2)
                 .frame(maxWidth: 600, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 14) {
-                Button {
-                    Task { await model.startShift() }
-                } label: {
-                    Text("開班")
-                }
-                .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-                if let last = lastShift {
-                    Text("上一班的零用金 \(last.openingCash.formatted)")
-                        .textRole(.small)
-                        .foregroundStyle(Theme.muted)
-                }
+            // 「開班」是右欄最下面的大鍵（左邊選、右邊做）
+            HStack(spacing: 10) {
+                HeroIcon("chevron-right", size: 16)
+                    .foregroundStyle(Theme.accentText)
+                Text(lastShift.map { "按右邊的「開班」・上一班的零用金 \($0.openingCash.formatted)" } ?? "按右邊的「開班」")
+                    .font(.brand(15, .medium))
+                    .foregroundStyle(Theme.ink2)
             }
             HStack(alignment: .top, spacing: 16) {
                 ShiftHeroStep(number: 1, title: "零用金", detail: "開班時錢櫃裡有多少")
@@ -282,10 +384,6 @@ private struct ShiftDrawerCard: View {
     let shift: Shift
     let report: ShiftReport
     let expected: Money
-    let moveKind: CashMoveKind?
-    let pick: (CashMoveKind) -> Void
-    let choose: (String) -> Void
-    let cancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -303,11 +401,9 @@ private struct ShiftDrawerCard: View {
             }
             breakdown
             Rule(color: Theme.hair)
-            actions
-            if let kind = moveKind {
-                ShiftReasonPicker(kind: kind, choose: choose, cancel: cancel)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            Text("存入、取出、只開錢櫃、印 X 帳在右邊")
+                .textRole(.xs)
+                .foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .panel(padding: 24)
@@ -333,110 +429,6 @@ private struct ShiftDrawerCard: View {
         }
     }
 
-    /// 「⋯」（只開錢櫃、印 X 帳）＋「存入｜取出」一組：選了一邊，下面出現原因
-    private var actions: some View {
-        HStack(spacing: 10) {
-            MoreMenu(actions: [
-                POSAction("只開錢櫃（換零錢）", icon: "banknotes") {
-                    Task { await model.moveCash(.noSale, reason: "換零錢") }
-                },
-                POSAction("印 X 帳（不關班）", icon: "printer") {
-                    model.printXReport()
-                    model.show("已送出 X 帳（不關班）", tone: .neutral)
-                },
-            ], label: "錢櫃的其他動作")
-            ShiftMovePair(selection: moveKind, pick: pick)
-        }
-    }
-}
-
-/// 存入｜取出：一組分段的按鈕（選中的那一邊是深色；再點一次收起原因）
-private struct ShiftMovePair: View {
-    let selection: CashMoveKind?
-    let pick: (CashMoveKind) -> Void
-
-    var body: some View {
-        HStack(spacing: 4) {
-            segment(.payIn, title: "存入", icon: "arrow-down-tray")
-            segment(.payOut, title: "取出", icon: "arrow-up")
-        }
-        .padding(3)
-        .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
-                .strokeBorder(Theme.line, lineWidth: 1)
-        }
-    }
-
-    private func segment(_ kind: CashMoveKind, title: String, icon: String) -> some View {
-        Button {
-            pick(kind)
-        } label: {
-            HStack(spacing: 8) {
-                HeroIcon(icon, size: 16)
-                Text(title)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 38)
-        }
-        .buttonStyle(ShiftSegmentStyle(selected: selection == kind))
-        .accessibilityAddTraits(selection == kind ? .isSelected : [])
-    }
-}
-
-private struct ShiftSegmentStyle: ButtonStyle {
-    let selected: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.brand(15, .medium))
-            .foregroundStyle(selected ? Theme.page : Theme.ink)
-            .background(selected ? Theme.ink : (configuration.isPressed ? Theme.press : Color.clear),
-                        in: .rect(cornerRadius: Metric.radius, style: .continuous))
-            .contentShape(.rect)
-            .animation(Motion.fast, value: selected)
-    }
-}
-
-/// 存入、取出：先點原因，再到右側鍵盤打金額
-private struct ShiftReasonPicker: View {
-    let kind: CashMoveKind
-    let choose: (String) -> Void
-    let cancel: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(prompt)
-                .textRole(.small)
-                .foregroundStyle(Theme.ink2)
-            FlowLayout(spacing: 8, rowSpacing: 8) {
-                ForEach(reasons, id: \.self) { r in
-                    OptionChip(title: r, selected: false) { choose(r) }
-                }
-                Button("取消", action: cancel)
-                    .buttonStyle(.brand(.quiet, size: .md))
-            }
-        }
-        .padding(16)
-        .background(Theme.press, in: .rect(cornerRadius: Metric.radius, style: .continuous))
-    }
-
-    private var prompt: String {
-        switch kind {
-        case .payIn: "存入的原因（下一步在右側鍵盤打金額）"
-        case .payOut: "取出的原因（下一步在右側鍵盤打金額）"
-        case .noSale: "開錢櫃的原因"
-        }
-    }
-
-    private var reasons: [String] {
-        switch kind {
-        case .payIn: ["找零備用", "其他"]
-        case .payOut: ["買菜", "付廠商", "其他"]
-        case .noSale: ["換零錢"]
-        }
-    }
 }
 
 private struct ShiftMovesPanel: View {
@@ -688,12 +680,10 @@ private struct ShiftCountResult: View {
     }
 }
 
-/// 交班單預覽（這一班的營業重點）＋交班的按鈕
+/// 交班單預覽（這一班的營業重點）。「交班並列印」是右欄最下面的大鍵
 private struct ShiftReportPreview: View {
     let report: ShiftReport
     let canClose: Bool
-    let closing: Bool
-    let close: () -> Void
 
     /// 「12 張・18 位」；沒有人數（服飾、美業）就只寫張數
     private func guestLine(_ s: SalesSummary) -> String {
@@ -740,18 +730,10 @@ private struct ShiftReportPreview: View {
                     ValueRow(label: "只開錢櫃", value: "\(report.noSaleCount) 次")
                 }
             }
-            Button(action: close) {
-                Text(closing ? "交班中…" : "交班並列印")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(.accent, size: .lg, fullWidth: true, arrow: true))
-            .disabled(!canClose || closing)
-            if !canClose {
-                Text("先點錢：至少打一個面額（錢櫃是空的就打 0）")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text(canClose ? "對好了就按右邊的「交班並列印」" : "先點錢：至少打一個面額（錢櫃是空的就打 0），再按右邊的「交班並列印」")
+                .textRole(.xs)
+                .foregroundStyle(canClose ? Theme.ink2 : Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(18)
         .background(Theme.press, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
@@ -760,15 +742,24 @@ private struct ShiftReportPreview: View {
 
 // MARK: - 打卡
 
-/// 打卡：名單只顯示狀態；點一個人選起來，「上班」或「下班」出現在名單下面（一列一個按鈕太多）
+/// 打卡：名單只顯示狀態；點一個人選起來（橘框），右欄的大鍵是「上班」或「下班」；再點一下取消
 private struct ShiftAttendancePanel: View {
     @Environment(POSModel.self) private var model
-    @State private var selectedId: String?
+    let selectedId: String?
+    let select: (String) -> Void
 
     var body: some View {
         let onDuty = model.staff.filter { model.isClockedIn($0) }.count
         VStack(alignment: .leading, spacing: 12) {
-            Eyebrow("打卡・\(onDuty) 人上班中")
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Eyebrow("打卡・\(onDuty) 人上班中")
+                Spacer(minLength: 8)
+                if !model.staff.isEmpty {
+                    Text("點一個人打卡")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
+                }
+            }
             if model.staff.isEmpty {
                 Text("後台還沒有設定人員")
                     .textRole(.small)
@@ -777,8 +768,7 @@ private struct ShiftAttendancePanel: View {
                 VStack(spacing: 0) {
                     ForEach(model.staff) { s in
                         Button {
-                            withAnimation(Motion.fast) { selectedId = selectedId == s.id ? nil : s.id }
-                            model.touch()
+                            select(s.id)
                         } label: {
                             ShiftStaffRow(member: s, selected: selectedId == s.id)
                         }
@@ -789,36 +779,10 @@ private struct ShiftAttendancePanel: View {
                         }
                     }
                 }
-                if let s = model.staff.first(where: { $0.id == selectedId }) {
-                    footer(s)
-                        .transition(.opacity)
-                } else {
-                    Text("點一個人打卡（上班、下班）")
-                        .textRole(.xs)
-                        .foregroundStyle(Theme.muted)
-                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .panel(padding: 22)
-    }
-
-    /// 選起來的那個人：一個動作（上班中就是「下班」）
-    private func footer(_ s: StaffMember) -> some View {
-        let on = model.isClockedIn(s)
-        return HStack(spacing: 12) {
-            Text(on ? "\(s.name) 要下班？" : "\(s.name) 要上班？")
-                .font(.brand(14, .medium))
-                .foregroundStyle(Theme.ink2)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-            Spacer(minLength: 8)
-            ActionBar(secondary: [POSAction(on ? "下班" : "上班", icon: on ? "arrow-right-start-on-rectangle" : "clock") {
-                model.toggleClock(s)
-                withAnimation(Motion.fast) { selectedId = nil }
-            }], size: .sm, fillPrimary: false)
-        }
-        .padding(.top, 4)
     }
 }
 
@@ -869,22 +833,22 @@ private struct ShiftStaffRow: View {
 
 // MARK: - 今天交過的班
 
+/// 今天交過的班：點一班選起來（橘框），右欄的大鍵是「補印交班單」；再點一下取消
 private struct ShiftHistoryPanel: View {
     @Environment(POSModel.self) private var model
+    let selectedId: String?
+    let select: (String) -> Void
 
     var body: some View {
         let list = closedToday
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Eyebrow("今天交過的班・\(list.count)")
                 Spacer(minLength: 8)
-                // 補印交班單：每一班一項，收在標題旁的「⋯」（列上不放按鈕）
                 if !list.isEmpty {
-                    MoreMenu(actions: list.map { s in
-                        POSAction("補印 \(s.openedAt.clockText)–\(s.closedAt?.clockText ?? "")・\(model.staffName(s.closedBy)) 交的班", icon: "printer") {
-                            model.reprintShiftReport(s)
-                        }
-                    }, size: .sm, label: "補印交班單")
+                    Text("點一班可以補印")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
                 }
             }
             if list.isEmpty {
@@ -894,7 +858,13 @@ private struct ShiftHistoryPanel: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(list) { s in
-                        ShiftHistoryRow(shift: s)
+                        Button {
+                            select(s.id)
+                        } label: {
+                            ShiftHistoryRow(shift: s, selected: selectedId == s.id)
+                        }
+                        .buttonStyle(.row)
+                        .accessibilityAddTraits(selectedId == s.id ? .isSelected : [])
                         if s.id != list.last?.id {
                             Rule(color: Theme.hair)
                         }
@@ -916,6 +886,7 @@ private struct ShiftHistoryPanel: View {
 private struct ShiftHistoryRow: View {
     @Environment(POSModel.self) private var model
     let shift: Shift
+    let selected: Bool
 
     var body: some View {
         let expected = shift.expectedAtClose ?? model.state.expectedCash(shiftId: shift.id)
@@ -944,6 +915,14 @@ private struct ShiftHistoryRow: View {
             StatusBadge(result.text, tone: result.tone)
         }
         .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .background(selected ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        .overlay {
+            if selected {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(Theme.accent, lineWidth: 1.5)
+            }
+        }
     }
 
     private var timeRange: String {
