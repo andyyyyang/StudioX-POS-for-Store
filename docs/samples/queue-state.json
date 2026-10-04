@@ -1,6 +1,15 @@
 {
   "calledAt" : "2026-09-21T14:11:50.000Z",
   "current" : 23,
+  "entries" : {
+    "24" : {
+      "label" : "A012・3 項",
+      "ticketId" : "tkt-a012"
+    },
+    "25" : {
+      "guests" : 4
+    }
+  },
   "marked" : [
     25
   ],

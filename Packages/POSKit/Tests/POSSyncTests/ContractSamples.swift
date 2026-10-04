@@ -130,7 +130,9 @@ struct ContractSamples {
         let queueState = QueueState(mode: .native, current: 23, waiting: [24, 25, 26], missed: [19], marked: [25], nextNo: 27,
                                     calledAt: calledAt, updatedAt: calledAt,
                                     takenAt: ["24": at.addingTimeInterval(-11 * 60), "25": at.addingTimeInterval(-7 * 60), "26": at.addingTimeInterval(-2 * 60)],
-                                    servedToday: 22)
+                                    servedToday: 22,
+                                    // 24 是外帶結帳時自動取的（掛著那張單）；25 是排隊等內用的 4 位
+                                    entries: ["24": QueueEntry(ticketId: "tkt-a012", label: "A012・3 項"), "25": QueueEntry(guests: 4)])
         let history = DayHistory(businessDate: "2026-09-21", sales: [salonSale], refunds: [], voidedTickets: [], invoiceNumbers: [], voidedInvoiceNumbers: [], checkIns: 1)
         let appointment = Reservation(id: "rsv-appt-1", kind: .appointment, name: "王小美", phone: "0912345678", partySize: 1, startsAt: at, durationMinutes: 180,
                                       createdAt: at, staffId: "staff-mori",

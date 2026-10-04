@@ -305,8 +305,9 @@ iPad 在叫號頁每 2 秒 `GET /queue`；動作的回應直接拿來更新畫�
 
 ### 公開的（不用登入，只有 `native`）
 
-- `GET /api/pos/queue/status` → `{ "current": 23, "waiting": [24, 25], "missed": [19], "marked": [], "next_no": 27 }`：
-  和原本叫號伺服器的 `/status` **一模一樣的格式**（樹莓派只要換網址）；允許跨網域、不快取
+- `GET /api/pos/queue/status`（同一份也在 `GET /api/queue/status`）→ `{ "current": 23, "waiting": [24, 25], "missed": [19], "marked": [], "next_no": 27 }`：
+  和原本叫號伺服器的 `/status` **一模一樣的格式**（樹莓派只要換網址）；允許跨網域、不快取。
+  這兩個網址、`/q`、後台的叫號頁屬於 `queue` 模組：只開叫號（`CMS_MODULES=content,queue`）也有；開了 `pos` 一定有 `queue`
 - `GET /q?no=24` → 給客人看的頁面：現在叫到幾號、你前面還有幾位，每 5 秒更新
 
 範例：`samples/queue-state.json`。
