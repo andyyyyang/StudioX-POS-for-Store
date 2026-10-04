@@ -131,10 +131,19 @@ struct TicketColumn: View {
         }
     }
 
-    /// 截圖用：單子有東西就先選起第一行（右欄是那一行的動作）
+    /// 截圖用：點餐頁還沒有單 → 先打開一張有點東西的單；單子有東西就選起第一行（右欄是那一行的動作）
     private func preselectForScreenshot() {
-        guard selectedLineId == nil, model.checkoutTicketId == nil, let t = model.selectedTicket,
-              let first = t.activeLines.first else { return }
+        guard selectedLineId == nil, model.checkoutTicketId == nil else { return }
+        guard let t = model.selectedTicket else {
+            guard model.section == .order else { return }
+            let open = model.state.openTickets.filter { !$0.activeLines.isEmpty }
+            // 換了單之後這個 task（id: selectedTicketId）會再跑一次，那時再選第一行
+            if let t = open.last(where: { !$0.tableIds.isEmpty && $0.billPrintedAt == nil }) ?? open.last {
+                model.selectedTicketId = t.id
+            }
+            return
+        }
+        guard let first = t.activeLines.first else { return }
         selectedLineId = first.id
     }
 

@@ -146,8 +146,9 @@ jobs:
           # 收銀台是橫的：打開 Simulator 轉一次（⌘←）。這台 Mac 不給輔助使用權限時就照直的截
           open -a Simulator --args -CurrentDeviceUDID "$dev" || true
           sleep 20
-          limit 20 osascript -e 'tell application "Simulator" to activate' -e 'delay 1' \
-            -e 'tell application "System Events" to key code 123 using {command down}' || echo "   轉不了，照直的截"
+          # 轉成功就記下來：截圖是照直的畫面存的，縮圖時要轉回來
+          if limit 20 osascript -e 'tell application "Simulator" to activate' -e 'delay 1' \
+            -e 'tell application "System Events" to key code 123 using {command down}'; then touch shots/.rotated; else echo "   轉不了，照直的截"; fi
           sleep 4
           shoot() {  # 一張：名稱|啟動參數|等幾秒 → shots/<資料夾>/<名稱>.png
             local dir="$1" scene="$2"
@@ -208,6 +209,34 @@ jobs:
           limit 60 xcrun simctl shutdown "$dev" || true
           ls shots/phone | wc -l
 
+      # App 當掉的話：把模擬器的當機報告放進 artifact，並在這裡印出當掉的位置
+      - name: 當機報告
+        if: always()
+        run: |
+          mkdir -p shots/crashes
+          find ~/Library/Logs/DiagnosticReports -name "StudioXPOS*" -newer build.log -exec cp {} shots/crashes/ \; 2>/dev/null || true
+          ls shots/crashes
+          for f in shots/crashes/*.ips; do
+            [ -f "$f" ] || continue
+            echo "== $f"
+            python3 - "$f" <<'PY' || true
+          import json, sys
+          raw = open(sys.argv[1]).read()
+          _, _, body = raw.partition("\n")
+          d = json.loads(body)
+          print("exception:", d.get("exception"))
+          print("termination:", d.get("termination", {}).get("indicator"))
+          for k, v in (d.get("asi") or {}).items():
+              print("asi:", k, v)
+          imgs = d.get("usedImages", [])
+          ft = d.get("faultingThread", 0)
+          for fr in d["threads"][ft]["frames"][:30]:
+              i = fr.get("imageIndex")
+              img = imgs[i].get("name", "?") if i is not None and i < len(imgs) else "?"
+              print("  ", img, fr.get("symbol", "?"), fr.get("sourceFile", ""), fr.get("sourceLine", ""))
+          PY
+          done
+
       - name: 截圖放在這次執行（逾時也放）
         if: always()
         uses: actions/upload-artifact@v5
@@ -228,6 +257,8 @@ jobs:
             [ -f "$f" ] || continue
             out="docs/screenshots/${f#shots/}"
             sips -Z 1600 -s format jpeg -s formatOptions 72 "$f" --out "${out%.png}.jpg" >/dev/null
+            # iPad 轉成橫的時候，截圖還是照直的畫面存（內容順時針轉了 90 度）：轉回來
+            case "$f" in shots/phone/*) ;; *) [ -f shots/.rotated ] && sips -r 270 "${out%.png}.jpg" >/dev/null ;; esac
           done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
