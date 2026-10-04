@@ -28,12 +28,32 @@ enum PrinterRole: String, Codable, CaseIterable, Hashable {
     }
 }
 
-/// 一台網路出單機（Epson TM-m30、Star mC-Print、台灣常見的 58／80 mm 熱感機，網路埠 9100）
+/// 出單機怎麼連
+enum PrinterConnection: String, Codable, CaseIterable, Hashable {
+    /// Wi-Fi／網路線（Epson、Star 這類，埠 9100）
+    case network
+    /// 藍牙 BLE（小型 58／80 mm 熱感機）
+    case bluetooth
+
+    var label: String {
+        switch self {
+        case .network: "網路"
+        case .bluetooth: "藍牙"
+        }
+    }
+}
+
+/// 一台出單機：網路（Epson TM-m30、Star mC-Print、台灣常見的熱感機，埠 9100）或藍牙 BLE。
+/// 紙寬每台自己選：58 mm（電子發票證明聯、小單）或 80 mm（收據、廚房單、交班單）
 struct PrinterConfig: Codable, Identifiable, Hashable {
     var id = UUID().uuidString
     var name: String
-    var host: String
+    var connection: PrinterConnection = .network
+    var host: String = ""
     var port: Int = 9100
+    /// 藍牙：CoreBluetooth 的裝置 id 與名稱
+    var peripheralId: String?
+    var peripheralName: String?
     var paper: PaperWidth = .mm80
     /// big5（台灣的機器多半是這個）、utf8、raster（全部畫成圖：不挑機器的字型，最慢）
     var encoding: String = "big5"
@@ -156,7 +176,7 @@ final class PrinterHub {
         r.add(.text("出單機測試", ReceiptStyle(align: .center, bold: true)))
         r.add(.rule)
         r.add(.row("名稱", p.name, .body))
-        r.add(.row("位址", "\(p.host):\(p.port)", .body))
+        r.add(.row("連線", p.connection == .network ? "\(p.host):\(p.port)" : "藍牙 \(p.peripheralName ?? "")", .body))
         r.add(.row("紙寬", p.paper.label, .body))
         r.add(.row("中文", "珍珠奶茶・雞排・鹹酥雞", .body))
         r.add(.row("金額", "1,280", .big))
@@ -176,9 +196,16 @@ final class PrinterHub {
 
     private func send(_ bytes: [UInt8], to p: PrinterConfig, title: String, receipt: Receipt?) {
         let host = p.host, port = p.port, name = p.name, id = p.id
+        let connection = p.connection, peripheral = p.peripheralId
         Task {
             do {
-                try await RawSocket.send(bytes, host: host, port: port)
+                switch connection {
+                case .network:
+                    try await RawSocket.send(bytes, host: host, port: port)
+                case .bluetooth:
+                    guard let peripheral else { throw BLEError.notFound }
+                    try await BluetoothPrinters.shared.send(bytes, to: peripheral)
+                }
                 status[id] = PrinterHealth(name: name, ok: true)
                 remember(PrintJob(title: title, receipt: receipt, printer: name, error: nil))
             } catch {

@@ -382,8 +382,11 @@ final class POSModel {
     func login(_ member: StaffMember) {
         currentStaff = member
         lastActivity = Date()
-        if features.seating && device.role != .kitchen && section == .order && state.openTickets.contains(where: { !$0.tableIds.isEmpty }) {
+        // 餐廳：一登入先看桌況；櫃台、零售：直接點餐
+        if usesTables && device.role != .kitchen && (mode == .tableService || state.openTickets.contains(where: { !$0.tableIds.isEmpty })) {
             section = .floor
+        } else if device.role != .kitchen {
+            section = .order
         }
         if device.role == .kitchen { section = .kitchen }
         if !visibleSections.contains(section) { section = visibleSections.first ?? .order }
@@ -468,17 +471,33 @@ final class POSModel {
 
     func isAvailable(_ item: MenuItem) -> Bool { state.isAvailable(item) }
 
+    /// 這台現在的營業模式：設定裡選的（後台還開著那個模式），否則後台的預設
+    var mode: ServiceMode {
+        if let m = ServiceMode(rawValue: settings.serviceMode), store.serviceModes.contains(m) { return m }
+        return store.defaultServiceMode
+    }
+
+    /// 切換營業模式（nil＝回到後台的預設）
+    func setMode(_ m: ServiceMode?) {
+        settings.serviceMode = m?.rawValue ?? ""
+        if !visibleSections.contains(section) { section = visibleSections.first ?? .order }
+        show("營業模式：\(mode.label)・\(mode.summary)", tone: .info)
+    }
+
+    private var usesTables: Bool { features.seating && mode.usesTables }
+    private var usesKitchen: Bool { features.kitchen && mode.usesKitchen }
+
     var visibleSections: [AppSection] {
         switch device.role {
         case .kitchen: return [.kitchen, .orders, .settings]
         case .handheld:
-            return [.order] + (features.seating ? [.floor] : []) + [.orders] + (features.reservations ? [.reservations] : []) + [.settings]
+            return [.order] + (usesTables ? [.floor] : []) + [.orders] + (features.reservations && usesTables ? [.reservations] : []) + [.settings]
         case .register:
             var out: [AppSection] = [.order]
-            if features.seating { out.append(.floor) }
+            if usesTables { out.append(.floor) }
             out.append(.orders)
-            if features.reservations { out.append(.reservations) }
-            if features.kitchen { out.append(.kitchen) }
+            if features.reservations && usesTables { out.append(.reservations) }
+            if usesKitchen { out.append(.kitchen) }
             if currentStaff?.can(.viewReports) ?? true { out.append(.dashboard) }
             out += [.shift, .settings]
             return out
@@ -533,6 +552,8 @@ final class LocalSettings {
     var printKitchenTickets: Bool { didSet { d.set(printKitchenTickets, forKey: "printKitchenTickets") } }
     var consoleURLString: String { didSet { d.set(consoleURLString, forKey: "consoleURL") } }
     var openDrawerOnCash: Bool { didSet { d.set(openDrawerOnCash, forKey: "openDrawerOnCash") } }
+    /// 這台的營業模式（ServiceMode 的 rawValue；空的＝用後台的預設）
+    var serviceMode: String { didSet { d.set(serviceMode, forKey: "serviceMode") } }
 
     var consoleURL: URL { URL(string: consoleURLString) ?? URL(string: "https://console.studiox.tw")! }
 
@@ -551,6 +572,7 @@ final class LocalSettings {
         printKitchenTickets = d.object(forKey: "printKitchenTickets") as? Bool ?? true
         consoleURLString = d.string(forKey: "consoleURL") ?? "https://console.studiox.tw"
         openDrawerOnCash = d.object(forKey: "openDrawerOnCash") as? Bool ?? true
+        serviceMode = d.string(forKey: "serviceMode") ?? ""
     }
 }
 

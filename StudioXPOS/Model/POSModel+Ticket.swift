@@ -34,10 +34,10 @@ extension POSModel {
         }
     }
 
-    /// 目前這張單；沒有就照店家的預設開一張（快速點餐：不選桌直接點）
+    /// 目前這張單；沒有就照營業模式開一張（櫃台、零售：外帶；餐廳、咖啡：內用，不選桌直接點）
     func ensureTicket() -> Ticket? {
         if let t = selectedTicket { return t }
-        return openTicket(type: store.defaultOrderType)
+        return openTicket(type: mode.defaultOrderType)
     }
 
     // MARK: 加品項
@@ -243,7 +243,7 @@ extension POSModel {
         }
         let first = !t.lines.contains(where: \.isSent)
         record(.linesSent(LinesSent(ticketId: t.id, lineIds: lines.map(\.id))))
-        if settings.printKitchenTickets { printKitchen(t, lines: lines, mode: first ? .new : .add) }
+        if settings.printKitchenTickets && mode.usesKitchen { printKitchen(t, lines: lines, mode: first ? .new : .add) }
         show("已送出 \(lines.reduce(0) { $0 + $1.quantity }) 項")
     }
 
