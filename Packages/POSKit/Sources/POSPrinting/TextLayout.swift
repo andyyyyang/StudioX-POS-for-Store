@@ -14,32 +14,29 @@ public enum PaperWidth: String, Codable, Sendable, CaseIterable, Hashable {
     public var label: String { self == .mm58 ? "58 mm" : "80 mm" }
 }
 
-/// 半形／全形：中文、全形符號佔兩格。出單機文字模式排版（對齊金額）要算格數，不能算字數
+/// 半形／全形：出單機文字模式排版（對齊金額）要算格數，不能算字數。
+///
+/// 台灣的出單機用 Big5（或 UTF-8 但字型是 Big5／GB 的 24×24）：英數是 1 格（12 點），**其他每一個字**——中文、全形標點、
+/// 還有 ×、…、· 這些符號——都是雙位元組、印 2 格（24 點）。照這個算，金額才不會被擠到下一行（虛擬出單機實際印過：tools/escpos-emulator）。
 public enum TextWidth {
     public static func of(_ ch: Character) -> Int {
         guard let s = ch.unicodeScalars.first else { return 1 }
         let v = s.value
-        if v < 0x1100 { return 1 }
-        // 半形片假名、半形符號
+        if v < 0x80 { return 1 }
+        // 半形片假名、半形符號（Big5 沒有，PrintText 會換掉；留著的話照半形算）
         if (0xFF61...0xFFDC).contains(v) || (0xFFE8...0xFFEE).contains(v) { return 1 }
-        // CJK、全形、韓文、注音、符號
-        if (0x1100...0x115F).contains(v) || (0x2E80...0xA4CF).contains(v) || (0xAC00...0xD7A3).contains(v)
-            || (0xF900...0xFAFF).contains(v) || (0xFE30...0xFE4F).contains(v) || (0xFF00...0xFF60).contains(v)
-            || (0xFFE0...0xFFE6).contains(v) || (0x20000...0x3FFFD).contains(v) {
-            return 2
-        }
-        return 1
+        return 2
     }
 
     public static func of(_ s: String) -> Int { s.reduce(0) { $0 + of($1) } }
 
-    /// 截到 width 格（超過的話最後一格放「…」）
+    /// 截到 width 格（超過的話最後放「…」，它在出單機上佔 2 格）
     public static func truncate(_ s: String, to width: Int) -> String {
         guard of(s) > width else { return s }
         var out = "", used = 0
         for ch in s {
             let w = of(ch)
-            if used + w > width - 1 { break }
+            if used + w > width - of("…") { break }
             out.append(ch)
             used += w
         }
@@ -76,5 +73,29 @@ public enum TextWidth {
         let last = lines.removeLast()
         lines.append(pad(last, to: width - rw) + right)
         return lines
+    }
+}
+
+/// 送到出單機的字：Big5（台灣出單機的中文）沒有的字換成看起來一樣、而且一定印得出來的字，表情符號拿掉。
+/// 沒換的話 iPad 送出去會變成「?」（虛擬出單機與 Big5 對照表檢查過：U+2212 負號、U+30FB 中間點都不在 Big5 裡）
+public enum PrintText {
+    static let replacements: [Character: String] = [
+        "−": "-", "‐": "-", "‑": "-", "‒": "-",          // 負號、各種連字號 → ASCII
+        "・": "·", "･": "·", "∙": "·", "⋅": "·",          // 中間點 → Big5 的 ·（A150）
+        "≈": "~", "〜": "～",
+        "\u{00A0}": " ", "\u{2009}": " ", "\u{202F}": " ", "\u{3000}": "  ",
+    ]
+
+    public static func printable(_ s: String) -> String {
+        var out = ""
+        out.reserveCapacity(s.count)
+        for ch in s {
+            if let r = replacements[ch] { out += r; continue }
+            // 表情符號（🔥、☕️…）出單機印不出來
+            if ch.unicodeScalars.contains(where: { $0.properties.isEmojiPresentation || $0.value == 0xFE0F }) { continue }
+            if ch.unicodeScalars.first.map({ $0.properties.isEmoji && $0.value >= 0x2190 }) == true { continue }
+            out.append(ch)
+        }
+        return out
     }
 }

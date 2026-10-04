@@ -14,6 +14,7 @@ import UIKit
 ///   -landscape                           請系統轉成橫的（iPad 收銀台的樣子）
 ///   -serviceMode <模式>、-workstation <崗位>   UserDefaults 的參數網域會直接蓋過這台的設定
 ///   -preselect                           打開的那一頁先選起第一筆（截右欄「選起來之後」的樣子）
+///   -printerLab <主機>                   出單機換成虛擬出單機（tools/escpos-emulator），印一輪實測
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -44,6 +45,8 @@ extension POSModel {
         if phase == .ready, let raw = LaunchArguments.value("-section"), let s = AppSection(rawValue: raw) {
             go(s)
         }
+        // 列印實測：接到虛擬出單機印一輪（App/PrinterLab.swift）
+        if phase == .ready { runPrinterLabIfAsked() }
         #endif
     }
 

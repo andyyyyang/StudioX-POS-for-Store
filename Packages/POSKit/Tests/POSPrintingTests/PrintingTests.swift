@@ -9,7 +9,13 @@ struct PrintingTests {
         #expect(TextWidth.of("ABC") == 3)
         #expect(TextWidth.of("珍珠奶茶") == 8)
         #expect(TextWidth.of("（半糖）") == 8)
-        #expect(TextWidth.truncate("珍珠奶茶大杯", to: 7) == "珍珠奶…")
+        // 「…」在出單機上也佔 2 格
+        #expect(TextWidth.truncate("珍珠奶茶大杯", to: 7) == "珍珠…")
+        #expect(TextWidth.of("拿鐵 ×2") == 8)  // × 是全形（Big5 雙位元組）
+        #expect(TextWidth.of("Latte") == 5)
+        // Big5 沒有的字換掉、表情符號拿掉
+        #expect(PrintText.printable("折扣 −20・半糖🔥") == "折扣 -20·半糖")
+        #expect(PrintText.printable("☕️ 拿鐵") == " 拿鐵")
         #expect(TextWidth.wrap("珍珠奶茶大杯", width: 4) == ["珍珠", "奶茶", "大杯"])
         let row = TextWidth.row("雞排", "80", width: 10)
         #expect(row == ["雞排    80"])

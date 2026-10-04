@@ -172,6 +172,37 @@ jobs:
           limit 60 xcrun simctl shutdown "$dev" || true
           ls shots | wc -l
 
+      # 列印實測：App 從網路（TCP 9100，和店裡一樣）送到三台虛擬出單機（tools/escpos-emulator），畫成圖片 → docs/print-samples/
+      #   9100：58 mm Big5（收據、證明聯、號碼牌、錢櫃）  9101：80 mm Big5（廚房）  9102：80 mm 點陣圖模式（收據）
+      - name: 列印實測（58／80 mm）
+        if: "!contains(github.event.head_commit.message, '[phone-only]')"
+        timeout-minutes: 12
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/escpos" && "$RUNNER_TEMP/escpos/bin/pip" install --quiet pillow qrcode
+          PY="$RUNNER_TEMP/escpos/bin/python"
+          E=tools/escpos-emulator/escpos_emulator.py
+          mkdir -p prints
+          "$PY" $E serve --port 9100 --paper 58 --encoding big5hkscs --out prints/58 > prints/58.log 2>&1 &
+          "$PY" $E serve --port 9101 --paper 80 --encoding big5hkscs --out prints/80 > prints/80.log 2>&1 &
+          "$PY" $E serve --port 9102 --paper 80 --encoding big5hkscs --out prints/80-raster > prints/80-raster.log 2>&1 &
+          sleep 3
+          app="build/Build/Products/Debug-iphonesimulator/StudioXPOS.app"
+          bundle=tw.studiox.pos
+          limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+          dev="$IPAD"
+          limit 60 xcrun simctl boot "$dev" || true
+          limit 300 xcrun simctl bootstatus "$dev" -b || true
+          limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
+          limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
+          limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
+          ( limit 90 xcrun simctl launch --console-pty "$dev" "$bundle" -demo cafe -autologin 1234 -section order -printerLab 127.0.0.1 > prints/app.log 2>&1 ) &
+          for i in $(seq 1 80); do grep -q "PrinterLab: done" prints/app.log 2>/dev/null && break; sleep 1; done
+          sleep 5
+          echo "== App"; grep "PrinterLab" prints/app.log || tail -40 prints/app.log
+          for f in prints/58.log prints/80.log prints/80-raster.log; do echo "== $f"; cat "$f"; done
+          limit 60 xcrun simctl shutdown "$dev" || true
+
       # 店員手上的點餐機：iPhone 直的（同一個模擬器版本的 App：裝置家族有 iPhone）。上面選、下面做；結帳在結帳櫃台
       - name: 截圖（iPhone）
         if: env.IPHONE != ''
@@ -261,13 +292,15 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: screenshots
-          path: shots/
+          path: |
+            shots/
+            prints/
           if-no-files-found: ignore
 
       - name: 縮小、提交回分支
         if: always()
         run: |
-          if ! ls shots/*.png >/dev/null 2>&1 && ! ls shots/phone/*.png >/dev/null 2>&1; then echo "沒有截到"; exit 0; fi
+          if ! ls shots/*.png >/dev/null 2>&1 && ! ls shots/phone/*.png >/dev/null 2>&1 && ! ls prints/*/*.png >/dev/null 2>&1; then echo "沒有截到"; exit 0; fi
           mkdir -p docs/screenshots/light docs/screenshots/phone
           # 哪一輪有截到才換掉那一輪的舊圖（iPhone 那輪失敗時不會把舊的手機截圖刪掉）
           if ls shots/*.png >/dev/null 2>&1; then rm -f docs/screenshots/*.jpg docs/screenshots/light/*.jpg; fi
@@ -281,7 +314,13 @@ jobs:
           done
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/screenshots
+          # 列印實測印出來的（虛擬出單機畫的圖）
+          if ls prints/*/*.png >/dev/null 2>&1; then
+            rm -rf docs/print-samples && mkdir -p docs/print-samples
+            for d in prints/*/; do n=$(basename "$d"); mkdir -p "docs/print-samples/$n"; cp "$d"*.png "docs/print-samples/$n/"; done
+            cp prints/*.log docs/print-samples/ 2>/dev/null || true
+          fi
+          git add docs/screenshots docs/print-samples 2>/dev/null || git add docs/screenshots
           if git diff --cached --quiet; then echo "沒有變更"; exit 0; fi
           git commit -m "UI 截圖（自動）[skip ci]"
           for i in 1 2 3; do

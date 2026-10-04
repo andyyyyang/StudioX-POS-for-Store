@@ -84,14 +84,14 @@ public enum ReceiptRenderer {
             switch b {
             case .text(let s, let st):
                 apply(&p, st)
-                for l in TextWidth.wrap(s, width: max(w / max(st.scale, 1), 1)) { p.line(l) }
+                for l in TextWidth.wrap(PrintText.printable(s), width: max(w / max(st.scale, 1), 1)) { p.line(l) }
                 reset(&p)
             case .row(let l, let r, let st):
                 apply(&p, ReceiptStyle(align: .left, bold: st.bold, scale: st.scale, invert: st.invert))
-                for line in TextWidth.row(l, r, width: max(w / max(st.scale, 1), 1)) { p.line(line) }
+                for line in TextWidth.row(PrintText.printable(l), PrintText.printable(r), width: max(w / max(st.scale, 1), 1)) { p.line(line) }
                 reset(&p)
             case .detail(let s):
-                for l in TextWidth.wrap(s, width: w - 2) { p.line("  " + l) }
+                for l in TextWidth.wrap(PrintText.printable(s), width: w - 2) { p.line("  " + l) }
             case .rule: p.line(String(repeating: "-", count: w))
             case .doubleRule: p.line(String(repeating: "=", count: w))
             case .feed(let n): p.feed(n)
