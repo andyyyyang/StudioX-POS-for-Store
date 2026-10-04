@@ -28,6 +28,21 @@ extension POSModel {
         if isPhone, selectedTicketId == t.id { selectedTicketId = nil }
     }
 
+    /// 結帳到一半要付現金、這台又沒有錢櫃（收款的手機、報到接待）：送到結帳櫃台「付現」，客人到櫃台付。
+    /// 櫃台跳出「從手機（付現）送來結帳」，大鍵直接是收現金；這台回到點餐（刷卡、電子支付已經收的照樣算）
+    func sendToRegisterForCash(_ t: Ticket) {
+        guard !t.activeLines.isEmpty else { return }
+        let due = t.totals.balance
+        guard record(.billPrinted(TicketRef(ticketId: t.id, sentFrom: "\(handoffSource)（付現）"))) else { return }
+        keypad.cancel()
+        checkoutTicketId = nil
+        if isPhone || selectedTicketId == t.id { selectedTicketId = nil }
+        show("\(t.title(floor: floor)) 送到櫃台付現：請客人到櫃台付 \(due.formatted)", tone: .info)
+    }
+
+    /// 這張是送到櫃台「付現」的
+    static func wantsCash(_ t: Ticket) -> Bool { t.billSentFrom?.contains("付現") == true }
+
     /// 待結帳的單（印了結帳單、或送到結帳櫃台的）：側欄與手機「訂單」的數字
     var awaitingCheckout: [Ticket] {
         state.openTickets.filter { $0.billPrintedAt != nil }

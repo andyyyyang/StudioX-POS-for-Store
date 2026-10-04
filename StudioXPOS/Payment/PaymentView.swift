@@ -141,18 +141,24 @@ struct PaymentView: View {
                 .buttonStyle(.choice(true, height: 84))
                 .disabled(x.isPaidInFull)
             } else {
-                HStack(spacing: 12) {
-                    HeroIcon("banknotes", size: 20)
-                        .foregroundStyle(Theme.faint)
-                    Text("這台是「\(model.role.label)」，沒有錢櫃：現金請到結帳櫃台收；這裡可以刷卡、電子支付")
-                        .textRole(.small)
-                        .foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+                // 沒有錢櫃（收款的手機、報到接待）：現金到櫃台付——送過去，櫃台的大鍵直接是收現金；這台回去點下一張
+                Button {
+                    model.sendToRegisterForCash(t)
+                } label: {
+                    HStack(spacing: 14) {
+                        HeroIcon("banknotes", size: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("到櫃台付現").font(.brand(20, .semibold))
+                            Text("送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)；這台沒有錢櫃").font(.brand(12.5, .regular)).opacity(0.7)
+                        }
+                        Spacer()
+                        Text("→").font(.brand(22, .regular))
+                    }
+                    .padding(.horizontal, 20)
+                    .frame(maxWidth: .infinity, minHeight: 84)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.press, in: .rect(cornerRadius: Metric.radius))
+                .buttonStyle(.choice(false, height: 84))
+                .disabled(x.isPaidInFull)
             }
 
             prepaidTile(t, x)

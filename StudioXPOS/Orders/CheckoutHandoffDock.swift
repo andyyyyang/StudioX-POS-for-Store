@@ -38,7 +38,15 @@ private struct CheckoutHandoffDock: ViewModifier {
             title: t.title(floor: model.floor),
             detail: detail.joined(separator: "・"),
             badge: badge,
-            primary: POSAction("去結帳", icon: "credit-card", enabled: model.takesPayment) { model.beginCheckout(t) },
+            // 送來「付現」的：大鍵直接收現金（打收了多少、找零自動算）；其他的進結帳畫面選付款方式
+            primary: POSModel.wantsCash(t)
+                ? POSAction("收現金 \(t.totals.balance.formatted)", icon: "banknotes", enabled: model.takesPayment && model.role.hasDrawer) {
+                    model.beginCheckout(t)
+                    Task {
+                        if let fresh = model.state.tickets[t.id] { await model.takeCash(fresh) }
+                    }
+                }
+                : POSAction("去結帳", icon: "credit-card", enabled: model.takesPayment) { model.beginCheckout(t) },
             accent: true,
             actions: [
                 POSAction("看單", icon: "eye") {
