@@ -2161,29 +2161,36 @@ private struct OrdersSaleDetail: View {
         return out
     }
 
-    /// 每一行收錢的都選滿了、之前也沒退過＝整張退（卡抵的這時才能一起取消、還回次數）
-    private var picksWholeSale: Bool {
-        guard refunds.isEmpty else { return false }
+    /// 這次選的退完之後，收錢的品項每一件都退了（卡抵的這時才能一起取消、還回次數）
+    private var completesPaidLines: Bool {
         let limits = refundLimits
-        let paid = sale.lines.filter { $0.redeem == nil && (limits[$0.lineId] ?? 0) > 0 }
-        guard !paid.isEmpty else { return false }
-        return paid.allSatisfy { (refundPicked[$0.lineId] ?? 0) >= (limits[$0.lineId] ?? 0) }
+        return sale.lines
+            .filter { $0.redeem == nil }
+            .allSatisfy { (refundPicked[$0.lineId] ?? 0) >= (limits[$0.lineId] ?? 0) }
     }
 
-    /// 真的要送出的：卡抵的只有整張退時才算
+    /// 連卡抵的也選滿＝這張單全部退完：後台規則會把剩下的服務費、小費一起退
+    private var completesSale: Bool {
+        guard completesPaidLines, !effectiveRefundPicks.isEmpty else { return false }
+        let limits = refundLimits
+        return sale.lines.allSatisfy { (refundPicked[$0.lineId] ?? 0) >= (limits[$0.lineId] ?? 0) }
+    }
+
+    /// 真的要送出的：卡抵的只有收錢的都選滿時才算
     private var effectiveRefundPicks: [String: Int] {
-        let whole = picksWholeSale
+        let paidDone = completesPaidLines
         var out: [String: Int] = [:]
         for l in sale.lines {
             guard let q = refundPicked[l.lineId], q > 0 else { continue }
-            if l.redeem != nil && !whole { continue }
+            if l.redeem != nil && !paidDone { continue }
             out[l.lineId] = q
         }
         return out
     }
 
-    /// 照原單實收算（和送出去的一樣），不超過還能退的
+    /// 和送出去算的一樣：照原單實收；全部退完時是剩下能退的全部（含服務費、小費）
     private var itemRefundTotal: Money {
+        if completesSale { return refundable }
         let already = sale.refundedQuantities(refunds)
         var sum = Money.zero
         for (lineId, q) in effectiveRefundPicks {
@@ -2196,7 +2203,8 @@ private struct OrdersSaleDetail: View {
     private var refundItems: some View {
         let limits = refundLimits
         let lines = sale.lines.filter { (limits[$0.lineId] ?? 0) > 0 }
-        let whole = picksWholeSale
+        let paidDone = completesPaidLines
+        let whole = completesSale
         if lines.isEmpty {
             Text("每一件都退過了；還有金額可以退的話用「照金額退」")
                 .textRole(.small)
@@ -2204,7 +2212,7 @@ private struct OrdersSaleDetail: View {
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(lines, id: \.lineId) { l in
-                    refundRow(l, limit: limits[l.lineId] ?? 0, whole: whole)
+                    refundRow(l, limit: limits[l.lineId] ?? 0, unlocked: paidDone)
                     if l.lineId != lines.last?.lineId {
                         Rule(color: Theme.hair)
                     }
@@ -2218,7 +2226,7 @@ private struct OrdersSaleDetail: View {
                     .monospacedDigit()
                     .foregroundStyle(itemRefundTotal.cents > 0 ? Theme.ink : Theme.muted)
                 if whole {
-                    StatusBadge("整張退", tone: .warning)
+                    StatusBadge("全部退完", tone: .warning)
                 }
                 Spacer(minLength: 8)
                 Button("全部選") { pickAll(limits) }
@@ -2229,18 +2237,17 @@ private struct OrdersSaleDetail: View {
                 }
             }
             if whole && (sale.serviceCharge.cents > 0 || sale.tip.cents > 0) {
-                Text("服務費、小費不在品項裡；要一起退請用「照金額退」。")
+                Text("全部退完：服務費、小費也一起退。")
                     .textRole(.xs)
-                    .foregroundStyle(Theme.warningFG)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(Theme.muted)
             }
         }
     }
 
-    /// 一行：收錢的照原單實收；卡抵的不退錢，只有整張退時能一起取消（還回次數）
-    private func refundRow(_ l: SaleLine, limit: Int, whole: Bool) -> some View {
+    /// 一行：收錢的照原單實收；卡抵的不退錢，收錢的都選滿時才能一起取消（還回次數）
+    private func refundRow(_ l: SaleLine, limit: Int, unlocked: Bool) -> some View {
         let redeemed = l.redeem != nil
-        let locked = redeemed && !whole
+        let locked = redeemed && !unlocked
         let count = locked ? 0 : (refundPicked[l.lineId] ?? 0)
         let name = swapState.names[l.lineId].map { "\(l.name) \($0)" } ?? l.displayName
         return OrdersExchangeLineRow(
@@ -2261,7 +2268,7 @@ private struct OrdersSaleDetail: View {
 
     private func refundRowDetail(_ l: SaleLine, limit: Int, count: Int, locked: Bool) -> String {
         if l.redeem != nil {
-            return locked ? "卡抵的不退錢，取消會還回次數・整張退時才能選" : "卡抵的不退錢，取消會還回次數"
+            return locked ? "卡抵的不退錢，取消會還回次數・其他品項選滿才能選" : "卡抵的不退錢，取消會還回次數"
         }
         let already = sale.refundedQuantities(refunds)[l.lineId] ?? 0
         let amount = sale.refundAmount(lineId: l.lineId, quantity: max(count, 1), alreadyRefunded: already)
@@ -2271,7 +2278,7 @@ private struct OrdersSaleDetail: View {
         return parts.joined(separator: "・")
     }
 
-    /// 「全部選」：收錢的選滿；這樣就是整張退，卡抵的也一起取消
+    /// 「全部選」：每一行選滿（卡抵的也取消、還回次數）；這樣剩下的服務費、小費也一起退
     private func pickAll(_ limits: [String: Int]) {
         var picks: [String: Int] = [:]
         for l in sale.lines {
