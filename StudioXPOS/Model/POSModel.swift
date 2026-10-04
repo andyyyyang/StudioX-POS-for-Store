@@ -696,7 +696,7 @@ final class LocalSettings {
     }
 
     init() {
-        appearance = d.string(forKey: "appearance") ?? "dark"
+        appearance = d.string(forKey: "appearance") ?? "system"
         autoLockMinutes = d.object(forKey: "autoLockMinutes") as? Int ?? 5
         receiptMode = d.string(forKey: "receiptMode") ?? "ask"
         printKitchenTickets = d.object(forKey: "printKitchenTickets") as? Bool ?? true

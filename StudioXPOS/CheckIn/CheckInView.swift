@@ -645,9 +645,23 @@ private struct CheckInMemberPanel: View {
 
     // MARK: 動作
 
-    @ViewBuilder
+    /// 「⋯｜次要｜主要」：能進 → 主要「入場」、次要「續約／買卡」；
+    /// 不能進 → 主要「續約／買卡」，「破例入場」（要主管）收進「⋯」
     private func actions(_ plan: CheckInPlan, pass: MemberPass?) -> some View {
         HStack(spacing: 12) {
+            if pass == nil {
+                MoreMenu(actions: [
+                    POSAction("破例入場（主管授權）", icon: "exclamation-triangle") { graceEntry() },
+                ], size: .lg)
+            }
+            Button {
+                withAnimation(reduceMotion ? nil : Motion.spring) { desk.showShop.toggle() }
+            } label: {
+                Text(desk.showShop ? "收起" : "續約／買卡")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.brand(pass == nil ? .primary : .ghost, size: .lg, fullWidth: true, arrow: pass == nil && !desk.showShop))
+            .frame(maxWidth: pass == nil ? .infinity : 200)
             if let pass {
                 Button {
                     enter(pass)
@@ -665,23 +679,7 @@ private struct CheckInMemberPanel: View {
                 }
                 .buttonStyle(PressScale(scale: 0.98))
                 .accessibilityLabel("入場，用 \(pass.name)")
-            } else {
-                Button {
-                    graceEntry()
-                } label: {
-                    Text("破例入場")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
             }
-            Button {
-                withAnimation(reduceMotion ? nil : Motion.spring) { desk.showShop.toggle() }
-            } label: {
-                Text(desk.showShop ? "收起" : "續約／買卡")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(pass == nil ? .primary : .ghost, size: .lg, fullWidth: true, arrow: pass == nil))
-            .frame(maxWidth: pass == nil ? .infinity : 200)
         }
     }
 

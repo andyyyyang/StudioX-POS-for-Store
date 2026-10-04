@@ -70,20 +70,27 @@ struct MenuView: View {
 
     // MARK: 上面
 
+    /// 頁首：標題｜搜尋｜一個「⋯」（自訂品項、掃條碼）。用餐方式、開新單在右邊的單子上
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
-            if let t = model.selectedTicket {
-                VStack(alignment: .leading, spacing: 3) {
-                    Eyebrow(t.number)
-                    Headline(t.title(floor: model.floor), role: .h3)
-                        .lineLimit(1)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 3) {
-                    Eyebrow("點餐")
-                    Headline("The *menu*", role: .h3)
+            Group {
+                if let t = model.selectedTicket {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Eyebrow(t.number)
+                        Headline(t.title(floor: model.floor), role: .h3)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Eyebrow("點餐")
+                        Headline("The *menu*", role: .h3)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
             }
+            .layoutPriority(1)
             Spacer(minLength: 12)
             HStack(spacing: 8) {
                 HeroIcon("magnifying-glass", size: 16)
@@ -100,42 +107,18 @@ struct MenuView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.muted)
+                    .accessibilityLabel("清除搜尋")
                 }
             }
             .padding(.horizontal, 12)
-            .frame(width: 240, height: 42)
+            .frame(minWidth: 150, idealWidth: 240, maxWidth: 240, minHeight: 44, maxHeight: 44)
             .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
             .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
 
-            Menu {
-                Button("自訂品項…") { askingCustom = true }
-                Button("掃商品條碼…") { scanning = true }
-                // 內用／外帶只有餐飲的模式才有（服飾、美業、課程、零售沒有這回事）
-                if let t = model.selectedTicket {
-                    if model.mode.showsOrderType {
-                        Divider()
-                        ForEach(OrderType.allCases, id: \.self) { type in
-                            Button {
-                                model.setOrderType(type, for: t)
-                            } label: {
-                                if t.orderType == type { Label(type.label, systemImage: "checkmark") } else { Text(type.label) }
-                            }
-                        }
-                    }
-                } else {
-                    Divider()
-                    if model.mode.showsOrderType {
-                        ForEach(OrderType.allCases, id: \.self) { type in
-                            Button("新的\(type.label)單") { model.openTicket(type: type) }
-                        }
-                    } else {
-                        Button("開一張新單") { model.openTicket(type: model.mode.defaultOrderType) }
-                    }
-                }
-            } label: {
-                HeroIcon("ellipsis-horizontal", size: 18)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 42))
+            MoreMenu(actions: [
+                POSAction("自訂品項…", icon: "plus-circle") { askingCustom = true },
+                POSAction("掃商品條碼…", icon: "qr-code") { scanning = true },
+            ])
         }
     }
 

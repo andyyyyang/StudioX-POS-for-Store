@@ -92,15 +92,8 @@ struct PaymentView: View {
 
     private func tenders(_ t: Ticket, _ x: TicketTotals) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Eyebrow("付款方式")
-                Spacer()
-                Button("平分") {
-                    Task { shares = await model.splitEvenly(t) ?? [] }
-                }
-                .buttonStyle(.brand(.quiet, size: .sm))
-                .disabled(x.isPaidInFull)
-            }
+            // 付款方式是「選一個」（格子），不是一排動作；平分、小費這些在下面的「⋯」
+            Eyebrow("付款方式")
             // 現金最大（台灣最常用）；沒有錢櫃的崗位（前場）不收現金
             if model.role.hasDrawer {
                 Button {
@@ -254,12 +247,7 @@ struct PaymentView: View {
 
     private var sharesView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Eyebrow("平分 \(shares.count) 份")
-                Spacer()
-                Button("收起來") { shares = [] }
-                    .buttonStyle(.brand(.quiet, size: .sm))
-            }
+            Eyebrow("平分 \(shares.count) 份")
             FlowLayout(spacing: 8, rowSpacing: 8) {
                 ForEach(Array(shares.enumerated()), id: \.offset) { i, m in
                     Text("第 \(i + 1) 位 \(m.formatted)")
@@ -301,14 +289,8 @@ struct PaymentView: View {
                         Text(p.amount.formatted)
                             .font(.brand(15.5, .medium))
                             .monospacedDigit()
-                        Button {
-                            Task { await model.voidPayment(p, in: t) }
-                        } label: {
-                            HeroIcon("x-mark", size: 14)
-                        }
-                        .buttonStyle(SquareIconButtonStyle(size: 30))
-                        .accessibilityLabel("退回這筆")
                     }
+                    .accessibilityElement(children: .combine)
                     .padding(.vertical, 10)
                     Rule(color: Theme.hair)
                 }
@@ -388,7 +370,18 @@ struct PaymentView: View {
 
     // MARK: 發票
 
-    private enum BuyerKind: String, CaseIterable { case paper, carrier, business, donation }
+    private enum BuyerKind: String, CaseIterable {
+        case paper, carrier, business, donation
+
+        var label: String {
+            switch self {
+            case .paper: "紙本"
+            case .carrier: "手機條碼"
+            case .business: "統編"
+            case .donation: "捐贈"
+            }
+        }
+    }
 
     private func kind(of b: InvoiceBuyer) -> BuyerKind {
         switch b {
@@ -409,12 +402,7 @@ struct PaymentView: View {
                     .font(.brand(12, .medium))
                     .foregroundStyle(model.invoiceNumbersLeft < 10 ? Theme.warningFG : Theme.muted)
             }
-            HStack(spacing: 8) {
-                choice("紙本", selected: k == .paper) { model.setBuyer(.paper, for: t) }
-                choice("手機條碼", selected: k == .carrier) { carrierFocused = true }
-                choice("統編", selected: k == .business) { Task { await model.askTaxId(for: t) } }
-                choice("捐贈", selected: k == .donation) { Task { await model.askLoveCode(for: t) } }
-            }
+            buyerSegments(t, k)
             detail(t, k)
             if let note = invoiceNote(t) {
                 HStack(alignment: .top, spacing: 8) {
@@ -437,9 +425,46 @@ struct PaymentView: View {
         .overlay { RoundedRectangle(cornerRadius: Metric.radiusLg).strokeBorder(Theme.line) }
     }
 
-    private func choice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.choice(selected, height: 46))
+    /// 發票怎麼開：一個分段控制（紙本｜手機條碼｜統編｜捐贈）；統編、捐贈點了在右側鍵盤打
+    private func buyerSegments(_ t: Ticket, _ k: BuyerKind) -> some View {
+        HStack(spacing: 4) {
+            ForEach(BuyerKind.allCases, id: \.self) { kind in
+                Button {
+                    choose(kind, for: t)
+                } label: {
+                    Text(kind.label)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, 6)
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                }
+                .buttonStyle(InvoiceSegmentStyle(selected: k == kind))
+                .accessibilityAddTraits(k == kind ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(Theme.page, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                .strokeBorder(Theme.line, lineWidth: 1)
+        }
+    }
+
+    private func choose(_ kind: BuyerKind, for t: Ticket) {
+        model.touch()
+        switch kind {
+        case .paper:
+            carrierFocused = false
+            model.setBuyer(.paper, for: t)
+        case .carrier:
+            carrierFocused = true
+        case .business:
+            carrierFocused = false
+            Task { await model.askTaxId(for: t) }
+        case .donation:
+            carrierFocused = false
+            Task { await model.askLoveCode(for: t) }
+        }
     }
 
     /// 發票金額和總計不一樣的時候說一聲：
@@ -522,8 +547,6 @@ struct PaymentView: View {
                             .foregroundStyle(Theme.muted)
                     }
                     Spacer()
-                    Button("移除") { model.detachMember(from: t) }
-                        .buttonStyle(.brand(.quiet, size: .sm))
                 }
                 if let account = model.account(for: m) {
                     let passes = account.usablePasses(at: Date())
@@ -553,28 +576,72 @@ struct PaymentView: View {
 
     // MARK: 下面
 
+    /// 最下面：還差多少｜「⋯」（平分、小費、會員、退回付款）｜回到點餐｜完成結帳（收齊了才有）
     private func footer(_ t: Ticket, _ x: TicketTotals) -> some View {
-        HStack(spacing: 12) {
-            Button("回到點餐") { model.cancelCheckout() }
-                .buttonStyle(.brand(.ghost, size: .lg))
-            Spacer()
-            if x.isPaidInFull {
-                Button {
-                    Task { await model.complete(t) }
-                } label: {
-                    Text("完成結帳")
+        let done: POSAction? = x.isPaidInFull ? POSAction("完成結帳", icon: "check-circle") { Task { await model.complete(t) } } : nil
+        let back = POSAction("回到點餐", icon: "arrow-left") { model.cancelCheckout() }
+        return HStack(spacing: 16) {
+            if !x.isPaidInFull {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("尚欠")
+                        .font(.brand(12, .medium))
+                        .foregroundStyle(Theme.muted)
+                    Text(x.balance.formatted)
+                        .font(.brand(19, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink)
+                        .contentTransition(.numericText(value: Double(x.balance.cents)))
                 }
-                .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-            } else {
-                Text("尚欠 \(x.balance.formatted)")
-                    .font(.brand(17, .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.ink2)
             }
+            Spacer(minLength: 8)
+            ActionBar(primary: done, secondary: [back], more: footerMore(t, x), size: .lg, accent: true, fillPrimary: false)
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 14)
         .background(Theme.page.opacity(0.96))
         .overlay(alignment: .top) { Rule() }
+        .animation(Motion.fast, value: x.isPaidInFull)
+    }
+
+    /// 結帳時不常用的：平分、小費、換會員、退回一筆付款（要主管）
+    private func footerMore(_ t: Ticket, _ x: TicketTotals) -> [POSAction] {
+        var out: [POSAction] = []
+        if shares.isEmpty {
+            out.append(POSAction("平分…", icon: "users", enabled: !x.isPaidInFull) {
+                Task { shares = await model.splitEvenly(t) ?? [] }
+            })
+        } else {
+            out.append(POSAction("取消平分", icon: "arrow-uturn-left") { shares = [] })
+        }
+        if model.store.tipsEnabled {
+            out.append(POSAction("小費…", icon: "banknotes") { Task { await model.setTip(t) } })
+        }
+        if t.member != nil {
+            out.append(POSAction("換會員…", icon: "user-circle") { Task { await model.attachMember(to: t) } })
+            out.append(POSAction("移除會員", icon: "x-circle") { model.detachMember(from: t) })
+        }
+        // 換貨抵用是自動記的（回到點餐就拿掉），不能手動退
+        let refundable = t.approvedPayments.filter { $0.tender != .exchange }
+        for (i, p) in refundable.enumerated() {
+            out.append(POSAction("退回第 \(i + 1) 筆：\(paymentTitle(p)) \(p.amount.formatted)", icon: "receipt-refund", destructive: true) {
+                Task { await model.voidPayment(p, in: t) }
+            })
+        }
+        return out
+    }
+}
+
+/// 發票分段控制的一段：選到的墨色實心
+private struct InvoiceSegmentStyle: ButtonStyle {
+    let selected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.brand(14, .medium))
+            .foregroundStyle(selected ? Theme.page : Theme.ink2)
+            .background(selected ? Theme.ink : (configuration.isPressed ? Theme.press : Color.clear),
+                        in: .rect(cornerRadius: Metric.radius, style: .continuous))
+            .contentShape(.rect)
+            .animation(Motion.fast, value: selected)
     }
 }

@@ -10,12 +10,16 @@ import SwiftUI
 ///   ┌ Cash drawer ──────────────────────────────────────────────┐
 ///   │ ┌錢櫃裡應該有 NT$ 8,420──────────────┐ ┌錢櫃進出────────┐  │
 ///   │ │零用金／現金收款／退款／存入／取出   │ │存入 找零備用 +500│  │
-///   │ │[存入][取出][只開錢櫃]      [印 X 帳]│ │                  │  │
+///   │ │[⋯][ 存入 ｜ 取出 ]                  │ │                  │  │
 ///   │ ┌Close the shift──────────────────────────────────────────┐│
-///   │ │① 點錢 [1000 ×3][500 ×2][100 ×12]…  點到／應有／差額      ││
-///   │ │② 備註                                ③ 交班單預覽［交班］ ││
-///   │ ┌打卡┐  ┌今天交過的班┐                                     │
+///   │ │① 點錢 [1000 ×3][500 ×2][100 ×12]…[2000、200]            ││
+///   │ │   [⋯][一個一個點]          點到／應有／差額               ││
+///   │ │② 備註                          ③ 交班單預覽［交班並列印］ ││
+///   │ ┌打卡（點一個人）┐  ┌今天交過的班 ⋯┐                        │
 ///   └──────────────────────────────────────────────────────────┘
+///
+/// 整頁只有一個主要動作：「交班並列印」（品牌橘）。錢櫃卡片只露「存入｜取出」一組，
+/// 「只開錢櫃」「印 X 帳」收進「⋯」；打卡點一個人、動作出現在名單下面；補印交班單在「今天交過的班」的「⋯」。
 ///
 /// 每個數字都在右側鍵盤打：點錢時點一個面額、鍵盤問張數，畫面上即時算差多少。
 struct ShiftView: View {
@@ -24,7 +28,7 @@ struct ShiftView: View {
     /// 點到的錢（交班前一直留著，切到別頁再回來會重點）
     @State private var counted = CashCount()
     @State private var note = ""
-    /// 2000、200 很少見：收在「更多」
+    /// 2000、200 很少見：面額最後一格「2000、200」點了才出來
     @State private var showRare = false
     /// 存入／取出：先選原因（下一步才在鍵盤打金額）
     @State private var moveKind: CashMoveKind?
@@ -129,43 +133,29 @@ struct ShiftView: View {
                         Task { await ask(d) }
                     }
                 }
+                // 少見的面額：最後一格點了才展開（點過了就一直顯示，不用這格）
+                if !rareCounted {
+                    ShiftRareToggleCell(expanded: showRare) {
+                        withAnimation(Motion.fast) { showRare.toggle() }
+                    }
+                }
             }
-            HStack(spacing: 8) {
-                Button {
-                    Task { await countAll() }
-                } label: {
-                    Label {
-                        Text("一個一個點")
-                    } icon: {
-                        HeroIcon("calculator", size: 16)
-                    }
-                }
-                .buttonStyle(.brand(.primary, size: .md))
-
-                Button(rareLabel) {
-                    withAnimation(Motion.fast) { showRare.toggle() }
-                }
-                .buttonStyle(.brand(.quiet, size: .md))
-
-                Spacer(minLength: 8)
-
-                if !counted.counts.isEmpty {
-                    Button("重點") {
-                        counted = CashCount()
-                    }
-                    .buttonStyle(.brand(.quiet, size: .md))
-                }
+            // 主要動作是下面的「交班並列印」；這裡只有一個次要的「一個一個點」，「重點」收進「⋯」
+            HStack(spacing: 0) {
+                ActionBar(secondary: [POSAction("一個一個點", icon: "calculator") { Task { await countAll() } }],
+                          more: counted.counts.isEmpty ? [] : [POSAction("重點（清掉點到的）", icon: "arrow-path", destructive: true) { counted = CashCount() }],
+                          fillPrimary: false)
+                Spacer(minLength: 0)
             }
             ShiftCountResult(counted: counted, expected: expected)
         }
     }
 
-    private var rareLabel: String { showRare ? "收起 2000、200" : "更多（2000、200）" }
+    private var rareCounted: Bool { [Denomination.d2000, .d200].contains(where: { counted.count($0) > 0 }) }
 
-    /// 常用的面額；打開「更多」或 2000、200 已經點過的話全部顯示
+    /// 常用的面額；打開「2000、200」或已經點過的話全部顯示
     private var denominations: [Denomination] {
-        let rare: [Denomination] = [.d2000, .d200]
-        if showRare || rare.contains(where: { counted.count($0) > 0 }) { return Array(Denomination.allCases) }
+        if showRare || rareCounted { return Array(Denomination.allCases) }
         return Denomination.common
     }
 
@@ -343,46 +333,69 @@ private struct ShiftDrawerCard: View {
         }
     }
 
+    /// 「⋯」（只開錢櫃、印 X 帳）＋「存入｜取出」一組：選了一邊，下面出現原因
     private var actions: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 124), spacing: 8)], alignment: .leading, spacing: 8) {
-            Button {
-                pick(.payIn)
-            } label: {
-                actionLabel("存入", icon: "arrow-down-tray")
-            }
-            .buttonStyle(.brand(moveKind == .payIn ? .primary : .ghost, size: .md, fullWidth: true))
+        HStack(spacing: 10) {
+            MoreMenu(actions: [
+                POSAction("只開錢櫃（換零錢）", icon: "banknotes") {
+                    Task { await model.moveCash(.noSale, reason: "換零錢") }
+                },
+                POSAction("印 X 帳（不關班）", icon: "printer") {
+                    model.printXReport()
+                    model.show("已送出 X 帳（不關班）", tone: .neutral)
+                },
+            ], label: "錢櫃的其他動作")
+            ShiftMovePair(selection: moveKind, pick: pick)
+        }
+    }
+}
 
-            Button {
-                pick(.payOut)
-            } label: {
-                actionLabel("取出", icon: "arrow-up")
-            }
-            .buttonStyle(.brand(moveKind == .payOut ? .primary : .ghost, size: .md, fullWidth: true))
+/// 存入｜取出：一組分段的按鈕（選中的那一邊是深色；再點一次收起原因）
+private struct ShiftMovePair: View {
+    let selection: CashMoveKind?
+    let pick: (CashMoveKind) -> Void
 
-            Button {
-                Task { await model.moveCash(.noSale, reason: "換零錢") }
-            } label: {
-                actionLabel("只開錢櫃", icon: "banknotes")
-            }
-            .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
-
-            Button {
-                model.printXReport()
-                model.show("已送出 X 帳（不關班）", tone: .neutral)
-            } label: {
-                actionLabel("印 X 帳", icon: "printer")
-            }
-            .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
+    var body: some View {
+        HStack(spacing: 4) {
+            segment(.payIn, title: "存入", icon: "arrow-down-tray")
+            segment(.payOut, title: "取出", icon: "arrow-up")
+        }
+        .padding(3)
+        .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                .strokeBorder(Theme.line, lineWidth: 1)
         }
     }
 
-    private func actionLabel(_ title: String, icon: String) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            HeroIcon(icon, size: 16)
+    private func segment(_ kind: CashMoveKind, title: String, icon: String) -> some View {
+        Button {
+            pick(kind)
+        } label: {
+            HStack(spacing: 8) {
+                HeroIcon(icon, size: 16)
+                Text(title)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
         }
-        .frame(maxWidth: .infinity)
+        .buttonStyle(ShiftSegmentStyle(selected: selection == kind))
+        .accessibilityAddTraits(selection == kind ? .isSelected : [])
+    }
+}
+
+private struct ShiftSegmentStyle: ButtonStyle {
+    let selected: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.brand(15, .medium))
+            .foregroundStyle(selected ? Theme.page : Theme.ink)
+            .background(selected ? Theme.ink : (configuration.isPressed ? Theme.press : Color.clear),
+                        in: .rect(cornerRadius: Metric.radius, style: .continuous))
+            .contentShape(.rect)
+            .animation(Motion.fast, value: selected)
     }
 }
 
@@ -575,6 +588,42 @@ private struct ShiftDenominationCell: View {
     }
 }
 
+/// 面額最後一格：「2000、200」點了展開、再點收起（虛線框，看得出不是面額）
+private struct ShiftRareToggleCell: View {
+    let expanded: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("2000、200")
+                    .font(.brand(17, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink2)
+                Spacer(minLength: 4)
+                HStack(spacing: 4) {
+                    Text(expanded ? "收起" : "少見的面額")
+                        .font(.brand(13, .medium))
+                        .foregroundStyle(Theme.muted)
+                    Spacer(minLength: 4)
+                    HeroIcon("chevron-down", size: 13)
+                        .foregroundStyle(Theme.muted)
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                    .strokeBorder(Theme.line, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.press)
+        .accessibilityLabel(expanded ? "收起 2000、200 元" : "顯示 2000、200 元")
+    }
+}
+
 /// 差額的說法與顏色：相符（綠）／短少（紅）／溢收（黃）
 private enum ShiftDifference {
     static func describe(counted: Money?, expected: Money) -> (text: String, tone: Tone) {
@@ -711,8 +760,10 @@ private struct ShiftReportPreview: View {
 
 // MARK: - 打卡
 
+/// 打卡：名單只顯示狀態；點一個人選起來，「上班」或「下班」出現在名單下面（一列一個按鈕太多）
 private struct ShiftAttendancePanel: View {
     @Environment(POSModel.self) private var model
+    @State private var selectedId: String?
 
     var body: some View {
         let onDuty = model.staff.filter { model.isClockedIn($0) }.count
@@ -725,22 +776,56 @@ private struct ShiftAttendancePanel: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(model.staff) { s in
-                        ShiftStaffRow(member: s)
+                        Button {
+                            withAnimation(Motion.fast) { selectedId = selectedId == s.id ? nil : s.id }
+                            model.touch()
+                        } label: {
+                            ShiftStaffRow(member: s, selected: selectedId == s.id)
+                        }
+                        .buttonStyle(.row)
+                        .accessibilityAddTraits(selectedId == s.id ? .isSelected : [])
                         if s.id != model.staff.last?.id {
                             Rule(color: Theme.hair)
                         }
                     }
+                }
+                if let s = model.staff.first(where: { $0.id == selectedId }) {
+                    footer(s)
+                        .transition(.opacity)
+                } else {
+                    Text("點一個人打卡（上班、下班）")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .panel(padding: 22)
     }
+
+    /// 選起來的那個人：一個動作（上班中就是「下班」）
+    private func footer(_ s: StaffMember) -> some View {
+        let on = model.isClockedIn(s)
+        return HStack(spacing: 12) {
+            Text(on ? "\(s.name) 要下班？" : "\(s.name) 要上班？")
+                .font(.brand(14, .medium))
+                .foregroundStyle(Theme.ink2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Spacer(minLength: 8)
+            ActionBar(secondary: [POSAction(on ? "下班" : "上班", icon: on ? "arrow-right-start-on-rectangle" : "clock") {
+                model.toggleClock(s)
+                withAnimation(Motion.fast) { selectedId = nil }
+            }], size: .sm, fillPrimary: false)
+        }
+        .padding(.top, 4)
+    }
 }
 
 private struct ShiftStaffRow: View {
     @Environment(POSModel.self) private var model
     let member: StaffMember
+    let selected: Bool
 
     var body: some View {
         let on = model.isClockedIn(member)
@@ -756,15 +841,17 @@ private struct ShiftStaffRow: View {
                     .foregroundStyle(Theme.muted)
             }
             Spacer(minLength: 8)
-            if on {
-                StatusBadge("上班中", tone: .active)
-            }
-            Button(on ? "下班" : "上班") {
-                model.toggleClock(member)
-            }
-            .buttonStyle(.brand(on ? .ghost : .primary, size: .sm))
+            StatusBadge(on ? "上班中" : "沒上班", tone: on ? .active : .neutral)
         }
         .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .background(selected ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        .overlay {
+            if selected {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(Theme.accent, lineWidth: 1.5)
+            }
+        }
     }
 
     /// 「店長・09:02 上班・今天 6 小時 12 分」
@@ -788,7 +875,18 @@ private struct ShiftHistoryPanel: View {
     var body: some View {
         let list = closedToday
         VStack(alignment: .leading, spacing: 12) {
-            Eyebrow("今天交過的班・\(list.count)")
+            HStack(spacing: 8) {
+                Eyebrow("今天交過的班・\(list.count)")
+                Spacer(minLength: 8)
+                // 補印交班單：每一班一項，收在標題旁的「⋯」（列上不放按鈕）
+                if !list.isEmpty {
+                    MoreMenu(actions: list.map { s in
+                        POSAction("補印 \(s.openedAt.clockText)–\(s.closedAt?.clockText ?? "")・\(model.staffName(s.closedBy)) 交的班", icon: "printer") {
+                            model.reprintShiftReport(s)
+                        }
+                    }, size: .sm, label: "補印交班單")
+                }
+            }
             if list.isEmpty {
                 Text("這台今天還沒交過班")
                     .textRole(.small)
@@ -844,13 +942,6 @@ private struct ShiftHistoryRow: View {
             }
             Spacer(minLength: 8)
             StatusBadge(result.text, tone: result.tone)
-            Button {
-                model.reprintShiftReport(shift)
-            } label: {
-                HeroIcon("printer", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 34))
-            .accessibilityLabel("補印交班單")
         }
         .padding(.vertical, 10)
     }

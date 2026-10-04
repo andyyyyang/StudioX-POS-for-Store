@@ -293,11 +293,10 @@ extension DemoStore {
 
         // 單子照開單的時間記（單號才會照順序）
         var plan: [(at: Date, run: () throws -> Void)] = []
-        var n = 0
         func sale(_ at: Date, member m: Member? = nil, customerName: String? = nil, lines: [TicketLine], pay: [DemoPay]) {
+            // 編號在排進去的時候就決定（閉包不要改外面的變數：Release 的併發檢查會擋）
+            let ticketId = "demo-fit-sale-\(plan.count + 1)"
             plan.append((at, {
-                n += 1
-                let ticketId = "demo-fit-sale-\(n)"
                 try s.open(ticketId, at: at, by: desk, mode: .fitness, member: m?.ref, customerName: customerName, lines: lines)
                 try s.close(ticketId, at: at.addingTimeInterval(90), by: desk, pay: pay)
             }))

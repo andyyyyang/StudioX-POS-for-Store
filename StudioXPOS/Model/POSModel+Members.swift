@@ -143,6 +143,35 @@ extension POSModel {
         return await updateMember(m, MemberUpdate(note: trimmed))
     }
 
+    /// 改生日（MM-DD）。回傳要顯示的問題（nil＝存好了）
+    func saveMemberBirthday(_ birthday: String, for m: Member) async -> String? {
+        guard birthday != (m.birthday ?? "") else { return nil }
+        return await updateMember(m, MemberUpdate(birthday: birthday))
+    }
+
+    /// 生日用右側鍵盤打（月日 4 碼：1018），存到後台。回傳要顯示的問題（nil＝存好了或取消）
+    func askBirthday(for m: Member) async -> String? {
+        let current = POSModel.birthdayText(m.birthday).map { text -> String in
+            let parts = text.split(separator: "/").compactMap { Int($0) }
+            return parts.count == 2 ? String(format: "%02d%02d", parts[0], parts[1]) : ""
+        } ?? ""
+        let spec = KeypadSpec(kind: .code(minLength: 4, maxLength: 4), title: "生日", subtitle: "\(m.name ?? m.ref.maskedPhone)・打月日 4 碼，例如 1018",
+                              initial: current, confirmLabel: "存到後台")
+        guard let entry = await keypad.ask(spec, validate: { e in Self.birthday(fromDigits: e.digits) == nil ? "月份 01–12、日期要對（例如 1018）" : nil }),
+              let birthday = Self.birthday(fromDigits: entry.digits) else { return nil }
+        let problem = await saveMemberBirthday(birthday, for: m)
+        if problem == nil, let text = POSModel.birthdayText(birthday) { show("生日改好了：\(text)") }
+        return problem
+    }
+
+    /// 「1018」→「10-18」（日期不對是 nil）
+    static func birthday(fromDigits digits: String) -> String? {
+        guard digits.count == 4, let month = Int(digits.prefix(2)), let day = Int(digits.suffix(2)) else { return nil }
+        let days = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+        guard (1...12).contains(month), (1...days[month - 1]).contains(day) else { return nil }
+        return String(format: "%02d-%02d", month, day)
+    }
+
     private func updateMember(_ m: Member, _ update: MemberUpdate) async -> String? {
         guard let api else { return "這台還沒連上後台" }
         do {
@@ -194,24 +223,66 @@ extension POSModel {
         await sellToMember(item, m)
     }
 
-    private func sellToMember(_ item: MenuItem, _ m: Member) async {
-        guard currentStaff != nil else { return }
+    /// 儲值（會員頁的「儲值」）：右側鍵盤打金額，快速鍵是店裡的儲值方案。
+    /// 打的剛好是某個方案的金額就賣那個方案（送的照方案）；其他金額用自訂儲值（沒有自訂儲值的店只能選方案）。
+    /// 回傳有沒有進到結帳（沒有＝取消了）
+    @discardableResult
+    func askTopUp(for m: Member) async -> Bool {
+        let plans = memberProducts(.storedValue)
+        let fixed = plans.filter { !$0.openPrice }
+        let custom = plans.first { $0.openPrice }
+        guard !plans.isEmpty else {
+            show("這家店還沒有儲值的品項（後台的菜單加一個「儲值」）", tone: .warning)
+            return false
+        }
+        let quick = fixed.prefix(6).map { KeypadSpec.QuickKey(Self.planLabel($0), digits: String($0.price.dollars)) }
+        var hints = fixed.map(Self.planLabel)
+        if custom != nil { hints.append("其他金額照打的儲值") }
+        let spec = KeypadSpec(kind: .money, title: "儲值・\(m.name ?? m.ref.maskedPhone)", subtitle: hints.joined(separator: "・"),
+                              initial: fixed.first.map { String($0.price.dollars) } ?? "", quickKeys: quick, confirmLabel: "儲值", minValue: 1)
+        guard let entry = await keypad.ask(spec, validate: { e in
+            let v = e.value ?? 0
+            if fixed.contains(where: { $0.price.dollars == v }) || (custom != nil && v > 0) { return nil }
+            return "請選一個儲值方案"
+        }), let amount = entry.money else { return false }
+        if let plan = fixed.first(where: { $0.price == amount }) {
+            return await sellToMember(plan, m)
+        }
+        guard let custom else { return false }
+        return await sellToMember(custom, m, price: amount)
+    }
+
+    /// 「$10,000 送 1,000」（沒有送的就只有金額）
+    static func planLabel(_ item: MenuItem) -> String {
+        guard let credit = item.credit, credit > item.price else { return item.price.short }
+        return "\(item.price.short) 送 \((credit - item.price).plain)"
+    }
+
+    /// 這張卡在菜單上是哪一個品項（續約、再買一張用；菜單上已經沒有就是 nil）
+    func passItem(for pass: MemberPass) -> MenuItem? {
+        catalog.items.first { $0.itemKind == .pass && $0.name == pass.name && isAvailable($0) }
+    }
+
+    @discardableResult
+    private func sellToMember(_ item: MenuItem, _ m: Member, price preset: Money? = nil) async -> Bool {
+        guard currentStaff != nil else { return false }
         guard isAvailable(item) else {
             show("\(item.name) 現在不能賣", tone: .warning)
-            return
+            return false
         }
-        var price: Money? = nil
-        if item.openPrice {
+        var price: Money? = preset
+        if item.openPrice && price == nil {
             let spec: KeypadSpec = item.itemKind == .storedValue ? .topUp() : .openPrice(name: item.name)
-            guard let p = await keypad.askMoney(spec), p.cents > 0 else { return }
+            guard let p = await keypad.askMoney(spec), p.cents > 0 else { return false }
             price = p
         }
         // 單子一開始就要有會員（續約的開始日、結帳時記到帳戶都靠它）
         if members[m.id] == nil { remember(m) }
-        guard let t = openTicket(type: mode.defaultOrderType, member: m.ref) else { return }
+        guard let t = openTicket(type: mode.defaultOrderType, member: m.ref) else { return false }
         add(item, quantity: 1, modifiers: [], note: "", price: price)
-        guard let fresh = state.tickets[t.id], !fresh.activeLines.isEmpty else { return }
+        guard let fresh = state.tickets[t.id], !fresh.activeLines.isEmpty else { return false }
         beginCheckout(fresh)
+        return true
     }
 
     /// 這張會籍賣給他的話從哪天開始（還有效的同一種會籍：接在後面；nil＝今天）

@@ -7,13 +7,15 @@ import SwiftUI
 
 /// 訂位與候位：左邊是今天的訂位（照時間、一小時一組），右邊是現場候位（號碼牌）。
 ///
-///   ┌ Guest book ─────────────────────────── ⟳ 14:05  [＋候位] [＋新訂位] ┐
-///   │ ■ 今天的訂位  3 組待到・14 位      │ ■ 現場候位  2 組等待中          │
-///   │ 18:00 ┃18:30 林小涵 4 位  已預約   │  12  張家豪 3 位・等了 18 分    │
-///   │       ┃0912-***-678・A4・網站      │      [入座] [通知] [⋯]          │
-///   │       ┃※ 有一位吃素  [入座][已到]  │  13  李思妤 2 位・等了 6 分     │
-///   └────────────────────────────────────────────────────────────────────┘
+///   ┌ Guest book ──────────────────────────────────── ⟳ 14:05  [＋ 新增 ▾] ┐
+///   │ ■ 今天的訂位  3 組待到・14 位      │ ■ 現場候位  2 組等待中            │
+///   │ 18:00 ┃18:30 林小涵                │  12  張家豪                [入座] │
+///   │       ┃4 位・已預約・0912-***-678  │      3 位・等了 18 分             │
+///   ├────────────────────────────────────────────────────────────────────────┤
+///   │ 選起來的那一筆：林小涵 4 位・已預約     [⋯] [已到]  [入座 ────────]  ✕ │
+///   └────────────────────────────────────────────────────────────────────────┘
 ///
+/// 卡片上不放按鈕列：點一下選起來，動作都在下面固定的動作列（候位卡片只留一個「入座」快捷）。
 /// 資料在後台（網站、電話訂的也在這裡）：進來先抓一次、之後每分鐘更新。
 /// 新增、編輯、選桌入座是從右邊滑出來的面板（不是系統的 sheet：人數、電話要用右側鍵盤打，sheet 會擋住鍵盤）。
 struct ReservationsView: View {
@@ -23,6 +25,8 @@ struct ReservationsView: View {
     @State private var form: ResvFormRequest?
     @State private var seating: Reservation?
     @State private var confirming: ResvStatusRequest?
+    /// 選起來的那一筆（動作在下面的動作列）
+    @State private var selectedId: String?
     @State private var showFinished = true
     @State private var loadedAt: Date?
     @State private var loading = false
@@ -34,9 +38,25 @@ struct ReservationsView: View {
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
                 columns(now: ctx.date)
             }
+            if let r = selected {
+                ResvSelectionBar(
+                    reservation: r,
+                    tables: model.floor.tableNames(r.tableIds),
+                    primary: primaryAction(r),
+                    secondary: secondaryActions(r),
+                    more: moreActions(r),
+                    onClose: { select(nil) }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .padding(.horizontal, 28)
         .padding(.top, 22)
+        .padding(.bottom, selected == nil ? 0 : 16)
+        // 選起來的那一筆剛入座：事情做完了，動作列跟著收起來（點已入座的那筆不算）
+        .onChange(of: ResvSelectionKey(id: selectedId, status: selected?.status)) { old, new in
+            if old.id == new.id && old.status != .seated && new.status == .seated { select(nil) }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
             if panelOpen {
@@ -133,6 +153,69 @@ struct ReservationsView: View {
         confirming = ResvStatusRequest(reservation: r, status: status)
     }
 
+    private var selected: Reservation? {
+        guard let selectedId else { return nil }
+        return model.reservations.first(where: { $0.id == selectedId })
+    }
+
+    /// 再點一次同一張就取消選取
+    private func select(_ r: Reservation?) {
+        withAnimation(reduceMotion ? nil : Motion.fast) {
+            selectedId = (r?.id == selectedId) ? nil : r?.id
+        }
+    }
+
+    private func toggle(_ r: Reservation) { select(r) }
+
+    private func setStatus(_ status: ReservationStatus, _ r: Reservation) {
+        Task { await model.setStatus(status, for: r) }
+    }
+
+    // MARK: 選起來那一筆的動作（主要「入座」、次要最多兩個、其他收進「⋯」；取消、未到要確認）
+
+    private func primaryAction(_ r: Reservation) -> POSAction? {
+        guard r.status.isActive else { return nil }
+        return POSAction("入座", icon: "users") { openSeating(r) }
+    }
+
+    private func secondaryActions(_ r: Reservation) -> [POSAction] {
+        var list: [POSAction] = []
+        if r.status.isActive {
+            if r.kind == .waitlist {
+                if model.features.waitlistSMS {
+                    // 有簡訊：傳「您的位子好了」
+                    list.append(POSAction(r.status == .notified ? "再通知" : "通知", icon: "bell-alert") {
+                        Task { await model.notify(r) }
+                    })
+                } else if r.status == .booked {
+                    // 沒有簡訊：喊號之後記一下，免得重複叫
+                    list.append(POSAction("叫號了", icon: "speaker-wave") { setStatus(.notified, r) })
+                }
+            } else if r.status != .arrived {
+                list.append(POSAction("已到", icon: "check") { setStatus(.arrived, r) })
+            }
+        } else if r.status == .cancelled || r.status == .noShow {
+            // 按錯了：改回來
+            list.append(POSAction(r.kind == .waitlist ? "改回候位" : "改回已預約", icon: "arrow-uturn-left") {
+                setStatus(.booked, r)
+            })
+        }
+        return list
+    }
+
+    private func moreActions(_ r: Reservation) -> [POSAction] {
+        guard r.status.isActive else { return [] }
+        let queued = r.kind == .waitlist
+        var list: [POSAction] = []
+        if queued && r.status != .arrived {
+            list.append(POSAction("已到", icon: "check") { setStatus(.arrived, r) })
+        }
+        list.append(POSAction("編輯", icon: "pencil-square") { openForm(r.kind, editing: r) })
+        list.append(POSAction(queued ? "沒等到（離開了）" : "未到", icon: "no-symbol", destructive: true) { confirm(.noShow, r) })
+        list.append(POSAction(queued ? "取消候位" : "取消訂位", icon: "x-circle", destructive: true) { confirm(.cancelled, r) })
+        return list
+    }
+
     private var confirmTitle: String {
         guard let c = confirming else { return "" }
         guard c.status == .cancelled else { return "\(c.reservation.name) 沒有來？" }
@@ -179,25 +262,27 @@ struct ReservationsView: View {
             }
             .buttonStyle(.press)
             .accessibilityLabel("重新整理")
-            Button {
-                openForm(.waitlist)
+            // 同一類的新增合成一個：點了選訂位或候位
+            Menu {
+                Button {
+                    openForm(.reservation)
+                } label: {
+                    Label { Text("訂位") } icon: { Image("hi-calendar-days").renderingMode(.template) }
+                }
+                Button {
+                    openForm(.waitlist)
+                } label: {
+                    Label { Text("候位（抽號碼）") } icon: { Image("hi-user-group").renderingMode(.template) }
+                }
             } label: {
                 Label {
-                    Text("候位")
+                    Text("新增")
                 } icon: {
                     HeroIcon("plus", size: 15)
                 }
             }
-            .buttonStyle(.brand(.ghost, size: .md))
-            Button {
-                openForm(.reservation)
-            } label: {
-                Label {
-                    Text("新訂位")
-                } icon: {
-                    HeroIcon("plus", size: 15)
-                }
-            }
+            .menuStyle(.button)
+            .menuOrder(.fixed)
             .buttonStyle(.brand(.primary, size: .md))
         }
     }
@@ -242,7 +327,7 @@ struct ReservationsView: View {
                 EmptyState(
                     icon: "calendar-days",
                     title: all.isEmpty ? "今天還沒有訂位" : "訂位都處理完了",
-                    message: all.isEmpty ? "網站、電話的訂位會自動出現在這裡；也可以按右上角「新訂位」。" : "已入座、取消、未到的按「顯示已結束」看。"
+                    message: all.isEmpty ? "網站、電話的訂位會自動出現在這裡；也可以按右上角「＋ 新增」。" : "已入座、取消、未到的按「顯示已結束」看。"
                 )
             } else {
                 ScrollView {
@@ -278,9 +363,8 @@ struct ReservationsView: View {
                     ResvBookingRow(
                         reservation: r,
                         now: now,
-                        onSeat: { openSeating(r) },
-                        onEdit: { openForm(.reservation, editing: r) },
-                        onConfirm: { status in confirm(status, r) }
+                        selected: r.id == selectedId,
+                        onSelect: { toggle(r) }
                     )
                 }
             }
@@ -303,7 +387,7 @@ struct ReservationsView: View {
                 Spacer(minLength: 0)
             }
             if waiting.isEmpty && done.isEmpty {
-                EmptyState(icon: "user-group", title: "沒有人在候位", message: "客人到了沒位子，按「候位」抽號碼。")
+                EmptyState(icon: "user-group", title: "沒有人在候位", message: "客人到了沒位子，按右上角「＋ 新增」→「候位」抽號碼。")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -317,9 +401,9 @@ struct ReservationsView: View {
                             ResvWaitCard(
                                 reservation: r,
                                 now: now,
-                                onSeat: { openSeating(r) },
-                                onEdit: { openForm(.waitlist, editing: r) },
-                                onConfirm: { status in confirm(status, r) }
+                                selected: r.id == selectedId,
+                                onSelect: { toggle(r) },
+                                onSeat: { openSeating(r) }
                             )
                         }
                         if !done.isEmpty {
@@ -327,7 +411,7 @@ struct ReservationsView: View {
                                 .padding(.top, 16)
                             VStack(spacing: 0) {
                                 ForEach(done) { r in
-                                    ResvDoneRow(reservation: r)
+                                    ResvDoneRow(reservation: r, selected: r.id == selectedId, onSelect: { toggle(r) })
                                     Rule(color: Theme.hair)
                                 }
                             }
@@ -380,6 +464,12 @@ private struct ResvStatusRequest: Identifiable {
     var id: String { reservation.id + status.rawValue }
 }
 
+/// 選取的是哪一筆、狀態是什麼（用來看「剛入座」）
+private struct ResvSelectionKey: Equatable {
+    let id: String?
+    let status: ReservationStatus?
+}
+
 private struct ResvHourGroup: Identifiable {
     let id: Date
     var items: [Reservation]
@@ -421,48 +511,58 @@ private func resvGroupedPhone(_ d: String) -> String {
 
 // MARK: - 一筆訂位
 
+/// 卡片的外框：選起來是墨色粗框
+private struct ResvCardChrome: ViewModifier {
+    let selected: Bool
+    let highlight: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .background(highlight ? Theme.accentSoft : Theme.surface, in: .rect(cornerRadius: Metric.radius))
+            .overlay {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(selected ? Theme.ink : (highlight ? Theme.accent.opacity(0.45) : Theme.line), lineWidth: selected ? 2 : 1)
+            }
+    }
+}
+
+/// 一筆訂位：整張可以點（選起來），卡片上沒有按鈕
 private struct ResvBookingRow: View {
     @Environment(POSModel.self) private var model
     let reservation: Reservation
     let now: Date
-    let onSeat: () -> Void
-    let onEdit: () -> Void
-    let onConfirm: (ReservationStatus) -> Void
+    let selected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
         let r = reservation
-        HStack(alignment: .top, spacing: 14) {
-            // 左邊的色條：快到了是品牌橘、晚了是黃
-            RoundedRectangle(cornerRadius: 1.5)
-                .fill(barColor)
-                .frame(width: 3)
-            VStack(alignment: .leading, spacing: 8) {
-                titleRow
-                meta
-                if !r.note.isEmpty {
-                    Text("※ \(r.note)")
-                        .textRole(.small)
-                        .foregroundStyle(Theme.warningFG)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if r.status.isActive {
-                    actions
-                } else if r.status == .cancelled || r.status == .noShow {
-                    // 按錯了：改回已預約
-                    Button("改回已預約") {
-                        Task { await model.setStatus(.booked, for: r) }
+        Button(action: onSelect) {
+            HStack(alignment: .top, spacing: 14) {
+                // 左邊的色條：快到了是品牌橘、晚了是黃
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(barColor)
+                    .frame(width: 3)
+                VStack(alignment: .leading, spacing: 8) {
+                    titleRow
+                    meta
+                    if !r.note.isEmpty {
+                        Text("※ \(r.note)")
+                            .textRole(.small)
+                            .foregroundStyle(Theme.warningFG)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(.brand(.quiet, size: .sm))
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(14)
+            .modifier(ResvCardChrome(selected: selected, highlight: soon))
+            .opacity(r.status.isActive || selected ? 1 : 0.55)
+            .contentShape(.rect)
         }
-        .padding(14)
-        .background(soon ? Theme.accentSoft : Theme.surface, in: .rect(cornerRadius: Metric.radius))
-        .overlay {
-            RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                .strokeBorder(soon ? Theme.accent.opacity(0.45) : Theme.line, lineWidth: 1)
-        }
-        .opacity(r.status.isActive ? 1 : 0.55)
+        .buttonStyle(.press)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint("點一下選起來，動作在下面")
     }
 
     /// 前後 15～30 分鐘內要到的
@@ -484,6 +584,7 @@ private struct ResvBookingRow: View {
         return reservation.status.isActive ? Theme.line : Color.clear
     }
 
+    /// 時間＋名字一行（名字太長就換行，不截斷）；人數、狀態放到下一行
     private var titleRow: some View {
         let r = reservation
         return HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -491,210 +592,224 @@ private struct ResvBookingRow: View {
                 .font(.brand(17, .semibold))
                 .monospacedDigit()
                 .foregroundStyle(soon ? Theme.accentText : Theme.ink)
+                .fixedSize()
             Text(r.name)
                 .font(.brand(18, .medium))
                 .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-            Text("\(r.partySize) 位")
-                .font(.brand(15, .medium))
-                .monospacedDigit()
-                .foregroundStyle(Theme.ink2)
-            Spacer(minLength: 8)
-            StatusBadge(r.status.label, tone: resvTone(r.status))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var meta: some View {
         let r = reservation
         let tables = model.floor.tableNames(r.tableIds)
-        return FlowLayout(spacing: 12, rowSpacing: 6) {
-            ResvMeta(icon: "phone", text: resvMaskedPhone(r.phone))
-            ResvMeta(icon: "table-cells", text: tables.isEmpty ? "未排桌" : tables)
-            ResvMeta(icon: "clock", text: "\(r.durationMinutes) 分")
-            ResvSourceTag(source: r.source)
+        return FlowLayout(spacing: 10, rowSpacing: 6) {
+            Text("\(r.partySize) 位")
+                .font(.brand(14, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.ink2)
+            StatusBadge(r.status.label, tone: resvTone(r.status))
             if soon {
                 StatusBadge("快到了", tone: .gold)
             } else if let late = lateMinutes {
                 StatusBadge("晚了 \(late) 分", tone: .warning)
             }
+            ResvMeta(icon: "phone", text: resvMaskedPhone(r.phone))
+            ResvMeta(icon: "table-cells", text: tables.isEmpty ? "未排桌" : tables)
+            ResvMeta(icon: "clock", text: "\(r.durationMinutes) 分")
+            ResvSourceTag(source: r.source)
         }
-    }
-
-    private var actions: some View {
-        let r = reservation
-        return HStack(spacing: 8) {
-            Button {
-                onSeat()
-            } label: {
-                Label {
-                    Text("入座")
-                } icon: {
-                    HeroIcon("users", size: 14)
-                }
-            }
-            .buttonStyle(.brand(.primary, size: .sm))
-            if r.status != .arrived {
-                Button("已到") {
-                    Task { await model.setStatus(.arrived, for: r) }
-                }
-                .buttonStyle(.brand(.ghost, size: .sm))
-            }
-            Spacer(minLength: 0)
-            Menu {
-                Button("編輯") { onEdit() }
-                Button("未到") { onConfirm(.noShow) }
-                Button("取消訂位", role: .destructive) { onConfirm(.cancelled) }
-            } label: {
-                HeroIcon("ellipsis-horizontal", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 34))
-            .accessibilityLabel("更多")
-        }
-        .padding(.top, 2)
     }
 }
 
 // MARK: - 一組候位
 
+/// 一組候位：整張可以點（選起來）；只留一個「入座」快捷（最常用的那一步）
 private struct ResvWaitCard: View {
-    @Environment(POSModel.self) private var model
     let reservation: Reservation
     let now: Date
+    let selected: Bool
+    let onSelect: () -> Void
     let onSeat: () -> Void
-    let onEdit: () -> Void
-    let onConfirm: (ReservationStatus) -> Void
 
     var body: some View {
         let r = reservation
         HStack(alignment: .top, spacing: 14) {
-            VStack(spacing: 0) {
-                Text("號")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
-                Text(r.queueNumber.map { String($0) } ?? "—")
-                    .font(.brand(40, .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(r.status == .notified ? Theme.accentText : Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-            }
-            .frame(width: 60)
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(r.name)
-                        .font(.brand(18, .medium))
-                        .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
-                    Text("\(r.partySize) 位")
-                        .font(.brand(15, .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.ink2)
-                    Spacer(minLength: 4)
-                    StatusBadge(r.status.label, tone: resvTone(r.status))
-                }
-                FlowLayout(spacing: 12, rowSpacing: 6) {
-                    HStack(spacing: 5) {
-                        HeroIcon("clock", size: 13)
-                        Text("等了 \(waited) 分")
+            Button(action: onSelect) {
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(spacing: 0) {
+                        Text("號")
+                            .textRole(.xs)
+                            .foregroundStyle(Theme.muted)
+                        Text(r.queueNumber.map { String($0) } ?? "—")
+                            .font(.brand(40, .medium))
                             .monospacedDigit()
+                            .foregroundStyle(r.status == .notified ? Theme.accentText : Theme.ink)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
-                    .font(.brand(13, .medium))
-                    .foregroundStyle(waited >= 20 ? Theme.warningFG : Theme.muted)
-                    ResvMeta(icon: "phone", text: resvMaskedPhone(r.phone))
-                    if let at = r.notifiedAt {
-                        ResvMeta(icon: "bell-alert", text: "\(at.clockText) 叫過")
+                    .frame(width: 56)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(r.name)
+                            .font(.brand(18, .medium))
+                            .foregroundStyle(Theme.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        FlowLayout(spacing: 10, rowSpacing: 6) {
+                            Text("\(r.partySize) 位")
+                                .font(.brand(14, .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Theme.ink2)
+                            StatusBadge(r.status.label, tone: resvTone(r.status))
+                            HStack(spacing: 5) {
+                                HeroIcon("clock", size: 13)
+                                Text("等了 \(waited) 分")
+                                    .monospacedDigit()
+                            }
+                            .font(.brand(13, .medium))
+                            .foregroundStyle(waited >= 20 ? Theme.warningFG : Theme.muted)
+                            ResvMeta(icon: "phone", text: resvMaskedPhone(r.phone))
+                            if let at = r.notifiedAt {
+                                ResvMeta(icon: "bell-alert", text: "\(at.clockText) 叫過")
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.press)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .accessibilityHint("點一下選起來，其他動作在下面")
+            if r.status.isActive {
+                // 唯一的快捷：有位子了直接帶進去
+                Button(action: onSeat) {
+                    Label {
+                        Text("入座")
+                    } icon: {
+                        HeroIcon("users", size: 14)
                     }
                 }
-                actions
+                .buttonStyle(.brand(.ghost, size: .sm))
+                .fixedSize()
             }
         }
         .padding(14)
-        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
+        .modifier(ResvCardChrome(selected: selected, highlight: false))
         .overlay {
-            RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                .strokeBorder(r.status == .notified ? Theme.accent.opacity(0.45) : Theme.line, lineWidth: 1)
+            if r.status == .notified && !selected {
+                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                    .strokeBorder(Theme.accent.opacity(0.45), lineWidth: 1)
+            }
         }
     }
 
     private var waited: Int { max(0, Int(now.timeIntervalSince(reservation.startsAt) / 60)) }
-
-    private var actions: some View {
-        let r = reservation
-        return HStack(spacing: 8) {
-            Button {
-                onSeat()
-            } label: {
-                Label {
-                    Text("入座")
-                } icon: {
-                    HeroIcon("users", size: 14)
-                }
-            }
-            .buttonStyle(.brand(.primary, size: .sm))
-            if model.features.waitlistSMS {
-                // 有簡訊：傳「您的位子好了」
-                Button(r.status == .notified ? "再通知" : "通知") {
-                    Task { await model.notify(r) }
-                }
-                .buttonStyle(.brand(.ghost, size: .sm))
-            } else if r.status == .booked {
-                // 沒有簡訊：喊號之後記一下，免得重複叫
-                Button("叫號了") {
-                    Task { await model.setStatus(.notified, for: r) }
-                }
-                .buttonStyle(.brand(.ghost, size: .sm))
-            }
-            Spacer(minLength: 0)
-            Menu {
-                if r.status != .arrived {
-                    Button("已到") { Task { await model.setStatus(.arrived, for: r) } }
-                }
-                Button("編輯") { onEdit() }
-                Button("沒等到（離開了）") { onConfirm(.noShow) }
-                Button("取消候位", role: .destructive) { onConfirm(.cancelled) }
-            } label: {
-                HeroIcon("ellipsis-horizontal", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 34))
-            .accessibilityLabel("更多")
-        }
-    }
 }
 
-/// 叫過的候位（入座、取消、離開）：一行，按錯可以改回來
+/// 叫過的候位（入座、取消、離開）：一行，點了選起來（按錯可以在下面改回來）
 private struct ResvDoneRow: View {
-    @Environment(POSModel.self) private var model
     let reservation: Reservation
+    let selected: Bool
+    let onSelect: () -> Void
 
     var body: some View {
         let r = reservation
-        HStack(spacing: 10) {
-            Text(r.queueNumber.map { "#\($0)" } ?? "—")
-                .font(.brand(14, .semibold))
-                .monospacedDigit()
-                .foregroundStyle(Theme.muted)
-                .frame(width: 40, alignment: .leading)
-            Text(r.name)
-                .font(.brand(14.5, .medium))
-                .foregroundStyle(Theme.ink2)
-                .lineLimit(1)
-            Text("\(r.partySize) 位")
-                .font(.brand(13, .regular))
-                .monospacedDigit()
-                .foregroundStyle(Theme.muted)
-            Spacer(minLength: 6)
-            StatusBadge(r.status.label, tone: resvTone(r.status))
-            if r.status == .cancelled || r.status == .noShow {
-                Menu {
-                    Button("改回候位") { Task { await model.setStatus(.booked, for: r) } }
-                } label: {
-                    HeroIcon("arrow-uturn-left", size: 14)
-                }
-                .buttonStyle(SquareIconButtonStyle(size: 30))
-                .accessibilityLabel("改回候位")
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                Text(r.queueNumber.map { "#\($0)" } ?? "—")
+                    .font(.brand(14, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .frame(width: 40, alignment: .leading)
+                Text(r.name)
+                    .font(.brand(14.5, .medium))
+                    .foregroundStyle(Theme.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("\(r.partySize) 位")
+                    .font(.brand(13, .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize()
+                StatusBadge(r.status.label, tone: resvTone(r.status))
+                    .fixedSize()
             }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 8)
+            .background(selected ? Theme.press : Color.clear, in: .rect(cornerRadius: Metric.radiusSm))
+            .contentShape(.rect)
         }
-        .padding(.vertical, 8)
+        .buttonStyle(.press)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - 選起來那一筆的動作列（固定在下面）
+
+private struct ResvSelectionBar: View {
+    let reservation: Reservation
+    let tables: String
+    let primary: POSAction?
+    let secondary: [POSAction]
+    let more: [POSAction]
+    let onClose: () -> Void
+
+    var body: some View {
+        let r = reservation
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(r.name)
+                    .font(.brand(20, .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
+                FlowLayout(spacing: 10, rowSpacing: 4) {
+                    Text(summary)
+                        .font(.brand(14, .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink2)
+                    StatusBadge(r.status.label, tone: resvTone(r.status))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if primary != nil || !secondary.isEmpty || !more.isEmpty {
+                ActionBar(primary: primary, secondary: secondary, more: more, size: .lg, fillPrimary: false)
+                    .fixedSize()
+            } else {
+                Text(r.status == .seated ? "已入座" : "沒有可以做的動作")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.muted)
+            }
+            Button(action: onClose) {
+                HeroIcon("x-mark", size: 15)
+            }
+            .buttonStyle(SquareIconButtonStyle(size: 40))
+            .accessibilityLabel("取消選取")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .background(Theme.dock, in: .rect(cornerRadius: Metric.radiusLg))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                .strokeBorder(Theme.line, lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 18, y: -4)
+    }
+
+    /// 訂位：18:30・4 位・A4；候位：12 號・3 位
+    private var summary: String {
+        let r = reservation
+        var parts: [String] = []
+        if r.kind == .waitlist {
+            if let n = r.queueNumber { parts.append("\(n) 號") }
+        } else {
+            parts.append(r.startsAt.clockText)
+        }
+        parts.append("\(r.partySize) 位")
+        if !tables.isEmpty { parts.append(tables) }
+        return parts.joined(separator: "・")
     }
 }
 
@@ -708,7 +823,7 @@ private struct ResvMeta: View {
             HeroIcon(icon, size: 13)
             Text(text)
                 .monospacedDigit()
-                .lineLimit(1)
+                .fixedSize()
         }
         .font(.brand(13, .medium))
         .foregroundStyle(Theme.muted)
@@ -755,7 +870,8 @@ private struct ResvPanelHeader: View {
             VStack(alignment: .leading, spacing: 4) {
                 Eyebrow(eyebrow)
                 Headline(title, role: .h3)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
                 if let detail {
                     Text(detail)
                         .textRole(.small)
@@ -1029,7 +1145,7 @@ private struct ResvFormPanel: View {
                 Text(problem)
                     .textRole(.small)
                     .foregroundStyle(Theme.dangerFG)
-                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             Button("取消") { onClose() }
@@ -1258,7 +1374,8 @@ private struct ResvSeatPanel: View {
                     Text(selectedNames)
                         .font(.brand(16, .semibold))
                         .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
                     Text(seatsNote)
                         .textRole(.xs)
                         .monospacedDigit()

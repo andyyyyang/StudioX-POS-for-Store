@@ -1,3 +1,4 @@
+import Foundation
 import POSCore
 import POSInvoice
 import POSPrinting
@@ -5,6 +6,8 @@ import POSSync
 import SwiftUI
 
 /// 鎖定畫面：點自己的名字、在右側鍵盤打 PIN。也在這裡上下班打卡。
+///
+/// 按鈕照 docs/DESIGN.md：只有人員名單（點了選起來）、「登入／打卡」分段控制、右側鍵盤；沒有別的按鈕。
 ///
 ///   ┌──────────────┬────────────────────────┬──────────┐
 ///   │ 班表          │        14:05           │  輸入 PIN │
@@ -49,9 +52,10 @@ struct LockView: View {
 
             Picker("", selection: $mode) {
                 Text("登入").tag(Mode.login)
-                Text("上下班打卡").tag(Mode.clock)
+                Text("打卡").tag(Mode.clock)
             }
             .pickerStyle(.segmented)
+            .accessibilityLabel("登入或上下班打卡")
             .padding(.horizontal, 24)
             .padding(.bottom, 12)
 
@@ -74,9 +78,10 @@ struct LockView: View {
                     Text("示範的 PIN")
                         .font(.brand(12, .semibold))
                         .foregroundStyle(Theme.xenaIrisLavender)
-                    Text("Leslie 1234・Cameron 2580・Jacob 1111・王小美 0000")
+                    Text(DemoStore.kind.pinHint)
                         .font(.brand(12, .regular))
                         .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(20)
             }
@@ -93,9 +98,14 @@ struct LockView: View {
                 Text(s.name)
                     .font(.brand(16, .medium))
                     .foregroundStyle(on ? Theme.page : Theme.ink)
-                Text(s.role.label + (clocked ? "・上班中" : ""))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                // 職稱（設計師、教練）沒有就寫權限（店長、收銀）；上班中是狀態，不是按鈕
+                Text((s.title ?? s.role.label) + (clocked ? "・上班中" : ""))
                     .font(.brand(12.5, .regular))
                     .foregroundStyle(on ? Theme.page.opacity(0.7) : Theme.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             Spacer()
             if clocked {

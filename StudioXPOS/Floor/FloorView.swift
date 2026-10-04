@@ -686,6 +686,7 @@ struct FloorView: View {
                 .font(.brand(22, .semibold))
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
             FloorStatusTag(status: i.status)
             if i.tickets.count > 1 {
                 Text("\(i.tickets.count) 張單")
@@ -735,19 +736,28 @@ struct FloorView: View {
                     .font(.brand(13, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.infoFG)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 6) {
-                if model.role.takesPayment {
-                    FloorMiniTool(title: "結帳", icon: "credit-card", accent: true) { model.beginCheckout(ticket) }
-                }
-                FloorMiniTool(title: "結帳單", icon: "printer") { printBill(ticket) }
-                FloorMiniTool(title: "換桌", icon: "arrows-right-left") { startPick(.move(ticketId: ticket.id)) }
-                FloorMiniTool(title: "併桌", icon: "link") { startPick(.merge(ticketId: ticket.id)) }
-                FloorMiniTool(title: "人數", icon: "user-group") {
-                    Task { await model.setGuests(ticket) }
-                }
-            }
+            // 主要「去點餐」；常用的最多再露兩個（結帳、結帳單），換桌、併桌、人數收進「⋯」
+            FloorActionRow(secondary: occupiedSecondary(ticket), more: occupiedMore(ticket))
         }
+    }
+
+    private func occupiedSecondary(_ ticket: Ticket) -> [POSAction] {
+        var list: [POSAction] = []
+        if model.role.takesPayment {
+            list.append(POSAction("結帳", icon: "credit-card") { model.beginCheckout(ticket) })
+        }
+        list.append(POSAction("結帳單", icon: "printer") { printBill(ticket) })
+        return list
+    }
+
+    private func occupiedMore(_ ticket: Ticket) -> [POSAction] {
+        [
+            POSAction("換桌", icon: "arrows-right-left") { startPick(.move(ticketId: ticket.id)) },
+            POSAction("併桌", icon: "link") { startPick(.merge(ticketId: ticket.id)) },
+            POSAction("改人數", icon: "user-group") { Task { await model.setGuests(ticket) } },
+        ]
     }
 
     private func occupiedInfo(_ ticket: Ticket, now: Date) -> some View {
@@ -758,6 +768,7 @@ struct FloorView: View {
                     Text(model.staffName(ticket.openedBy))
                         .font(.brand(16, .medium))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
                 FloorInfoCell(label: "人數") {
                     Text("\(ticket.guests) 位")
@@ -809,7 +820,8 @@ struct FloorView: View {
                     FloorInfoCell(label: "訂位") {
                         Text(r.name)
                             .font(.brand(16, .medium))
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.7)
                     }
                     FloorInfoCell(label: "人數") {
                         Text("\(r.partySize) 位")
@@ -838,21 +850,21 @@ struct FloorView: View {
                     .foregroundStyle(Theme.warningFG)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // 主要：訂位的客人到了；臨時帶別的客人收進「⋯」
+            ActionBar(
+                primary: POSAction("到了，入座", icon: "check") { seatReservation(r, at: i.table) },
+                more: [POSAction("帶其他客人", icon: "users") { seat(i.table) }],
+                size: .lg
+            )
+        } else {
             Button {
-                seatReservation(r, at: i.table)
+                seat(i.table)
             } label: {
-                Text("\(r.name) 到了，入座")
+                Text("帶位")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
         }
-        Button {
-            seat(i.table)
-        } label: {
-            Text("帶其他客人")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
     }
 
     @ViewBuilder
@@ -861,24 +873,11 @@ struct FloorView: View {
             .textRole(.small)
             .foregroundStyle(Theme.ink2)
             .fixedSize(horizontal: false, vertical: true)
-        Button {
-            clean(i.table, thenSeat: false)
-        } label: {
-            Label {
-                Text("清好了")
-            } icon: {
-                HeroIcon("sparkles", size: 16)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
-        Button {
-            clean(i.table, thenSeat: true)
-        } label: {
-            Text("清好了，直接帶位")
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
+        ActionBar(
+            primary: POSAction("清好了", icon: "sparkles") { clean(i.table, thenSeat: false) },
+            more: [POSAction("清好了，直接帶位", icon: "users") { clean(i.table, thenSeat: true) }],
+            size: .lg
+        )
     }
 
     @ViewBuilder
@@ -1339,17 +1338,7 @@ struct FloorView: View {
             .monospacedDigit()
             .foregroundStyle(Theme.ink2)
 
-        Button {
-            addTable()
-        } label: {
-            Label {
-                Text("新增桌子")
-            } icon: {
-                HeroIcon("plus", size: 15)
-            }
-        }
-        .buttonStyle(.brand(.primary, size: .md, fullWidth: true))
-
+        // 「新增桌子」在右上角（同一個動作一個畫面只放一次）
         if a.tables.isEmpty {
             Button(role: .destructive) {
                 deleteArea(a.id)
@@ -1834,33 +1823,33 @@ private struct FloorInfoCell<Content: View>: View {
 }
 
 /// 卡片下面一排小動作：圖示在上、字在下
-private struct FloorMiniTool: View {
-    let title: String
-    let icon: String
-    var accent = false
-    let action: () -> Void
+/// 卡片下面的次要動作：「⋯」＋最多兩個細框按鈕（撐滿寬度，字不截斷）
+private struct FloorActionRow: View {
+    let secondary: [POSAction]
+    let more: [POSAction]
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                HeroIcon(icon, size: 17)
-                    .foregroundStyle(accent ? Theme.accent : Theme.ink)
-                Text(title)
-                    .font(.brand(11.5, .medium))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+        HStack(spacing: 8) {
+            if !overflow.isEmpty {
+                MoreMenu(actions: overflow)
             }
-            .frame(maxWidth: .infinity, minHeight: 52)
-            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-            .overlay {
-                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                    .strokeBorder(Theme.line, lineWidth: 1)
+            ForEach(Array(secondary.prefix(2))) { a in
+                Button(action: a.perform) {
+                    HStack(spacing: 6) {
+                        if let icon = a.icon { HeroIcon(icon, size: 15) }
+                        Text(a.title)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
+                .disabled(!a.isEnabled)
             }
-            .contentShape(.rect)
         }
-        .buttonStyle(PressScale(scale: 0.95))
     }
+
+    private var overflow: [POSAction] { Array(secondary.dropFirst(2)) + more }
 }
 
 /// 編輯側欄的一欄：小字標題＋內容

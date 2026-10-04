@@ -5,8 +5,12 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 一位會員的資料卡：大頭像與名字（直接改）、等級與壽星、累積消費；今天的預約與開著的單；
-/// 儲值金（大數字＋儲值）、課程卡與會籍（圓環卡片＋買卡、續約）；備註卡（美業的配方、健身的身體狀況）；來店時間軸。
+/// 一位會員的資料卡：大頭像與名字、等級與壽星、累積消費；一條動作列；今天的預約與開著的單；
+/// 儲值金（大數字）、課程卡與會籍（圓環卡片）；備註卡（美業的配方、健身的身體狀況）；來店時間軸。
+///
+/// 按鈕照 docs/DESIGN.md 收成一條動作列：主要「開單」（已經有單就「繼續 A0xx」）、次要最多兩個（儲值；預約或報到）、
+/// 其他（改名字、改生日、買卡、重新查、收起）在「⋯」。課程卡快到期、過期、用完時卡片上才有一個「續約」「再買一張」。
+/// 儲值、生日都在右側鍵盤打（儲值方案是鍵盤上的快速鍵）。
 ///
 /// 後台是真的資料：打開時先顯示這台記得的，同時向後台重查一次。儲值、買卡都是開一張這位會員的單、直接結帳。
 struct MembersProfile: View {
@@ -14,7 +18,11 @@ struct MembersProfile: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let focus: MembersFocus
+    /// 窄的工作區（直的 iPad）：資料卡佔滿，上面一個「名單」回去
+    var compact = false
     var onClose: () -> Void
+    /// 右側鍵盤用完了（生日存好、儲值取消）：讓會員頁的鍵盤回去等電話
+    var onKeypadDone: () -> Void = {}
 
     enum Phase: Equatable {
         case loading
@@ -27,17 +35,17 @@ struct MembersProfile: View {
     enum Field: Hashable { case name, note, enroll }
 
     @State private var phase: Phase = .loading
+    @State private var editingName = false
     @State private var nameDraft = ""
     @State private var noteDraft = ""
     @State private var loadedName: String? = nil
     @State private var loadedNote: String? = nil
     @State private var savingName = false
     @State private var savingNote = false
-    @State private var nameProblem: String? = nil
+    /// 頭上的提醒（名字、生日存不進後台）
+    @State private var headerProblem: String? = nil
     @State private var noteProblem: String? = nil
     @State private var noteSavedAt: Date? = nil
-    /// 正在選要賣的儲值或課程卡
-    @State private var selling: ItemKind? = nil
     @State private var enrollName = ""
     @State private var enrolling = false
     @State private var enrollProblem: String? = nil
@@ -53,14 +61,23 @@ struct MembersProfile: View {
     }
 
     var body: some View {
-        Group {
-            if let m = member {
-                card(m)
-            } else {
-                switch phase {
-                case .notFound: notFound
-                case .failed(let why): failed(why)
-                case .loading, .fresh, .offline: loading
+        VStack(alignment: .leading, spacing: 14) {
+            if compact {
+                Button(action: onClose) {
+                    Label { Text("名單") } icon: { HeroIcon("arrow-left", size: 14) }
+                }
+                .buttonStyle(.brand(.quiet, size: .sm))
+                .accessibilityLabel("回到名單")
+            }
+            Group {
+                if let m = member {
+                    card(m)
+                } else {
+                    switch phase {
+                    case .notFound: notFound
+                    case .failed(let why): failed(why)
+                    case .loading, .fresh, .offline: loading
+                    }
                 }
             }
         }
@@ -74,13 +91,12 @@ struct MembersProfile: View {
         let now = Date()
         let account = model.account(for: m.ref)
         let problem = entryProblem(account, now: now)
-        let renew: (label: String, run: () -> Void)? = model.memberProducts(.pass).isEmpty ? nil : (label: "續約", run: { toggle(.pass) })
         return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                hero(m, now: now)
+                hero(m, account: account, now: now)
                     .reveal(0)
                 if let problem {
-                    Banner(text: problem, tone: .warning, action: renew)
+                    Banner(text: problem, tone: .warning)
                 }
                 today(m)
                 if let account {
@@ -100,84 +116,92 @@ struct MembersProfile: View {
 
     // MARK: 頭
 
-    private func hero(_ m: Member, now: Date) -> some View {
+    private func hero(_ m: Member, account: MemberAccount?, now: Date) -> some View {
         let open = model.openTickets(for: m)
-        // 在店裡：單子開著，或預約已到店（做完結帳的預約也是「服務中」狀態，不算）
+        // 在店裡：單子開著，或預約已到店
         let inStore = !open.isEmpty || model.memberBookings(for: m).contains { $0.status == .arrived }
-        return VStack(alignment: .leading, spacing: 22) {
+        return VStack(alignment: .leading, spacing: 20) {
             heroIdentity(m, now: now, inStore: inStore)
             stats(m, now: now)
-            heroActions(m, open: open)
+            actionBar(m, account: account, open: open, now: now)
         }
-        .padding(24)
+        .padding(compact ? 20 : 24)
         .background { heroBackground(seed: m.id) }
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous).strokeBorder(Theme.line, lineWidth: 1)
         }
+        .animation(anim, value: editingName)
     }
 
-    /// 大頭像、等級、壽星、名字（直接改）、電話與同步狀態
+    /// 大頭像、等級、壽星、名字、電話與同步狀態（沒有按鈕；改名字在「⋯」）
     private func heroIdentity(_ m: Member, now: Date, inStore: Bool) -> some View {
         let display = (m.name?.isEmpty ?? true) ? m.ref.maskedPhone : (m.name ?? "")
-        return HStack(alignment: .top, spacing: 20) {
-            MembersAvatar(name: display, seed: m.id, photoURL: m.photoURL, size: 96, inStore: inStore)
+        return HStack(alignment: .top, spacing: compact ? 16 : 20) {
+            MembersAvatar(name: display, seed: m.id, photoURL: m.photoURL, size: compact ? 72 : 96, inStore: inStore)
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
+                FlowLayout(spacing: 8, rowSpacing: 6) {
                     if let tier = m.tierName { MembersTierTag(tier: tier) }
                     if POSModel.isBirthdayMonth(m.birthday, now: now), let b = POSModel.birthdayText(m.birthday) {
                         MembersBirthdayBadge(text: "本月壽星 \(b)")
                     }
                     if inStore { StatusBadge("在店裡", tone: .gold) }
                 }
-                nameField(m)
-                HStack(spacing: 12) {
-                    Text(m.ref.maskedPhone)
-                        .font(.brand(14, .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.ink2)
-                    syncStatus
+                if editingName {
+                    nameEditor(m)
+                } else {
+                    Text(display)
+                        .font(.brand(compact ? 26 : 32, .medium))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text(m.ref.maskedPhone)
+                    .font(.brand(14, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.ink2)
+                syncStatus
+                if let headerProblem {
+                    Text(headerProblem)
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.warningFG)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 8)
-            Button(action: onClose) {
-                HeroIcon("x-mark", size: 15)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 36))
-            .accessibilityLabel("關閉")
+            Spacer(minLength: 0)
         }
     }
 
-    /// 開單（已經有開著的單就接著點）、預約、報到
-    private func heroActions(_ m: Member, open: [Ticket]) -> some View {
-        HStack(spacing: 10) {
+    /// 改名字（從「⋯」打開）：一格字、存、取消
+    private func nameEditor(_ m: Member) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            TextField("輸入名字", text: $nameDraft)
+                .font(.brand(compact ? 24 : 28, .medium))
+                .textFieldStyle(.plain)
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .submitLabel(.done)
+                .focused($editing, equals: .name)
+                .onSubmit { Task { await saveName(m) } }
+                .padding(.bottom, 4)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Theme.accent).frame(height: 1.5)
+                }
+                .accessibilityLabel("會員名字")
             Button {
-                model.openMemberTicket(m)
+                Task { await saveName(m) }
             } label: {
-                Label { Text(open.last.map { "接著點 \($0.number)" } ?? "開單") } icon: { HeroIcon("plus", size: 15) }
+                if savingName { ProgressView().controlSize(.small) } else { Text("存") }
             }
-            .buttonStyle(.brand(.primary, size: .md, arrow: true))
-            if model.visibleSections.contains(.appointments) {
-                Button {
-                    model.go(.appointments)
-                } label: {
-                    Label { Text(vocab.book) } icon: { HeroIcon("calendar", size: 15) }
-                }
-                .buttonStyle(.brand(.ghost, size: .md))
-            }
-            if model.mode.usesCheckIn && model.visibleSections.contains(.checkIn) {
-                Button {
-                    model.go(.checkIn)
-                } label: {
-                    Label { Text("報到") } icon: { HeroIcon("qr-code", size: 15) }
-                }
-                .buttonStyle(.brand(.ghost, size: .md))
-            }
+            .buttonStyle(.brand(.primary, size: .sm))
+            .disabled(savingName)
+            Button("取消") { cancelNameEdit() }
+                .buttonStyle(.brand(.quiet, size: .sm))
         }
     }
 
-    /// 頭的底：紙色卡片，左上角一團這位會員的顏色暈開
+    /// 頭的底：紙色卡片，角落暈開這位會員的顏色（放在 overlay：不會把底撐得比卡片大）
     private func heroBackground(seed: String) -> some View {
-        // 暈開的色塊放在 overlay 裡：不會把底撐得比卡片大
         Theme.surface
             .overlay(alignment: .topLeading) {
                 Circle()
@@ -194,58 +218,6 @@ struct MembersProfile: View {
                     .offset(x: 80, y: 90)
             }
             .clipShape(RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous))
-    }
-
-    @ViewBuilder
-    private func nameField(_ m: Member) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            TextField("輸入名字", text: $nameDraft)
-                .font(.brand(32, .medium))
-                .textFieldStyle(.plain)
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-                .submitLabel(.done)
-                .focused($editing, equals: .name)
-                .onSubmit { Task { await saveName(m) } }
-                .accessibilityLabel("會員名字")
-            if nameDirty {
-                Button {
-                    Task { await saveName(m) }
-                } label: {
-                    if savingName { ProgressView().controlSize(.small) } else { HeroIcon("check", size: 16) }
-                }
-                .buttonStyle(SquareIconButtonStyle(size: 36))
-                .accessibilityLabel("儲存名字")
-                Button {
-                    nameDraft = loadedName ?? ""
-                    nameProblem = nil
-                    editing = nil
-                } label: {
-                    HeroIcon("arrow-uturn-left", size: 14)
-                }
-                .buttonStyle(SquareIconButtonStyle(size: 36))
-                .accessibilityLabel("還原名字")
-            } else if editing != .name {
-                HeroIcon("pencil-square", size: 16)
-                    .foregroundStyle(Theme.faint)
-                    .accessibilityHidden(true)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(editing == .name ? Theme.accent : Color.clear)
-                .frame(height: 1.5)
-                .offset(y: 3)
-        }
-        if let nameProblem {
-            Text(nameProblem)
-                .textRole(.xs)
-                .foregroundStyle(Theme.warningFG)
-        }
-    }
-
-    private var nameDirty: Bool {
-        nameDraft.trimmingCharacters(in: .whitespacesAndNewlines) != (loadedName ?? "")
     }
 
     @ViewBuilder
@@ -266,10 +238,10 @@ struct MembersProfile: View {
             .font(.brand(12.5, .medium))
             .foregroundStyle(Theme.muted)
         case .offline(let why):
-            HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(Theme.warningFG).frame(width: 6, height: 6)
                 Text("這台記得的資料：\(why)")
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .font(.brand(12.5, .medium))
             .foregroundStyle(Theme.warningFG)
@@ -278,39 +250,115 @@ struct MembersProfile: View {
         }
     }
 
+    // MARK: 動作列（整張資料卡只有這一條）
+
+    private func actionBar(_ m: Member, account: MemberAccount?, open: [Ticket], now: Date) -> some View {
+        let topUps = account == nil ? [] : model.memberProducts(.storedValue)
+        var secondary: [POSAction] = []
+        if !topUps.isEmpty {
+            secondary.append(POSAction("儲值", icon: "banknotes") { topUp(m) })
+        }
+        let canCheckIn = model.mode.usesCheckIn && model.visibleSections.contains(.checkIn)
+        let canBook = model.visibleSections.contains(.appointments)
+        if canCheckIn {
+            secondary.append(POSAction("報到", icon: "qr-code") { model.go(.checkIn) })
+        }
+        if canBook {
+            // 健身房：報到優先，約教練擠到「⋯」（ActionBar 超過兩個次要的自動收進去）
+            secondary.append(POSAction(vocab.book, icon: "calendar") { model.go(.appointments) })
+        }
+
+        var more: [POSAction] = []
+        for t in open.dropLast() {
+            more.append(POSAction("打開 \(t.number)", icon: "queue-list") { model.openExistingTicket(t) })
+        }
+        if account != nil {
+            let renewable = Set(cardActions(m, account: account, now: now).keys.compactMap { id in account?.passes.first { $0.id == id }?.name })
+            for item in model.memberProducts(.pass) where !renewable.contains(item.name) {
+                let start = model.renewalStart(of: item, for: m).map { "（接在 \(MembersStyle.monthDay($0)) 後）" } ?? ""
+                more.append(POSAction("買\(item.name) \(item.price.short)\(start)", icon: "ticket") { sell(item, to: m) })
+            }
+        }
+        more.append(POSAction("改名字", icon: "pencil-square") { startNameEdit() })
+        more.append(POSAction("改生日", icon: "cake") { editBirthday(m) })
+        more.append(POSAction("向後台重新查", icon: "arrow-path") { Task { await refresh() } })
+        if !compact {
+            more.append(POSAction("收起", icon: "x-mark") { onClose() })
+        }
+
+        let primary = POSAction(open.last.map { "繼續 \($0.number)" } ?? "開單", icon: open.isEmpty ? "plus" : "queue-list") {
+            model.openMemberTicket(m)
+        }
+        return ActionBar(primary: primary, secondary: secondary, more: more, size: .md)
+    }
+
     // MARK: 數字
 
     private func stats(_ m: Member, now: Date) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            stat("累積消費") {
-                MoneyText(money: m.lifetimeSpend, role: .number)
+        // 夠寬一排四格；不夠就兩排（數字不縮到看不清楚）
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 0) {
+                spendStat(m)
+                statDivider
+                visitsStat(m)
+                statDivider
+                lastSeenStat(m, now: now)
+                statDivider
+                birthdayStat(m, now: now)
             }
-            statDivider
-            stat("來店") {
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text("\(m.visits)").textRole(.number)
-                    Text("次").font(.brand(13, .medium)).foregroundStyle(Theme.muted)
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 0) {
+                    spendStat(m)
+                    statDivider
+                    visitsStat(m)
                 }
-            }
-            statDivider
-            stat("上次來") {
-                Text(lastSeenText(m, now: now))
-                    .font(.brand(22, .medium))
-                    .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            statDivider
-            stat("生日") {
-                Text(POSModel.birthdayText(m.birthday) ?? "—")
-                    .font(.brand(22, .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(POSModel.isBirthdayMonth(m.birthday, now: now) ? Theme.accentText : Theme.ink)
+                HStack(alignment: .top, spacing: 0) {
+                    lastSeenStat(m, now: now)
+                    statDivider
+                    birthdayStat(m, now: now)
+                }
             }
         }
         .padding(.vertical, 14)
         .overlay(alignment: .top) { Rule() }
         .overlay(alignment: .bottom) { Rule() }
+    }
+
+    private func spendStat(_ m: Member) -> some View {
+        stat("累積消費") {
+            MoneyText(money: m.lifetimeSpend, role: .number)
+                .fixedSize()
+        }
+    }
+
+    private func visitsStat(_ m: Member) -> some View {
+        stat("來店") {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("\(m.visits)").textRole(.number)
+                Text("次").font(.brand(13, .medium)).foregroundStyle(Theme.muted)
+            }
+            .fixedSize()
+        }
+    }
+
+    private func lastSeenStat(_ m: Member, now: Date) -> some View {
+        stat("上次來") {
+            Text(lastSeenText(m, now: now))
+                .font(.brand(22, .medium))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .fixedSize()
+        }
+    }
+
+    private func birthdayStat(_ m: Member, now: Date) -> some View {
+        stat("生日") {
+            Text(POSModel.birthdayText(m.birthday) ?? "—")
+                .font(.brand(22, .medium))
+                .monospacedDigit()
+                .foregroundStyle(POSModel.isBirthdayMonth(m.birthday, now: now) ? Theme.accentText : Theme.ink)
+                .fixedSize()
+        }
     }
 
     private func stat<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
@@ -342,7 +390,7 @@ struct MembersProfile: View {
         return days < 60 ? "\(max(days, 1)) 天前" : MembersStyle.monthDay(d)
     }
 
-    // MARK: 今天
+    // MARK: 今天（只是狀態：開單、報到在動作列）
 
     @ViewBuilder
     private func today(_ m: Member) -> some View {
@@ -359,12 +407,7 @@ struct MembersProfile: View {
                                   badge: paid ? "已結帳" : r.status.label(for: r.kind), tone: paid ? .neutral : bookingTone(r.status))
                     }
                     ForEach(open) { t in
-                        Button {
-                            model.openExistingTicket(t)
-                        } label: {
-                            todayChip(icon: "queue-list", text: "單子開著 \(t.number)・\(t.totals.total.formatted)", badge: "打開", tone: .gold)
-                        }
-                        .buttonStyle(.press)
+                        todayChip(icon: "queue-list", text: "單子 \(t.number)・\(t.totals.total.formatted)", badge: "開著", tone: .gold)
                     }
                     if let c = checkIn {
                         todayChip(icon: "qr-code", text: "\(c.at.clockText) 報到・\(c.passName ?? "單次入場")", badge: nil, tone: .active)
@@ -381,13 +424,14 @@ struct MembersProfile: View {
             Text(text)
                 .font(.brand(14, .medium))
                 .foregroundStyle(Theme.ink)
-                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
             if let badge { StatusBadge(badge, tone: tone) }
         }
         .padding(.horizontal, 14)
-        .frame(minHeight: 44)
+        .padding(.vertical, 10)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
         .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
+        .accessibilityElement(children: .combine)
     }
 
     private func bookingTone(_ s: ReservationStatus) -> Tone {
@@ -405,12 +449,12 @@ struct MembersProfile: View {
         return TaipeiTime.businessDate(c.at, cutoffHour: model.store.businessDayCutoffHour) == model.businessDate ? c : nil
     }
 
-    /// 健身房：沒有能入場的卡（過期、用完）就提醒
+    /// 健身房：沒有能入場的卡（過期、用完）就提醒（續約在那張卡上）
     private func entryProblem(_ account: MemberAccount?, now: Date) -> String? {
         guard model.mode.usesCheckIn, let account, account.checkInPasses(at: now).isEmpty else { return nil }
         let entry = account.passes.filter { $0.spec.checkIn && $0.status != .cancelled }
         guard let latest = entry.max(by: { ($0.expiresAt ?? $0.startsAt) < ($1.expiresAt ?? $1.startsAt) }) else {
-            return "還沒有會籍或課程卡：入場要先買卡，或收單次入場"
+            return "還沒有會籍或課程卡：入場要先買卡（「⋯」），或收單次入場"
         }
         if let e = latest.expiresAt, e <= now {
             let days = max(1, Int((now.timeIntervalSince(e) / 86_400).rounded(.up)))
@@ -426,57 +470,40 @@ struct MembersProfile: View {
 
     private func accountSection(_ m: Member, account: MemberAccount, now: Date) -> some View {
         let topUps = model.memberProducts(.storedValue)
-        let passItems = model.memberProducts(.pass)
         let showWallet = m.wallet != nil || account.wallet.cents != 0 || !topUps.isEmpty
         let passes = sortedPasses(account.passes, now: now)
-        let showPasses = !passes.isEmpty || !passItems.isEmpty
+        let actions = cardActions(m, account: account, now: now)
         let pending = !model.state.pendingAccountMoves(memberId: m.id, excluding: Set(m.accountEventIds ?? [])).isEmpty
         return VStack(alignment: .leading, spacing: 22) {
             if showWallet {
-                walletCard(m, wallet: account.wallet, items: topUps, pending: pending)
+                walletCard(wallet: account.wallet, plans: topUps, pending: pending)
             }
-            if showPasses {
-                passesBlock(m, passes: passes, items: passItems, now: now)
+            if !passes.isEmpty {
+                passesBlock(passes: passes, actions: actions, now: now)
             }
         }
     }
 
-    /// 儲值金：深色的卡、大大的餘額、品牌橘的「儲值」
-    private func walletCard(_ m: Member, wallet: Money, items: [MenuItem], pending: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 7) {
-                        Rectangle().fill(Theme.accent).frame(width: 6, height: 6)
-                        Text("儲值金")
-                            .font(.brand(12.5, .medium))
-                            .foregroundStyle(Theme.inverseMuted)
-                    }
-                    MoneyText(money: wallet, role: .stat, color: wallet.isNegative ? Theme.dangerFG : Theme.onInverse)
-                    Text(pending ? "含這台今天的儲值、扣款（同步後和後台一樣）" : "後台的餘額")
-                        .font(.brand(12, .regular))
-                        .foregroundStyle(Theme.inverseMuted)
-                }
-                Spacer(minLength: 12)
-                if !items.isEmpty {
-                    Button {
-                        toggle(.storedValue)
-                    } label: {
-                        Label { Text(selling == .storedValue ? "收起" : "儲值") } icon: {
-                            HeroIcon(selling == .storedValue ? "chevron-down" : "plus", size: 15)
-                        }
-                    }
-                    .buttonStyle(.brand(.accent, size: .md))
-                }
+    /// 儲值金：深色的卡、大大的餘額（儲值在動作列；這裡寫店裡有哪些方案）
+    private func walletCard(wallet: Money, plans: [MenuItem], pending: Bool) -> some View {
+        let fixed = plans.filter { !$0.openPrice }.map(POSModel.planLabel)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 7) {
+                Rectangle().fill(Theme.accent).frame(width: 6, height: 6)
+                Text("儲值金")
+                    .font(.brand(12.5, .medium))
+                    .foregroundStyle(Theme.inverseMuted)
             }
-            if selling == .storedValue {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("選一個方案：開一張單、直接結帳")
-                        .font(.brand(12.5, .medium))
-                        .foregroundStyle(Theme.inverseMuted)
-                    sellChips(m, items: items, kind: .storedValue)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
+            MoneyText(money: wallet, role: .stat, color: wallet.isNegative ? Theme.dangerFG : Theme.onInverse)
+            Text(pending ? "含這台今天的儲值、扣款（同步後和後台一樣）" : "後台的餘額")
+                .font(.brand(12, .regular))
+                .foregroundStyle(Theme.inverseMuted)
+            if !fixed.isEmpty {
+                Text("儲值方案：" + fixed.joined(separator: "・"))
+                    .font(.brand(12.5, .medium))
+                    .foregroundStyle(Theme.onInverse.opacity(0.82))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 4)
             }
         }
         .padding(24)
@@ -498,10 +525,10 @@ struct MembersProfile: View {
                 }
         }
         .clipShape(RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous))
-        .animation(anim, value: selling)
+        .accessibilityElement(children: .combine)
     }
 
-    private func passesBlock(_ m: Member, passes: [MemberPass], items: [MenuItem], now: Date) -> some View {
+    private func passesBlock(passes: [MemberPass], actions: [String: POSAction], now: Date) -> some View {
         let usable = passes.filter { $0.isUsable(at: now) }.count
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -509,38 +536,13 @@ struct MembersProfile: View {
                 Text(usable > 0 ? "\(usable) 張能用" : "沒有能用的")
                     .font(.brand(12.5, .medium))
                     .foregroundStyle(Theme.muted)
-                Spacer(minLength: 8)
-                if !items.isEmpty {
-                    Button {
-                        toggle(.pass)
-                    } label: {
-                        Label { Text(selling == .pass ? "收起" : vocab.buyPass) } icon: {
-                            HeroIcon(selling == .pass ? "chevron-down" : "plus", size: 14)
-                        }
-                    }
-                    .buttonStyle(.brand(.ghost, size: .sm))
-                }
             }
-            if selling == .pass {
-                sellChips(m, items: items, kind: .pass)
-                    .padding(14)
-                    .background(Theme.accentSoft, in: .rect(cornerRadius: Metric.radius))
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
-            if passes.isEmpty {
-                Text("還沒有\(vocab.passesTitle)")
-                    .textRole(.small)
-                    .foregroundStyle(Theme.muted)
-                    .padding(.vertical, 4)
-            } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 12)], alignment: .leading, spacing: 12) {
-                    ForEach(passes) { p in
-                        MembersPassCard(pass: p, now: now)
-                    }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], alignment: .leading, spacing: 12) {
+                ForEach(passes) { p in
+                    MembersPassCard(pass: p, now: now, action: actions[p.id])
                 }
             }
         }
-        .animation(anim, value: selling)
     }
 
     /// 能用的先（快到期的在前）、還沒開始的續約、最後是用完過期的（最近三張）
@@ -555,40 +557,27 @@ struct MembersProfile: View {
         return usable + upcoming + Array(done)
     }
 
-    private func sellChips(_ m: Member, items: [MenuItem], kind: ItemKind) -> some View {
-        FlowLayout(spacing: 8, rowSpacing: 8) {
-            ForEach(items) { item in
-                OptionChip(title: item.openPrice ? "自訂金額" : item.name, detail: chipDetail(item, m), selected: false) {
-                    selling = nil
-                    Task {
-                        if kind == .storedValue {
-                            await model.sellTopUp(item, to: m)
-                        } else {
-                            await model.sellPass(item, to: m)
-                        }
-                    }
-                }
+    /// 卡片上的「續約」「再買一張」：快到期、過期、用完的才有；同一種卡只放在最新的那一張；
+    /// 已經續約過（同一種還有沒快到期的、或還沒開始的）就不放
+    private func cardActions(_ m: Member, account: MemberAccount?, now: Date) -> [String: POSAction] {
+        guard let account else { return [:] }
+        var out: [String: POSAction] = [:]
+        let byName = Dictionary(grouping: account.passes.filter { $0.status != .cancelled }, by: \.name)
+        for (_, group) in byName {
+            let covered = group.contains { p in
+                let s = MembersStyle.state(of: p, at: now)
+                return s == .active || s == .upcoming
             }
+            guard !covered,
+                  let latest = group.max(by: { ($0.expiresAt ?? $0.startsAt) < ($1.expiresAt ?? $1.startsAt) }),
+                  let item = model.passItem(for: latest) else { continue }
+            let title = latest.spec.kind == .period ? "續約 \(item.price.short)" : "再買一張 \(item.price.short)"
+            out[latest.id] = POSAction(title, icon: "arrow-path") { sell(item, to: m) }
         }
+        return out
     }
 
-    private func chipDetail(_ item: MenuItem, _ m: Member) -> String {
-        if item.openPrice { return "右邊鍵盤打金額" }
-        if item.itemKind == .storedValue {
-            if let credit = item.credit, credit > item.price { return "\(item.price.short) 入 \(credit.short)" }
-            return item.price.short
-        }
-        if let start = model.renewalStart(of: item, for: m) {
-            return "\(item.price.short)・接在 \(MembersStyle.monthDay(start)) 後"
-        }
-        return item.price.short
-    }
-
-    private func toggle(_ kind: ItemKind) {
-        withAnimation(anim) { selling = selling == kind ? nil : kind }
-    }
-
-    // MARK: 備註
+    // MARK: 備註（點一下就能改；改了才出現一個「存到後台」）
 
     private func noteCard(_ m: Member) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -596,12 +585,6 @@ struct MembersProfile: View {
                 Eyebrow(vocab.noteTitle)
                 Spacer(minLength: 8)
                 if noteDirty {
-                    Button("還原") {
-                        noteDraft = loadedNote ?? ""
-                        noteProblem = nil
-                        editing = nil
-                    }
-                    .buttonStyle(.brand(.quiet, size: .sm))
                     Button {
                         Task { await saveNote(m) }
                     } label: {
@@ -638,9 +621,10 @@ struct MembersProfile: View {
                 }
             }
             if let noteProblem {
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     HeroIcon("information-circle", size: 14)
                     Text(noteProblem)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.brand(12.5, .medium))
                 .foregroundStyle(Theme.warningFG)
@@ -702,7 +686,7 @@ struct MembersProfile: View {
                         MembersTimelineRow(entry: e, isLast: i == entries.count - 1)
                     }
                 }
-                .padding(20)
+                .padding(compact ? 16 : 20)
                 .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg))
                 .overlay { RoundedRectangle(cornerRadius: Metric.radiusLg).strokeBorder(Theme.line) }
             }
@@ -759,17 +743,11 @@ struct MembersProfile: View {
                     .focused($editing, equals: .enroll)
                     .submitLabel(.join)
                     .onSubmit { Task { await enroll() } }
-                HStack(spacing: 10) {
-                    Button {
-                        Task { await enroll() }
-                    } label: {
-                        if enrolling { ProgressView().controlSize(.small) } else { Text("加入會員") }
-                    }
-                    .buttonStyle(.brand(.accent, size: .lg, arrow: true))
-                    .disabled(enrolling)
-                    Button("不用了", action: onClose)
-                        .buttonStyle(.brand(.quiet, size: .lg))
-                }
+                ActionBar(
+                    primary: POSAction(enrolling ? "加入中…" : "加入會員", icon: "plus", enabled: !enrolling) { Task { await enroll() } },
+                    secondary: compact ? [] : [POSAction("不用了") { onClose() }],
+                    size: .lg, accent: true
+                )
                 if let enrollProblem {
                     Text(enrollProblem)
                         .textRole(.xs)
@@ -794,10 +772,10 @@ struct MembersProfile: View {
         let name = focus.ref?.name ?? MemberRef(phone: focus.phone).maskedPhone
         return VStack(alignment: .leading, spacing: 20) {
             HStack(spacing: 20) {
-                MembersAvatar(name: name, seed: focus.ref?.id ?? focus.phone, size: 96)
+                MembersAvatar(name: name, seed: focus.ref?.id ?? focus.phone, size: compact ? 72 : 96)
                 VStack(alignment: .leading, spacing: 8) {
                     Text(name)
-                        .font(.brand(32, .medium))
+                        .font(.brand(compact ? 26 : 32, .medium))
                         .foregroundStyle(Theme.ink)
                     HStack(spacing: 8) {
                         ProgressView().controlSize(.small)
@@ -849,27 +827,62 @@ struct MembersProfile: View {
     private func sync(_ m: Member?) {
         guard let m else { return }
         let name = m.name ?? ""
-        if loadedName == nil || nameDraft.trimmingCharacters(in: .whitespacesAndNewlines) == loadedName { nameDraft = name }
+        if !editingName { nameDraft = name }
         loadedName = name
         let note = m.note ?? ""
         if loadedNote == nil || noteDraft.trimmingCharacters(in: .whitespacesAndNewlines) == loadedNote { noteDraft = note }
         loadedNote = note
     }
 
+    private func topUp(_ m: Member) {
+        Task {
+            let started = await model.askTopUp(for: m)
+            if !started { onKeypadDone() }
+        }
+    }
+
+    private func sell(_ item: MenuItem, to m: Member) {
+        Task {
+            await model.sellPass(item, to: m)
+            if model.checkoutTicketId == nil { onKeypadDone() }
+        }
+    }
+
+    private func editBirthday(_ m: Member) {
+        Task {
+            headerProblem = await model.askBirthday(for: m)
+            onKeypadDone()
+        }
+    }
+
+    private func startNameEdit() {
+        headerProblem = nil
+        nameDraft = loadedName ?? ""
+        editingName = true
+        editing = .name
+    }
+
+    private func cancelNameEdit() {
+        nameDraft = loadedName ?? ""
+        editingName = false
+        editing = nil
+    }
+
     private func saveName(_ m: Member) async {
-        guard nameDirty else {
-            editing = nil
+        let trimmed = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != (loadedName ?? "") else {
+            cancelNameEdit()
             return
         }
         guard !savingName else { return }
         savingName = true
-        let problem = await model.saveMemberName(nameDraft, for: m)
+        let problem = await model.saveMemberName(trimmed, for: m)
         savingName = false
-        nameProblem = problem
+        headerProblem = problem
         if problem == nil {
-            let trimmed = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             loadedName = trimmed
             nameDraft = trimmed
+            editingName = false
             editing = nil
             model.show("名字改好了：\(trimmed)")
         }

@@ -15,6 +15,7 @@ import SwiftUI
 ///   └────┴──────────────────────┴────────────┴──────────┘
 ///
 /// 直的 iPad（寬度不夠四欄）：單子收進右上角的按鈕，點了用面板打開；右側鍵盤照樣固定在最右邊。
+/// 不用打數字的視窗（`.dockPanel`）蓋在右側鍵盤那一欄，要打數字時自動讓開。
 struct MainShell: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -93,6 +94,11 @@ struct MainShell: View {
                     }
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
+            }
+            // 不用打數字的視窗（入座選桌、選服務、退款的選項…）蓋在右側鍵盤那一欄；要打數字時讓開（見 DockPanel.swift）
+            .overlayPreferenceValue(DockPanelKey.self, alignment: .trailing) { item in
+                DockPanelHost(item: item, asking: keypad.isAsking)
+                    .frame(width: wide ? Metric.dock : Metric.dockNarrow)
             }
             .onChange(of: showsTicket) { _, v in if !v { showTicketSheet = false } }
             .onChange(of: roomy) { _, v in if v { showTicketSheet = false } }
@@ -213,6 +219,8 @@ struct MainShell: View {
             return .handled
         case .escape:
             scan = ""
+            // 沒在問數字：交給右側面板的「關掉」
+            guard keypad.isAsking else { return .ignored }
             keypad.cancel()
             return .handled
         default:

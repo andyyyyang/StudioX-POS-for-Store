@@ -9,10 +9,14 @@ import SwiftUI
 /// 進行中（看板：點餐中 → 出餐中 → 用餐中 → 待結帳）
 ///   ┌ Open tickets ─────────────────────────── [進行中 5][全部 23] ┐
 ///   │ ● 點餐中 1   │ ● 出餐中 2        │ ● 用餐中 1   │ ● 待結帳 1  │
-///   │ ┌─────────┐  │ ┌──────────────┐  │              │             │
-///   │ │A5   A021│  │ │A2 4位・34分 ●●○│  │              │             │
-///   │ │[點餐][結帳]│ │ │[點餐][結帳 →] │  │              │             │
+///   │ ┌─────────┐  │ ┌──────────────┐  │              │ ┌─────────┐ │
+///   │ │A5   A021│  │ │A2 4位・34分 ●●○│  │              │ │A7   A019│ │
+///   │ │NT$ 320  │  │ │NT$ 1,320     │  │              │ │[ 結帳 →]│ │
+///   │ └─────────┘  │ └──────────────┘  │              │ └─────────┘ │
+///   │ 選起來的：A2・A021・NT$1,320 ··························· [ 點餐 ] │
 ///   └──────────────────────────────────────────────────────────────┘
+///   卡片點一下＝選起來（右邊出現單子：送單、結帳、印結帳單都在那裡）；下面固定一條「點餐」。
+///   卡片上只有「待結帳」那一欄有一個「結帳」快捷。
 ///
 /// 全部（左邊一天的清單、右邊明細）
 ///   ┌ ‹ 今天・10月4日 ›   ┬───────────────────────────────────────┐
@@ -21,7 +25,7 @@ import SwiftUI
 ///   │ A2・4 位   已結帳  │ [林小涵 金卡會員]                        │
 ///   │  NT$2,680  13:40  │ 品項（規格、設計師、卡抵）…  金額          │
 ///   │ 王小美     已換貨  │ 付款・發票・換貨・退款                    │
-///   │                   │ [ 補印收據 ][ 換貨 ][ 退款 ][…]           │
+///   │                   │ [⋯][ 換貨 ][ 補印收據 ··············· ]   │
 ///   └───────────────────┴────────────────────────────────────────┘
 ///
 /// 明細不用系統的 sheet：sheet 會蓋住右側鍵盤，而退款金額、統編、愛心碼、換貨件數、主管 PIN 都要在鍵盤上打，
@@ -162,22 +166,40 @@ struct OrdersView: View {
             EmptyState(icon: "queue-list", title: "沒有進行中的單", message: "從「點餐」或「桌位」開單，就會出現在這裡")
         } else {
             let kitchen = model.features.kitchen
-            GeometryReader { geo in
-                // 一欄至少 264 寬；工作區夠寬就四欄排滿，不夠就左右滑
-                let width = max(264, (geo.size.width - 56 - 48) / 4)
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 16) {
-                        ForEach(OrdersLane.allCases) { lane in
-                            OrdersLaneColumn(lane: lane, tickets: openTickets.filter { OrdersLane.of($0, kitchen: kitchen) == lane })
-                                .frame(width: width)
+            VStack(spacing: 0) {
+                GeometryReader { geo in
+                    // 一欄至少 264 寬；工作區夠寬就四欄排滿，不夠就左右滑
+                    let width = max(264, (geo.size.width - 56 - 48) / 4)
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: 16) {
+                            ForEach(OrdersLane.allCases) { lane in
+                                OrdersLaneColumn(lane: lane, tickets: openTickets.filter { OrdersLane.of($0, kitchen: kitchen) == lane })
+                                    .frame(width: width)
+                            }
                         }
+                        .padding(.horizontal, 28)
+                        .frame(height: geo.size.height, alignment: .top)
                     }
-                    .padding(.horizontal, 28)
-                    .frame(height: geo.size.height, alignment: .top)
+                    .scrollIndicators(.hidden)
                 }
-                .scrollIndicators(.hidden)
+                // 選起來的那一張：動作在下面固定的一條（送單、結帳、印結帳單在右邊的單子裡）
+                if let t = boardSelection(in: openTickets), canOrderHere {
+                    OrdersBoardSelectionBar(ticket: t)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(Motion.fast, value: model.selectedTicketId)
         }
+    }
+
+    private func boardSelection(in list: [Ticket]) -> Ticket? {
+        guard let id = model.selectedTicketId else { return nil }
+        return list.first(where: { $0.id == id })
+    }
+
+    /// 這台有點餐頁、這個崗位能開單（報到接待、只收錢的櫃台沒有「點餐」）
+    private var canOrderHere: Bool {
+        model.role.takesOrders && model.visibleSections.contains(.order)
     }
 
     // MARK: 全部：一天的清單＋明細
@@ -534,7 +556,7 @@ private struct OrdersLaneColumn: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(tickets) { t in
-                            OrdersTicketCard(ticket: t)
+                            OrdersTicketCard(ticket: t, lane: lane)
                         }
                     }
                     .padding(.bottom, 24)
@@ -568,12 +590,17 @@ private struct OrdersLaneColumn: View {
     private var laneTotal: Money { Money.sum(tickets.map { $0.totals.total }) }
 }
 
-/// 看板上的一張單：點一下＝選起來（右邊出現單子）；兩個按鈕直接去點餐、結帳
+/// 看板上的一張單：整張點一下＝選起來（右邊出現單子、下面出現「點餐」）。
+/// 卡片上不放按鈕列；只有「待結帳」那一欄有一個「結帳」快捷（印了結帳單，下一步一定是結帳）
 private struct OrdersTicketCard: View {
     @Environment(POSModel.self) private var model
     let ticket: Ticket
+    let lane: OrdersLane
 
     private var selected: Bool { model.selectedTicketId == ticket.id }
+
+    /// 收錢的崗位才有（報到接待開了單交給櫃台）；選起來時右邊單子裡就有「結帳」，卡片上不重複
+    private var showsQuickCheckout: Bool { lane == .billing && model.role.takesPayment && !selected }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -581,8 +608,8 @@ private struct OrdersTicketCard: View {
             metaRow
             Rule(color: Theme.hair)
             amountRow
-            if model.role.takesOrders || model.role.takesPayment {
-                actionRow
+            if showsQuickCheckout {
+                quickCheckout
             }
         }
         .padding(16)
@@ -667,30 +694,56 @@ private struct OrdersTicketCard: View {
         }
     }
 
-    /// 點餐要能開單的崗位；結帳要能收錢的崗位（報到接待開了單交給櫃台）
-    private var actionRow: some View {
-        HStack(spacing: 8) {
-            if model.role.takesOrders {
-                Button {
-                    model.selectedTicketId = ticket.id
-                    model.go(.order)
-                } label: {
-                    Text("點餐")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.ghost, size: .sm, fullWidth: true))
-            }
-            if model.role.takesPayment {
-                Button {
-                    model.beginCheckout(ticket)
-                } label: {
-                    Text("結帳")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.primary, size: .sm, fullWidth: true, arrow: true))
-                .disabled(ticket.activeLines.isEmpty)
-            }
+    /// 待結帳的快捷：一按就到收款
+    private var quickCheckout: some View {
+        Button {
+            model.beginCheckout(ticket)
+        } label: {
+            Text("結帳")
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.brand(.primary, size: .sm, fullWidth: true, arrow: true))
+        .disabled(ticket.activeLines.isEmpty)
+    }
+}
+
+/// 看板選起來的那一張：固定在看板下面的一條。只放「點餐」：送單、結帳、印結帳單、作廢都在右邊的單子裡，不重複
+private struct OrdersBoardSelectionBar: View {
+    @Environment(POSModel.self) private var model
+    let ticket: Ticket
+
+    var body: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(ticket.title(floor: model.floor))・\(ticket.number)")
+                    .font(.brand(15.5, .semibold))
+                    .foregroundStyle(Theme.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Text("\(ticket.itemCount) 項・\(ticket.totals.total.formatted)")
+                    .font(.brand(13, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 12)
+            Button {
+                model.selectedTicketId = nil
+                model.touch()
+            } label: {
+                HeroIcon("x-mark", size: 15)
+            }
+            .buttonStyle(SquareIconButtonStyle(size: 40))
+            .accessibilityLabel("取消選取")
+            ActionBar(primary: POSAction(ticket.exchange != nil ? "加要換的商品" : "點餐", icon: "plus-circle") {
+                model.selectedTicketId = ticket.id
+                model.go(.order)
+            }, fillPrimary: false)
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 12)
+        .background(Theme.surface)
+        .overlay(alignment: .top) { Rule() }
     }
 }
 
@@ -1309,33 +1362,33 @@ private struct OrdersOpenDetail: View {
                 .padding(24)
             }
             .scrollIndicators(.hidden)
-            if model.role.takesOrders || model.role.takesPayment {
+            if checkoutAction != nil || orderAction != nil {
                 OrdersDetailBottomBar {
-                    HStack(spacing: 10) {
-                        if model.role.takesOrders {
-                            Button {
-                                model.selectedTicketId = ticket.id
-                                model.go(.order)
-                            } label: {
-                                Text(ticket.exchange != nil ? "加要換的商品" : "點餐")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
-                        }
-                        // 結帳要能收錢的崗位（櫃台、前場）；報到接待開了單交給櫃台
-                        if model.role.takesPayment {
-                            Button {
-                                model.beginCheckout(ticket)
-                            } label: {
-                                Text("結帳")
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
-                            .disabled(ticket.activeLines.isEmpty)
-                        }
+                    // 一個主要：能收錢的崗位是「結帳」（品牌橘）、不能收錢的是「點餐」
+                    if let pay = checkoutAction {
+                        ActionBar(primary: pay, secondary: orderAction.map { [$0] } ?? [], size: .lg, accent: true)
+                    } else {
+                        ActionBar(primary: orderAction, size: .lg)
                     }
                 }
             }
+        }
+    }
+
+    /// 結帳要能收錢的崗位（櫃台、前場）；報到接待開了單交給櫃台
+    private var checkoutAction: POSAction? {
+        guard model.role.takesPayment else { return nil }
+        return POSAction("結帳", icon: "credit-card", enabled: !ticket.activeLines.isEmpty) {
+            model.beginCheckout(ticket)
+        }
+    }
+
+    /// 點餐要能開單的崗位，而且這台有點餐頁
+    private var orderAction: POSAction? {
+        guard model.role.takesOrders, model.visibleSections.contains(.order) else { return nil }
+        return POSAction(ticket.exchange != nil ? "加要換的商品" : "點餐", icon: "plus-circle") {
+            model.selectedTicketId = ticket.id
+            model.go(.order)
         }
     }
 
@@ -1522,8 +1575,6 @@ private struct OrdersSaleDetail: View {
         guard isEditable, model.role.takesOrders, model.canExchange(sale) else { return false }
         return model.returnableQuantities(sale).values.contains(where: { $0 > 0 })
     }
-
-    private var hasMoreActions: Bool { canReprintProof || canChangeBuyer || canIssueLate }
 
     /// 每一行指定服務人員的單（美業、課程）：寫出設計師／教練與助理
     private var perLineStaff: Bool {
@@ -1756,7 +1807,7 @@ private struct OrdersSaleDetail: View {
     private var noInvoiceText: String {
         if !invoiceEnabled { return "這家店沒有開電子發票。" }
         if sale.total.cents == 0 { return "金額是 0（課程卡抵、儲值金付清），不用開發票。" }
-        return "這筆還沒開發票（結帳時號碼用完或斷網），可以從「…」補開。"
+        return "這筆還沒開發票（結帳時號碼用完或斷網），可以從「⋯」補開。"
     }
 
     /// 「115年09-10月・隨機碼 1234・10/4 14:05 開立・不印證明聯」
@@ -1806,42 +1857,11 @@ private struct OrdersSaleDetail: View {
         return parts.joined(separator: "・")
     }
 
-    // MARK: 下面：補印收據、換貨、退款、「…」
+    // MARK: 下面：補印收據（主要）、換貨（會換貨的店）、其他收進「⋯」
 
     private var bottomBar: some View {
         OrdersDetailBottomBar {
-            HStack(spacing: 10) {
-                Button {
-                    model.printReceipt(sale, reprint: true)
-                    model.show("已送出補印 \(sale.number)", tone: .neutral)
-                } label: {
-                    actionLabel("補印收據", icon: "printer")
-                }
-                .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
-
-                if canExchangeNow {
-                    Button {
-                        toggle(.exchange)
-                    } label: {
-                        actionLabel("換貨", icon: "arrows-right-left")
-                    }
-                    .buttonStyle(.brand(form == .exchange ? .primary : .ghost, size: .lg, fullWidth: true))
-                }
-
-                if canRefund {
-                    Button {
-                        toggle(.refund)
-                    } label: {
-                        actionLabel(refundable.cents > 0 ? "退款" : "已全部退款", icon: "receipt-refund")
-                    }
-                    .buttonStyle(.brand(form == .refund ? .primary : .danger, size: .lg, fullWidth: true))
-                    .disabled(refundable.cents <= 0)
-                }
-
-                if hasMoreActions {
-                    moreMenu
-                }
-            }
+            ActionBar(primary: reprintAction, secondary: secondaryActions, more: moreActions, size: .lg)
             if !isEditable {
                 Text("超過兩天的單請到後台處理（退款、換貨、發票）；這裡可以補印收據。")
                     .textRole(.xs)
@@ -1851,45 +1871,41 @@ private struct OrdersSaleDetail: View {
         }
     }
 
-    private func actionLabel(_ title: String, icon: String) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            HeroIcon(icon, size: 16)
+    /// 最常用的：客人回來要收據（更早的單也可以）
+    private var reprintAction: POSAction {
+        POSAction("補印收據", icon: "printer") {
+            model.printReceipt(sale, reprint: true)
+            model.show("已送出補印 \(sale.number)", tone: .neutral)
         }
-        .frame(maxWidth: .infinity)
     }
 
-    /// 少用的動作收在「…」：補印證明聯、改統編／載具、補開發票
-    private var moreMenu: some View {
-        Menu {
-            if canReprintProof {
-                Button("補印證明聯") {
-                    Task { await model.reprintInvoice(for: sale) }
-                }
-            }
-            if canChangeBuyer {
-                Button("改統編／載具") {
-                    toggle(.buyer)
-                }
-            }
-            if canIssueLate {
-                Button("補開發票") {
-                    Task { await model.issueLateInvoice(for: sale) }
-                }
-            }
-        } label: {
-            HeroIcon("ellipsis-horizontal", size: 20)
-                .foregroundStyle(Theme.ink)
-                .frame(width: 52, height: 52)
-                .overlay {
-                    RoundedRectangle(cornerRadius: Metric.radiusSm, style: .continuous)
-                        .strokeBorder(Theme.line, lineWidth: 1)
-                }
-                .contentShape(.rect)
+    /// 會換貨的店（服飾）換貨很常用，露在外面；餐廳、美業這張單換不了就不出現
+    private var secondaryActions: [POSAction] {
+        guard canExchangeNow else { return [] }
+        return [POSAction("換貨", icon: "arrows-right-left") { toggle(.exchange) }]
+    }
+
+    /// 少用的收在「⋯」：發票的事，最後是退款（紅字；打開退款表單，送出前選方式、原因，要授權的會問主管）
+    private var moreActions: [POSAction] {
+        var out: [POSAction] = []
+        if canReprintProof {
+            out.append(POSAction("補印證明聯", icon: "document-duplicate") {
+                Task { await model.reprintInvoice(for: sale) }
+            })
         }
-        .tint(Theme.ink)
-        .accessibilityLabel("更多動作")
+        if canChangeBuyer {
+            out.append(POSAction("改統編／載具", icon: "pencil-square") { reveal(.buyer) })
+        }
+        if canIssueLate {
+            out.append(POSAction("補開發票", icon: "document-text") {
+                Task { await model.issueLateInvoice(for: sale) }
+            })
+        }
+        if canRefund {
+            let title = refundable.cents > 0 ? "退款" : "已全部退款"
+            out.append(POSAction(title, icon: "receipt-refund", destructive: true, enabled: refundable.cents > 0) { reveal(.refund) })
+        }
+        return out
     }
 
     private func toggle(_ f: OrdersDetailForm) {
@@ -1897,6 +1913,12 @@ private struct OrdersSaleDetail: View {
         showCarrier = false
         carrierError = nil
         showAllTenders = false
+    }
+
+    /// 從「⋯」選的：打開那一張表單（已經開著就留著，不要又收起來）
+    private func reveal(_ f: OrdersDetailForm) {
+        guard form != f else { return }
+        toggle(f)
     }
 
     // MARK: 改統編／載具
@@ -2627,26 +2649,35 @@ private struct OrdersConflictRow: View {
     let open: () -> Void
     let dismiss: () -> Void
 
+    /// 整條點一下＝看那張單（有的話）；右邊只留一個「已處理」
     var body: some View {
         HStack(spacing: 12) {
-            HeroIcon("exclamation-triangle", size: 18)
-                .foregroundStyle(Theme.dangerFG)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(conflict.message)
-                    .font(.brand(14.5, .medium))
-                    .foregroundStyle(Theme.dangerFG)
-                    .lineLimit(2)
-                Text("\(kindLabel)・\(conflict.at.shortText)")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
+            Button(action: open) {
+                HStack(spacing: 12) {
+                    HeroIcon("exclamation-triangle", size: 18)
+                        .foregroundStyle(Theme.dangerFG)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(conflict.message)
+                            .font(.brand(14.5, .medium))
+                            .foregroundStyle(Theme.dangerFG)
+                            .lineLimit(2)
+                        Text(canOpen ? "\(kindLabel)・\(conflict.at.shortText)・點一下看單" : "\(kindLabel)・\(conflict.at.shortText)")
+                            .textRole(.xs)
+                            .foregroundStyle(Theme.muted)
+                    }
+                    Spacer(minLength: 8)
+                    if canOpen {
+                        HeroIcon("chevron-right", size: 14)
+                            .foregroundStyle(Theme.muted)
+                    }
+                }
+                .contentShape(.rect)
             }
-            Spacer(minLength: 8)
-            if canOpen {
-                Button("看單", action: open)
-                    .buttonStyle(.brand(.ghost, size: .sm))
-            }
+            .buttonStyle(.plain)
+            .allowsHitTesting(canOpen)
+            .accessibilityHint(canOpen ? "看單" : "")
             Button("已處理", action: dismiss)
-                .buttonStyle(.brand(.primary, size: .sm))
+                .buttonStyle(.brand(.ghost, size: .sm))
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

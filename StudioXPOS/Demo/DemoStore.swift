@@ -57,6 +57,16 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// 鎖定畫面上的示範 PIN（README 的四位＋這家多的人）
+    var pinHint: String {
+        let base = "Leslie 1234・Cameron 2580・Jacob 1111・王小美 0000"
+        switch self {
+        case .cafe, .apparel: return base
+        case .salon: return base + "・Mia 5678"
+        case .fitness: return base + "・Kevin 5678・Ivy 2468"
+        }
+    }
+
     /// 這家示範主要的營業模式（卡片上的「適合哪些店」）
     var mode: ServiceMode {
         switch self {

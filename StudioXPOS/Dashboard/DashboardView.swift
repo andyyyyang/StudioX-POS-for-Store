@@ -247,7 +247,8 @@ private enum DashDays {
     }
 }
 
-/// 「‹ 今天 ›」：一次看一天
+/// 「‹ 今天 ›」：一次看一天。和旁邊的「今天｜這一班」一樣是一個有框的控制項（不是一排各自的按鈕）；
+/// 不是今天時，中間的日期點一下回今天
 private struct DashDayBar: View {
     let title: String
     let isToday: Bool
@@ -255,36 +256,52 @@ private struct DashDayBar: View {
     let today: () -> Void
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 2) {
             Button {
                 step(-1)
             } label: {
                 HeroIcon("chevron-right", size: 14)
                     .rotationEffect(.degrees(180))
+                    .frame(width: 38, height: 38)
             }
-            .buttonStyle(SquareIconButtonStyle(size: 38))
+            .buttonStyle(DashSegmentStyle(selected: false))
             .accessibilityLabel("前一天")
 
-            Text(title)
-                .font(.brand(14.5, .semibold))
-                .monospacedDigit()
-                .foregroundStyle(Theme.ink)
-                .frame(minWidth: 54)
+            Button(action: today) {
+                VStack(spacing: 0) {
+                    Text(title)
+                        .font(.brand(14.5, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink)
+                    if !isToday {
+                        Text("回今天")
+                            .font(.brand(11, .medium))
+                            .foregroundStyle(Theme.accentText)
+                    }
+                }
+                .frame(minWidth: 58)
+                .frame(height: 38)
+                .padding(.horizontal, 4)
+            }
+            .buttonStyle(DashSegmentStyle(selected: false))
+            .allowsHitTesting(!isToday)
+            .accessibilityLabel(isToday ? title : "\(title)，回今天")
 
             Button {
                 step(1)
             } label: {
                 HeroIcon("chevron-right", size: 14)
+                    .frame(width: 38, height: 38)
             }
-            .buttonStyle(SquareIconButtonStyle(size: 38))
+            .buttonStyle(DashSegmentStyle(selected: false))
             .disabled(isToday)
-            .opacity(isToday ? 0.35 : 1)
             .accessibilityLabel("後一天")
-
-            if !isToday {
-                Button("回今天", action: today)
-                    .buttonStyle(.brand(.quiet, size: .sm))
-            }
+        }
+        .padding(4)
+        .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                .strokeBorder(Theme.line, lineWidth: 1)
         }
     }
 }
@@ -1234,21 +1251,44 @@ private struct DashControlsPanel: View {
 
 // MARK: - 現在
 
-/// 現在開著的單（不分今天、這一班：就是此刻的桌況）
+/// 現在開著的單（不分今天、這一班：就是此刻的桌況）。整張卡點一下到「訂單」看進行中的單（卡片上不放按鈕）
 private struct DashFloorNowPanel: View {
     @Environment(POSModel.self) private var model
 
+    /// 這台有訂單頁（廚房這類崗位沒有）
+    private var canOpen: Bool { model.visibleSections.contains(.orders) }
+
     var body: some View {
+        Button {
+            model.go(.orders)
+        } label: {
+            content
+                .contentShape(.rect)
+        }
+        .buttonStyle(.press)
+        .allowsHitTesting(canOpen)
+        .accessibilityHint(canOpen ? "到訂單看進行中的單" : "")
+    }
+
+    private var content: some View {
         let tickets = model.state.openTickets
         let value = Money.sum(tickets.map { $0.totals.total })
         let guests = tickets.reduce(0) { $0 + $1.guests }
         let billing = tickets.filter { $0.billPrintedAt != nil }.count
-        VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
                 Eyebrow("現在")
-                Spacer(minLength: 8)
                 if !tickets.isEmpty {
                     LiveDot()
+                }
+                Spacer(minLength: 8)
+                if canOpen {
+                    HStack(spacing: 4) {
+                        Text("看單")
+                            .font(.brand(13, .medium))
+                        HeroIcon("chevron-right", size: 13)
+                    }
+                    .foregroundStyle(Theme.muted)
                 }
             }
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -1265,13 +1305,6 @@ private struct DashFloorNowPanel: View {
             if let oldest = tickets.map(\.openedAt).min() {
                 ValueRow(label: "坐最久", value: "\(max(Int(Date().timeIntervalSince(oldest) / 60), 0)) 分")
             }
-            Button {
-                model.go(.orders)
-            } label: {
-                Text("看進行中的單")
-            }
-            .buttonStyle(.brand(.ghost, size: .sm, arrow: true))
-            .padding(.top, 4)
         }
         .dashPanel()
     }

@@ -351,10 +351,12 @@ struct KitchenView: View {
                     .font(.brand(16, .semibold))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Text(summary)
                     .font(.brand(13.5, .regular))
                     .foregroundStyle(Theme.ink2)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(minutes == 0 ? "剛剛" : "\(minutes) 分鐘前")
                     .textRole(.xs)
                     .monospacedDigit()
@@ -477,18 +479,6 @@ private struct KitchenTicketCard: View {
         .overlay {
             shape.strokeBorder(borderColor, lineWidth: allReady || urgency == .hot ? 2 : 1)
         }
-        .contextMenu {
-            Button {
-                reprint()
-            } label: {
-                Label("重印廚房單", systemImage: "printer")
-            }
-            Button {
-                setAll(.preparing)
-            } label: {
-                Label("全部開始做", systemImage: "flame")
-            }
-        }
     }
 
     // MARK: 資料
@@ -529,14 +519,14 @@ private struct KitchenTicketCard: View {
                 Text(title)
                     .font(.brand(26, .semibold))
                     .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.brand(14, .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.ink2)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 6)
@@ -555,22 +545,6 @@ private struct KitchenTicketCard: View {
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
             }
-            Menu {
-                Button {
-                    reprint()
-                } label: {
-                    Label("重印廚房單", systemImage: "printer")
-                }
-                Button {
-                    setAll(.preparing)
-                } label: {
-                    Label("全部開始做", systemImage: "flame")
-                }
-            } label: {
-                HeroIcon("ellipsis-horizontal", size: 16)
-            }
-            .buttonStyle(SquareIconButtonStyle(size: 34))
-            .accessibilityLabel("更多")
         }
         .padding(16)
         .background(urgency.band)
@@ -649,27 +623,38 @@ private struct KitchenTicketCard: View {
 
     // MARK: 下面
 
+    /// 一張單只露一個主要動作，看狀況換：還沒全好 →「全部好了」；全好了 →「已上菜」。其他收進「⋯」
     private var footer: some View {
-        HStack(spacing: 10) {
-            Button {
-                setAll(.ready)
-            } label: {
-                Text("全部好了")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
-            .disabled(allReady)
-            Button {
-                withAnimation(reduceMotion ? nil : Motion.ease) {
-                    model.kitchen(.served, lines: card.lines, in: card.ticket)
-                }
-            } label: {
-                Text("已上菜")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: allReady))
-        }
+        ActionBar(
+            primary: allReady ? servedAction : allReadyAction,
+            more: moreActions,
+            size: .lg
+        )
         .padding(12)
+    }
+
+    private var allReadyAction: POSAction {
+        POSAction("全部好了", icon: "check") { setAll(.ready) }
+    }
+
+    private var servedAction: POSAction {
+        POSAction("已上菜", icon: "check-circle") { serveAll() }
+    }
+
+    private var moreActions: [POSAction] {
+        var list: [POSAction] = []
+        // 還沒全好也可能先上了（客人催、分批上），留在「⋯」裡
+        if !allReady { list.append(servedAction) }
+        let waiting = card.lines.filter { $0.kitchen == .sent }
+        list.append(POSAction("全部開始做", icon: "fire", enabled: !waiting.isEmpty) { startAll(waiting) })
+        list.append(POSAction("重印廚房單", icon: "printer") { reprint() })
+        return list
+    }
+
+    private func serveAll() {
+        withAnimation(reduceMotion ? nil : Motion.ease) {
+            model.kitchen(.served, lines: card.lines, in: card.ticket)
+        }
     }
 
     // MARK: 動作
@@ -697,6 +682,14 @@ private struct KitchenTicketCard: View {
         guard !lines.isEmpty else { return }
         withAnimation(anim) {
             model.kitchen(status, lines: lines, in: card.ticket)
+        }
+    }
+
+    /// 只把還沒開始的推到製作中，已經好了的不要被打回去
+    private func startAll(_ lines: [TicketLine]) {
+        guard !lines.isEmpty else { return }
+        withAnimation(anim) {
+            model.kitchen(.preparing, lines: lines, in: card.ticket)
         }
     }
 
@@ -813,29 +806,18 @@ private struct KitchenExpoCard: View {
                 Text(title)
                     .font(.brand(14, .medium))
                     .foregroundStyle(Theme.ink2)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(card.lines.map { "\($0.name) ×\($0.quantity)" }.joined(separator: "、"))
                 .font(.brand(16, .regular))
                 .foregroundStyle(Theme.ink2)
-                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                Button(action: onCall) {
-                    Label {
-                        Text(calledAt == nil ? "叫號" : "再叫一次")
-                    } icon: {
-                        HeroIcon("speaker-wave", size: 17)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(calledAt == nil ? .accent : .ghost, size: .lg, fullWidth: true))
-                Button(action: onServed) {
-                    Text("已出餐")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
-            }
+            // 一張只露一個主要動作：還沒叫 →「叫號」；叫過了 →「已出餐」。另一個收進「⋯」
+            ActionBar(
+                primary: calledAt == nil ? callAction : servedAction,
+                more: calledAt == nil ? [servedAction] : [callAction],
+                size: .lg
+            )
         }
         .padding(16)
         .background(Theme.successFG.opacity(0.07), in: shape)
@@ -843,5 +825,13 @@ private struct KitchenExpoCard: View {
         .overlay { shape.strokeBorder(Theme.successFG, lineWidth: 2) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(pickup.map { "\($0) 號" } ?? title)，可以出餐")
+    }
+
+    private var callAction: POSAction {
+        POSAction(calledAt == nil ? "叫號" : "再叫一次", icon: "speaker-wave", perform: onCall)
+    }
+
+    private var servedAction: POSAction {
+        POSAction("已出餐", icon: "check-circle", perform: onServed)
     }
 }

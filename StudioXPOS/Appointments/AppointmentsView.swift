@@ -148,28 +148,34 @@ struct AppointmentsView: View {
             PageTitle(title: "Day *book*", subtitle: "預約表・\(model.mode.staffTitle)")
             Spacer(minLength: 12)
             daySwitcher
-            Button {
-                Task {
-                    if await model.walkIn() != nil { model.go(.order) }
+            // 頁首只有一個主要按鈕：新增預約、現場客合成「＋ 新增」
+            Menu {
+                Button {
+                    openNew(staffId: nil, start: defaultStart())
+                } label: {
+                    Label { Text("預約") } icon: { Image("hi-calendar-days").renderingMode(.template) }
+                }
+                Button {
+                    walkIn()
+                } label: {
+                    Label { Text("現場客（直接開單）") } icon: { Image("hi-user").renderingMode(.template) }
                 }
             } label: {
                 Label {
-                    Text("現場客")
-                } icon: {
-                    HeroIcon("user", size: 15)
-                }
-            }
-            .buttonStyle(.brand(.ghost, size: .md))
-            Button {
-                openNew(staffId: nil, start: defaultStart())
-            } label: {
-                Label {
-                    Text("新預約")
+                    Text("新增")
                 } icon: {
                     HeroIcon("plus", size: 15)
                 }
             }
+            .menuStyle(.button)
+            .menuOrder(.fixed)
             .buttonStyle(.brand(.primary, size: .md))
+        }
+    }
+
+    private func walkIn() {
+        Task {
+            if await model.walkIn() != nil { model.go(.order) }
         }
     }
 
@@ -235,10 +241,14 @@ struct AppointmentsView: View {
             ApptCount(label: "已到", value: arrived, color: Theme.accentText)
             ApptCount(label: "服務中", value: serving, color: Theme.successFG)
             Spacer(minLength: 8)
-            Text("長按空格新增・長按預約拖曳改時間")
-                .textRole(.xs)
-                .foregroundStyle(Theme.faint)
-                .lineLimit(1)
+            // 放不下就換短的、再放不下就不顯示（不截斷）
+            ViewThatFits(in: .horizontal) {
+                Text("長按空格新增・長按預約拖曳改時間")
+                Text("長按空格新增")
+                Color.clear.frame(width: 0, height: 0)
+            }
+            .textRole(.xs)
+            .foregroundStyle(Theme.faint)
             if hidden > 0 || showInactive {
                 Button(showInactive ? "隱藏取消、未到" : "顯示取消、未到 \(hidden)") {
                     withAnimation(anim) { showInactive.toggle() }
@@ -1525,7 +1535,8 @@ private struct ApptCard: View {
                 Text(r.name.isEmpty ? "未留名字" : r.name)
                     .font(.brand(21, .semibold))
                     .foregroundStyle(Theme.ink)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
                 Text("\(ApptText.timeRange(r))・\(ApptText.duration(r.durationMinutes))")
                     .font(.brand(13, .medium))
                     .monospacedDigit()
@@ -1677,44 +1688,13 @@ private struct ApptCard: View {
         }
     }
 
-    // MARK: 動作
+    // MARK: 動作（一個主要、最多兩個次要，其他收進「⋯」；取消、未到在「⋯」裡、要確認）
 
-    @ViewBuilder
     private var actions: some View {
         let r = reservation
-        VStack(spacing: 8) {
-            primaryAction(r)
-            if r.status.isActive || r.status == .seated {
-                HStack(spacing: 6) {
-                    if r.status.isActive {
-                        ApptMiniTool(title: "改時間", icon: "clock") { beginReschedule() }
-                    }
-                    ApptMiniTool(title: "編輯", icon: "pencil-square") { onEdit() }
-                    if r.status.isActive {
-                        ApptMiniTool(title: "未到", icon: "no-symbol") { onConfirm(.noShow) }
-                        ApptMiniTool(title: "取消", icon: "x-circle") { onConfirm(.cancelled) }
-                    }
-                }
-            } else if r.status == .cancelled || r.status == .noShow {
-                Button("改回已預約") {
-                    Task { await model.markAppointment(r, status: .booked) }
-                }
-                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func primaryAction(_ r: Reservation) -> some View {
-        if let t = ticket {
-            HStack(spacing: 8) {
-                Button {
-                    model.selectedTicketId = t.id
-                } label: {
-                    Text("看單 \(t.number)")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
+        return VStack(alignment: .leading, spacing: 8) {
+            if let t = ticket {
+                // 服務中：收錢的崗位主要是「去結帳」；報到接待只看單（結帳在櫃台）
                 if model.role.takesPayment {
                     Button {
                         model.beginCheckout(t)
@@ -1723,28 +1703,30 @@ private struct ApptCard: View {
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.brand(.accent, size: .lg, fullWidth: true, arrow: true))
-                }
-            }
-            if !model.role.takesPayment {
-                // 報到接待不收錢：單子已經在結帳櫃台看得到
-                ApptHandOffNote(text: "\(t.number)・\(t.totals.amountDue.formatted) 已同步到結帳櫃台")
-            }
-        } else if let t = closedTicket {
-            ApptDoneNote(text: "已結帳 \(t.number)")
-        } else if r.status == .seated && r.ticketId != nil {
-            // 開過單、這台已經沒有那張單（iPad 只留最近兩天，或在別台結的）：不要再開一張
-            ApptDoneNote(text: "服務完成・單子在結帳紀錄裡")
-        } else if r.status.isActive || r.status == .seated {
-            HStack(spacing: 8) {
-                if r.status == .booked || r.status == .notified {
+                    ApptActionRow(secondary: [viewTicketAction(t)], more: [editAction])
+                } else {
                     Button {
-                        Task { await model.markAppointment(r, status: .arrived) }
+                        model.selectedTicketId = t.id
                     } label: {
-                        Text("到店")
+                        Text("看單 \(t.number)")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
+                    .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
+                    ApptHandOffNote(text: "\(t.number)・\(t.totals.amountDue.formatted) 已同步到結帳櫃台")
+                    ApptActionRow(secondary: [], more: [editAction])
                 }
+            } else if let t = closedTicket {
+                HStack(spacing: 10) {
+                    ApptDoneNote(text: "已結帳 \(t.number)")
+                    MoreMenu(actions: [editAction])
+                }
+            } else if r.status == .seated && r.ticketId != nil {
+                // 開過單、這台已經沒有那張單（iPad 只留最近兩天，或在別台結的）：不要再開一張
+                HStack(spacing: 10) {
+                    ApptDoneNote(text: "服務完成・單子在結帳紀錄裡")
+                    MoreMenu(actions: [editAction])
+                }
+            } else if r.status.isActive || r.status == .seated {
                 Button {
                     startService()
                 } label: {
@@ -1753,8 +1735,51 @@ private struct ApptCard: View {
                 }
                 .buttonStyle(.brand(.primary, size: .lg, fullWidth: true, arrow: true))
                 .disabled(busy)
+                ApptActionRow(secondary: activeSecondary(r), more: activeMore(r))
+            } else if r.status == .cancelled || r.status == .noShow {
+                // 按錯了：改回來（這時候只有這一個動作）
+                Button {
+                    Task { await model.markAppointment(r, status: .booked) }
+                } label: {
+                    Label {
+                        Text("改回已預約")
+                    } icon: {
+                        HeroIcon("arrow-uturn-left", size: 15)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
             }
         }
+    }
+
+    private var editAction: POSAction {
+        POSAction("編輯", icon: "pencil-square") { onEdit() }
+    }
+
+    private func viewTicketAction(_ t: Ticket) -> POSAction {
+        POSAction("看單 \(t.number)", icon: "squares-2x2") { model.selectedTicketId = t.id }
+    }
+
+    /// 次要：還沒到 →「到店」；可以改的 →「改時間」
+    private func activeSecondary(_ r: Reservation) -> [POSAction] {
+        var list: [POSAction] = []
+        if r.status == .booked || r.status == .notified {
+            list.append(POSAction("到店", icon: "check") { Task { await model.markAppointment(r, status: .arrived) } })
+        }
+        if r.status.isActive {
+            list.append(POSAction("改時間", icon: "clock") { beginReschedule() })
+        }
+        return list
+    }
+
+    private func activeMore(_ r: Reservation) -> [POSAction] {
+        var list = [editAction]
+        if r.status.isActive {
+            list.append(POSAction("未到", icon: "no-symbol", destructive: true) { onConfirm(.noShow) })
+            list.append(POSAction("取消預約", icon: "x-circle", destructive: true) { onConfirm(.cancelled) })
+        }
+        return list
     }
 
     private func startService() {
@@ -1948,31 +1973,36 @@ private struct ApptDoneNote: View {
     }
 }
 
-/// 卡片下面一排小動作：圖示在上、字在下
-private struct ApptMiniTool: View {
-    let title: String
-    let icon: String
-    let action: () -> Void
+/// 卡片下面的次要動作：「⋯」＋最多兩個細框按鈕（撐滿寬度，字不截斷）
+private struct ApptActionRow: View {
+    let secondary: [POSAction]
+    let more: [POSAction]
 
     var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                HeroIcon(icon, size: 17)
-                Text(title)
-                    .font(.brand(11.5, .medium))
-                    .lineLimit(1)
+        HStack(spacing: 8) {
+            if !overflow.isEmpty {
+                MoreMenu(actions: overflow)
             }
-            .foregroundStyle(Theme.ink)
-            .frame(maxWidth: .infinity, minHeight: 50)
-            .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-            .overlay {
-                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                    .strokeBorder(Theme.line, lineWidth: 1)
+            ForEach(Array(secondary.prefix(2))) { a in
+                Button(action: a.perform) {
+                    HStack(spacing: 6) {
+                        if let icon = a.icon { HeroIcon(icon, size: 15) }
+                        Text(a.title)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.ghost, size: .md, fullWidth: true))
+                .disabled(!a.isEnabled)
             }
-            .contentShape(.rect)
+            if secondary.isEmpty {
+                Spacer(minLength: 0)
+            }
         }
-        .buttonStyle(PressScale(scale: 0.95))
     }
+
+    private var overflow: [POSAction] { Array(secondary.dropFirst(2)) + more }
 }
 
 /// −／＋ 一格（開始時間、時間長度）
@@ -2558,21 +2588,22 @@ private struct ApptFormPanel: View {
     private var bottomBar: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
+                // 名字、服務、時間不截斷：放不下就換行
                 if let problem {
                     Text(problem)
                         .textRole(.small)
                         .foregroundStyle(Theme.dangerFG)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(summaryTitle)
                         .font(.brand(15, .semibold))
                         .foregroundStyle(Theme.ink)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(summaryDetail)
                         .textRole(.xs)
                         .monospacedDigit()
                         .foregroundStyle(Theme.muted)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)

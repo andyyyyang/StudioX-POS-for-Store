@@ -18,7 +18,6 @@ struct PairingView: View {
     @State private var scanning = false
     @State private var working = false
     @State private var attempt = 0
-    @State private var showDemos = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -46,58 +45,15 @@ struct PairingView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         Eyebrow("開始使用")
                         step(1, "到網站後台", "「門市 POS → 裝置」按「新增裝置」，選這台的崗位（結帳櫃台、前場點餐、報到接待、後廚、出餐口）")
-                        step(2, "輸入配對碼", "在右邊的鍵盤打畫面上的 8 位數，或按下面掃 QR Code")
+                        step(2, "輸入配對碼", "在右邊的鍵盤打畫面上的 8 位數，按「配對」")
                         step(3, "輸入 PIN", "店員用自己的 PIN 登入，就可以開始點餐")
+                        otherWays
+                            .padding(.leading, 38)
                     }
                     .reveal(2)
 
-                    HStack(spacing: 12) {
-                        Button {
-                            scanning = true
-                        } label: {
-                            Label { Text("掃描 QR Code") } icon: { HeroIcon("qr-code", size: 18) }
-                        }
-                        .buttonStyle(.brand(.primary, size: .lg))
-                        Button(showDemos ? "收起示範" : "先看看示範") {
-                            withAnimation(reduceMotion ? nil : Motion.ease) { showDemos.toggle() }
-                        }
-                        .buttonStyle(.brand(.ghost, size: .lg, arrow: !showDemos))
-                    }
-                    .reveal(3)
-
-                    if showDemos {
-                        demoPicker
-                            .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Button {
-                            withAnimation(Motion.ease) { showAdvanced.toggle() }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text("進階：自己架的後台")
-                                HeroIcon(showAdvanced ? "chevron-down" : "chevron-right", size: 12)
-                            }
-                            .font(.brand(13.5, .medium))
-                            .foregroundStyle(Theme.muted)
-                        }
-                        .buttonStyle(.plain)
-                        if showAdvanced {
-                            TextField("https://cms.example.tw", text: $customURL)
-                                .textContentType(.URL)
-                                .keyboardType(.URL)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .font(.brand(16, .regular))
-                                .padding(12)
-                                .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-                                .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
-                                .frame(maxWidth: 420)
-                            Text("沒接 StudioX 的店家：填後台網址，再打配對碼")
-                                .textRole(.xs)
-                                .foregroundStyle(Theme.muted)
-                        }
-                    }
+                    demoPicker
+                        .reveal(3)
 
                     if working {
                         HStack(spacing: 10) {
@@ -124,29 +80,69 @@ struct PairingView: View {
         }
     }
 
+    // MARK: 配對的其他方式（次要：細框的掃描、安靜的進階）
+
+    /// 主要的動作是右邊鍵盤的「配對」；這裡只放另外兩種配對方式
+    private var otherWays: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Button {
+                    scanning = true
+                } label: {
+                    Label { Text("掃描 QR Code") } icon: { HeroIcon("qr-code", size: 16) }
+                }
+                .buttonStyle(.brand(.ghost, size: .sm))
+                Button {
+                    withAnimation(reduceMotion ? nil : Motion.ease) { showAdvanced.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("進階：自己架的後台")
+                        HeroIcon(showAdvanced ? "chevron-down" : "chevron-right", size: 12)
+                    }
+                }
+                .buttonStyle(.brand(.quiet, size: .sm))
+            }
+            if showAdvanced {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextField("https://cms.example.tw", text: $customURL)
+                        .textContentType(.URL)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.brand(16, .regular))
+                        .padding(12)
+                        .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
+                        .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
+                        .frame(maxWidth: 420)
+                    Text("沒接 StudioX 的店家：填後台網址，再在右邊的鍵盤打配對碼")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
     // MARK: 示範
 
-    /// 四家示範的店：一家一張卡（行業的圖示與色塊、店名、看得到什麼、適合哪些店）
+    /// 四家示範的店：一家一張卡（整張可以點；行業的圖示與色塊、店名、看得到什麼、適合哪些店）
     private var demoPicker: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Eyebrow("選一家示範的店")
-                Text("資料都是虛構的，只在這次開著的時候")
+            VStack(alignment: .leading, spacing: 4) {
+                Eyebrow("或先看看示範")
+                Text("四家虛構的店，資料只在這次開著的時候。點一家就打開")
                     .textRole(.xs)
                     .foregroundStyle(Theme.muted)
             }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)], alignment: .leading, spacing: 14) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: 14)], alignment: .leading, spacing: 14) {
                 ForEach(Array(DemoKind.allCases.enumerated()), id: \.element) { i, kind in
                     DemoStoreCard(kind: kind) {
                         keypad.cancel()
                         model.startDemo(kind: kind)
                     }
-                    .reveal(i, .rise)
+                    .reveal(i + 4, .rise)
                 }
             }
-            Text("登入的 PIN：Leslie 1234（店長）・Cameron 2580（收銀）・Jacob 1111（領班）・王小美 0000（負責人）")
-                .textRole(.xs)
-                .foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: 680, alignment: .leading)
     }
@@ -239,8 +235,7 @@ private struct DemoStoreCard: View {
                 Text("適合：\(kind.mode.examples)")
                     .textRole(.xs)
                     .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)

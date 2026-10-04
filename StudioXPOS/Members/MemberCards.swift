@@ -227,10 +227,12 @@ struct MembersRing: View {
 
 // MARK: - 課程卡
 
-/// 一張課程卡、會籍：圓環＋名字＋剩幾次／到哪天（顏色照狀態：有效、快到期、還沒開始、結束）
+/// 一張課程卡、會籍：圓環＋名字＋剩幾次／到哪天（顏色照狀態：有效、快到期、還沒開始、結束）。
+/// 卡片最多一個動作（快到期、過期、用完時的「續約」「再買一張」），平常沒有按鈕
 struct MembersPassCard: View {
     let pass: MemberPass
     let now: Date
+    var action: POSAction? = nil
 
     var body: some View {
         let state = MembersStyle.state(of: pass, at: now)
@@ -244,11 +246,13 @@ struct MembersPassCard: View {
                         .font(.brand(22, .medium))
                         .monospacedDigit()
                         .foregroundStyle(finished ? Theme.muted : Theme.ink)
-                        .minimumScaleFactor(0.6)
+                        .minimumScaleFactor(0.7)
                         .lineLimit(1)
                     Text(centerUnit)
                         .font(.brand(10.5, .medium))
                         .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
                 .padding(10)
             }
@@ -257,23 +261,26 @@ struct MembersPassCard: View {
                 Text(pass.name)
                     .font(.brand(16, .medium))
                     .foregroundStyle(finished ? Theme.muted : Theme.ink)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(pass.spec.summary)
                     .textRole(.xs)
                     .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Circle().fill(tint).frame(width: 6, height: 6)
-                    Text(pass.statusText(at: now))
+                    Text(pass.statusText(at: now) + (pass.spec.checkIn && !finished ? "・入場用" : ""))
                         .font(.brand(12.5, .medium))
                         .foregroundStyle(state == .expiring ? Theme.accentText : (finished ? Theme.muted : Theme.ink2))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                if pass.spec.checkIn && !finished {
-                    Text("入場報到用")
-                        .font(.brand(11, .medium))
-                        .foregroundStyle(Theme.infoFG)
+                if let action {
+                    Button(action: action.perform) {
+                        Text(action.title).lineLimit(1)
+                    }
+                    .buttonStyle(.brand(.ghost, size: .sm))
+                    .disabled(!action.isEnabled)
+                    .padding(.top, 4)
                 }
             }
             Spacer(minLength: 0)
@@ -288,8 +295,8 @@ struct MembersPassCard: View {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                 .strokeBorder(state == .expiring ? Theme.accent.opacity(0.45) : Theme.line, lineWidth: 1)
         }
-        .opacity(finished ? 0.72 : 1)
-        .accessibilityElement(children: .combine)
+        .opacity(finished && action == nil ? 0.72 : 1)
+        .accessibilityElement(children: .contain)
     }
 
     /// 圓環要畫多滿
