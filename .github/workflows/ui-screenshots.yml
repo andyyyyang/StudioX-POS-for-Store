@@ -239,7 +239,7 @@ jobs:
             "phone/03-floor|$P -section floor"
             "phone/04-orders|$P -section orders"
             # $P 是晨麥手作（-demo 只看第一個）：黃毛丫頭自己寫
-            "phone/05-yellowgirl-order|-demo yellowgirl -autologin 1234 -section order"
+            "phone/05-yellowgirl-order|-demo yellowgirl -autologin 1234 -section order|16"
             # 手機用相機掃碼：掃到折價券 WELCOME100（新會員 100 元、滿 300）→ 打開單子看得到套上去了
             "phone/06-coupon|$P -section order -scanDemo WELCOME100|10"
             # 用 StudioX 帳號登入的個人手機：鎖定畫面是 Face ID／手機密碼（不是 PIN、不能換人）

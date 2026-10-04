@@ -505,8 +505,11 @@ struct ReceiptPaper: View {
     private func block(_ b: ReceiptBlock) -> some View {
         switch b {
         case .text(let s, let st):
+            // 長的字（店家自己寫的頁尾）一定換行，不會變成「…」
             Text(s)
                 .font(font(base * factor(st.scale, screen: 1.45), bold: st.bold))
+                .multilineTextAlignment(st.align == .center ? .center : st.align == .right ? .trailing : .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: st.align == .center ? .center : st.align == .right ? .trailing : .leading)
                 .padding(.vertical, st.invert ? 2 : 0)
                 .background(st.invert ? (forPrint ? Color.black : Theme.ink) : .clear)
@@ -514,6 +517,7 @@ struct ReceiptPaper: View {
         case .row(let l, let r, let st):
             HStack(alignment: .firstTextBaseline) {
                 Text(l)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 Text(r).monospacedDigit()
             }
@@ -521,6 +525,7 @@ struct ReceiptPaper: View {
         case .detail(let s):
             Text(s)
                 .font(font(base * (forPrint ? 1 : 0.88), bold: false))
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(forPrint ? Color.black : Theme.muted)
                 .padding(.leading, base)
         case .rule:

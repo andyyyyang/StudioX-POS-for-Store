@@ -32,7 +32,8 @@ enum DemoPrintArt {
             header: PrintImage(url: Piece.duckLogo.url, width: 0.42, align: .center),
             footer: PrintImage(url: Piece.thanks.url, width: 0.8, align: .center),
             background: PrintBackground(url: Piece.dots.url, fit: .tile, lighten: 0.7),
-            overlays: [PrintOverlay(url: Piece.stamp.url, x: 0.66, y: 0.34, width: 0.28, anchor: .bottom)],
+            // 「好吃」章蓋在店標的右邊（不壓到品項、金額）
+            overlays: [PrintOverlay(url: Piece.stamp.url, x: 0.70, y: 0.30, width: 0.26, anchor: .top)],
             headerLines: ["夜市滷味・現點現滷"],
             footerLines: ["辣度、蔥蒜，夾菜的時候跟我們說"]
         )
