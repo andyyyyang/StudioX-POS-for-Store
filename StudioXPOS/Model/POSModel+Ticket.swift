@@ -134,11 +134,13 @@ extension POSModel {
             credit: item.itemKind == .storedValue ? (item.openPrice ? price : item.credit ?? item.price) : nil,
             commissionBps: commissionBps(item: item, staffId: who ?? t.salespersonId ?? me.id)
         )
+        let added: Bool
         if let same = t.lines.last(where: { $0.canMerge(with: line) }) {
-            record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: same.id, quantity: same.quantity + line.quantity)))
+            added = record(.lineUpdated(LineUpdated(ticketId: t.id, lineId: same.id, quantity: same.quantity + line.quantity)))
         } else {
-            record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line])))
+            added = record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line])))
         }
+        if added { addTick &+= 1 }
     }
 
     /// 美業、課程：新加的服務預設給誰做（預約指定的人 → 這張單上一個服務的人 → 自己是可以排預約的人就給自己）
@@ -172,7 +174,7 @@ extension POSModel {
         guard let price = await keypad.askMoney(KeypadSpec(kind: .money, title: "金額", subtitle: name, confirmLabel: "加入", minValue: 1)),
               let t = ensureTicket(), let me = currentStaff else { return }
         let line = TicketLine(id: newID(), itemId: nil, name: name, unitPrice: price, addedAt: Date(), addedBy: me.id)
-        record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line])))
+        if record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line]))) { addTick &+= 1 }
     }
 
     // MARK: 改一行

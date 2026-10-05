@@ -158,6 +158,8 @@ final class POSModel {
     var memberRequest: MembersFocus?
     /// 把單子打開給人看（手機的單子 sheet；-scanDemo 截圖）
     var revealTicketRequest = 0
+    /// 加進單子一次就 +1（手機輕震一下：AddHaptic）
+    var addTick = 0
 
     let keypad = KeypadController()
     let printers = PrinterHub()

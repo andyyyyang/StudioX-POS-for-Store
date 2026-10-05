@@ -41,6 +41,8 @@ struct PhoneShell: View {
             PhoneTabBar()
         }
         .background(Theme.page.ignoresSafeArea())
+        // 加進單子就輕震一下（點品項、價錢鍵、「加入」、掃到商品）
+        .background { AddHaptic() }
         .environment(ui)
         .onAppear { normalizeSection() }
         .onChange(of: model.section) { _, _ in normalizeSection() }
@@ -620,5 +622,17 @@ struct PhoneSubpage<Content: View>: View {
             content()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+/// 加進單子就震一下（手上拿著點，不用看畫面也知道點到了）。單獨一個看不到的小 view：只有它跟著 addTick 重畫
+struct AddHaptic: View {
+    @Environment(POSModel.self) private var model
+
+    var body: some View {
+        Color.clear
+            .sensoryFeedback(.impact(weight: .medium, intensity: 0.8), trigger: model.addTick)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }

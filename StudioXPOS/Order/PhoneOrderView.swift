@@ -372,40 +372,12 @@ struct PhoneOrderView: View {
         }
     }
 
-    /// 「A2・3 項・NT$480」：點一下打開單子
+    /// 「A2・3 項・NT$480」：點一下、往上滑打開單子
     private func ticketBar(_ t: Ticket) -> some View {
-        Button {
-            openTicket()
-        } label: {
-            HStack(spacing: 12) {
-                HeroIcon("list-bullet", size: 20)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(t.title(floor: model.floor))・\(t.itemCount) 項・\(t.totals.amountDue.formatted)")
-                        .font(.brand(16.5, .semibold))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    Text(ticketHint(t))
-                        .font(.brand(12.5, .regular))
-                        .foregroundStyle(Theme.inverseMuted)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 14, weight: .semibold))
-            }
-            .foregroundStyle(Theme.onInverse)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity, minHeight: 58)
-            .background(Theme.inverse, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
-            .contentShape(.rect)
+        PhoneTicketBar(title: "\(t.title(floor: model.floor))・\(t.itemCount) 項・\(t.totals.amountDue.formatted)",
+                       hint: ticketHint(t)) { full in
+            openTicket(full: full)
         }
-        .buttonStyle(PressScale(scale: 0.98))
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
-        .padding(.bottom, 4)
-        .accessibilityLabel("單子 \(t.title(floor: model.floor))，\(t.itemCount) 項，\(t.totals.amountDue.formatted)")
-        .accessibilityHint("打開單子")
     }
 
     private func ticketHint(_ t: Ticket) -> String {
@@ -417,8 +389,9 @@ struct PhoneOrderView: View {
         return "點開看單子、改數量、備註"
     }
 
-    private func openTicket() {
-        ticketDetent = .medium
+    /// full：往上用力滑＝直接拉到全高
+    private func openTicket(full: Bool = false) {
+        ticketDetent = full ? .large : .medium
         ui.ticketOpen = true
         model.touch()
     }
@@ -522,4 +495,91 @@ private struct FreeTable: Identifiable {
     let table: DiningTable
     let area: String
     var id: String { table.id }
+}
+
+/// 下面那條單子：點一下＝打開單子（半高）；往上滑＝跟著手指升起來，放開就打開（滑得長、快＝全高）。
+/// 自己一個 view：拖的時候只有這一條重畫，菜單不跟著重畫
+private struct PhoneTicketBar: View {
+    let title: String
+    let hint: String
+    /// true＝全高
+    let open: (Bool) -> Void
+
+    /// 往上拉了多少（負的；越拉越緊）
+    @State private var lift: CGFloat = 0
+    /// 拉過「放開就打開」的線（輕震一下）
+    @State private var armed = false
+    /// 這一下是滑的（不再當成點一下，免得打開兩次、全高又被改回半高）
+    @State private var swiped = false
+
+    var body: some View {
+        Button {
+            guard !swiped else { return }
+            open(false)
+        } label: {
+            HStack(spacing: 12) {
+                HeroIcon("list-bullet", size: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.brand(16.5, .semibold))
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Text(hint)
+                        .font(.brand(12.5, .regular))
+                        .foregroundStyle(Theme.inverseMuted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.up")
+                    .font(.system(size: 14, weight: .semibold))
+                    .offset(y: armed ? -3 : 0)
+            }
+            .foregroundStyle(Theme.onInverse)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 58)
+            .background(Theme.inverse, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+            .contentShape(.rect)
+        }
+        .buttonStyle(PressScale(scale: 0.98))
+        .offset(y: lift)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { v in drag(v.translation.height) }
+                .onEnded { v in end(v) }
+        )
+        .sensoryFeedback(.impact(weight: .light), trigger: armed) { _, now in now }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .accessibilityLabel("單子 \(title)")
+        .accessibilityHint("打開單子；也可以往上滑")
+    }
+
+    private func drag(_ dy: CGFloat) {
+        swiped = true
+        // 只認往上：最多升 28 點、越拉越緊
+        let up = max(-dy, 0)
+        lift = -28 * (1 - 1 / (up / 70 + 1))
+        let now = up > 36
+        if now != armed {
+            withAnimation(Motion.fast) { armed = now }
+        }
+    }
+
+    private func end(_ v: DragGesture.Value) {
+        let up = -v.translation.height
+        let flingUp = -v.predictedEndTranslation.height
+        withAnimation(Motion.spring) {
+            lift = 0
+            armed = false
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(300))
+            swiped = false
+        }
+        // 往上滑一段、或往上甩一下就打開；滑得長、甩得用力＝全高
+        guard up > 36 || (flingUp > 120 && up > 12) else { return }
+        open(up > 140 || flingUp > 420)
+    }
 }
