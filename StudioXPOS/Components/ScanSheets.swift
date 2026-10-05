@@ -219,3 +219,33 @@ struct MemberScanButton: View {
         return .done(.member, "會員 \(MemberRef(phone: phone).maskedPhone)", tally: nil)
     }
 }
+
+/// 「掃碼」：手機不接條碼機，用相機掃（點餐頁、結帳頁的右上角）。掃到什麼照內容判斷（POSModel.handleScan）：
+/// 點餐時商品一個接一個、會員卡、發票載具、折價券；結帳時會員卡、載具、折價券掛到這一張（商品不加：要先回到點餐）
+struct ScanButton: View {
+    @Environment(POSModel.self) private var model
+    var hint = "用相機掃商品、會員卡、發票載具、折價券"
+
+    var body: some View {
+        Button {
+            model.requestScan(.any)
+        } label: {
+            HStack(spacing: 6) {
+                HeroIcon("qr-code", size: 17)
+                Text("掃碼")
+                    .font(.brand(15, .semibold))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            .foregroundStyle(Theme.ink)
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .background(Theme.surface, in: .capsule)
+            .overlay { Capsule().strokeBorder(Theme.line) }
+            .contentShape(.capsule)
+        }
+        .buttonStyle(PressScale(scale: 0.96))
+        .accessibilityLabel("掃碼")
+        .accessibilityHint(hint)
+    }
+}

@@ -109,7 +109,7 @@ struct PhoneOrderView: View {
                 }
                 Spacer(minLength: 8)
                 PhoneQueueButton(open: $queueOpen)
-                scanButton
+                ScanButton(hint: "用相機掃商品、會員卡、發票載具、折價券")
                 Button {
                     withAnimation(Motion.fast) {
                         searching.toggle()
@@ -164,30 +164,6 @@ struct PhoneOrderView: View {
             Headline("The *menu*", role: .h3)
                 .lineLimit(1)
         }
-    }
-
-    /// 「掃碼」：手機不接條碼機，用相機掃——商品一個接一個、會員卡、發票載具、折價券（POSModel.handleScan 照內容判斷）
-    private var scanButton: some View {
-        Button {
-            model.requestScan(.any)
-        } label: {
-            HStack(spacing: 6) {
-                HeroIcon("qr-code", size: 17)
-                Text("掃碼")
-                    .font(.brand(15, .semibold))
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            .foregroundStyle(Theme.ink)
-            .padding(.horizontal, 14)
-            .frame(height: 44)
-            .background(Theme.surface, in: .capsule)
-            .overlay { Capsule().strokeBorder(Theme.line) }
-            .contentShape(.capsule)
-        }
-        .buttonStyle(PressScale(scale: 0.96))
-        .accessibilityLabel("掃碼")
-        .accessibilityHint("用相機掃商品、會員卡、發票載具、折價券")
     }
 
     /// 分類：一排可以左右滑的膠囊（選到的墨色實心）

@@ -77,9 +77,16 @@ struct PaymentView: View {
     private func header(_ t: Ticket, _ x: TicketTotals) -> some View {
         if compact {
             VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Eyebrow("結帳・\(model.orderCaption(t))")
-                    Headline(x.isPaidInFull ? "All *paid*" : "Collect *payment*", role: .h2)
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Eyebrow("結帳・\(model.orderCaption(t))")
+                        Headline(x.isPaidInFull ? "All *paid*" : "Collect *payment*", role: .h2)
+                    }
+                    Spacer(minLength: 8)
+                    // 右上角和點餐頁一樣可以掃：會員卡、發票載具、折價券掛到這一張
+                    if !x.isPaidInFull {
+                        ScanButton(hint: "用相機掃會員卡、發票載具、折價券")
+                    }
                 }
                 HStack(alignment: .bottom, spacing: 20) {
                     stat("應收", x.amountDue, role: .number, color: Theme.ink2)
