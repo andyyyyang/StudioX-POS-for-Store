@@ -78,17 +78,18 @@ struct VoiceOrderPanel: View {
                 detail: s.text.isEmpty ? "例如「鴨胸 140 兩份、鴨心一串」" : "放開就加進單子", busy: false, live: true)
         case .thinking:
             row(icon: "sparkles", tint: Theme.accentText, title: "「\(s.text)」", detail: "整理中…（可以接著按住說下一段）", busy: true)
-        case .done(let added, let problems):
+        case .done(let added, let problems, let seconds):
             row(icon: added.isEmpty ? "exclamation-triangle" : "check-circle", tint: added.isEmpty ? Theme.warningFG : Theme.successFG,
                 title: added.isEmpty ? "「\(s.text)」沒有加" : "加了 \(added)",
-                detail: problems.isEmpty ? nil : problems.joined(separator: "；"), busy: false, detailTint: Theme.warningFG)
+                detail: problems.isEmpty ? nil : problems.joined(separator: "；"), busy: false, detailTint: Theme.warningFG,
+                trailing: String(format: "%.1f 秒", seconds))
         case .failed(let why):
             row(icon: "exclamation-triangle", tint: Theme.warningFG, title: why, detail: s.text.isEmpty ? nil : "「\(s.text)」", busy: false)
         }
     }
 
     private func row(icon: String, tint: Color, title: String, detail: String?, busy: Bool, live: Bool = false,
-                     detailTint: Color = Theme.muted) -> some View {
+                     detailTint: Color = Theme.muted, trailing: String? = nil) -> some View {
         HStack(alignment: .top, spacing: 10) {
             ZStack {
                 if busy {
@@ -115,6 +116,13 @@ struct VoiceOrderPanel: View {
                 }
             }
             Spacer(minLength: 0)
+            // 放開到加好幾秒（夠不夠快一眼看得到）
+            if let trailing {
+                Text(trailing)
+                    .font(.brand(12, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.muted)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

@@ -263,15 +263,24 @@ def signing(args):
            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, args.name)]))
            .sign(key, hashes.SHA256()))
     csr_pem = csr.public_bytes(serialization.Encoding.PEM).decode()
-    try:
-        cert = call("POST", "/certificates", {"data": {"type": "certificates", "attributes": {
-            "certificateType": "DISTRIBUTION", "csrContent": csr_pem}}})["data"]
-    except ApiError as e:
-        if e.status == 409:
+    # 到上限（409）多半是同一個團隊的另一個 App（StudioX Console）正在建置、它這一次的憑證還沒撤銷：
+    # 等它用完（每 45 秒再試，最多 12 分鐘），不撤銷別人的憑證
+    deadline = time.time() + 12 * 60
+    while True:
+        try:
+            cert = call("POST", "/certificates", {"data": {"type": "certificates", "attributes": {
+                "certificateType": "DISTRIBUTION", "csrContent": csr_pem}}})["data"]
+            break
+        except ApiError as e:
+            if e.status != 409:
+                raise
+            if time.time() < deadline:
+                print("Apple Distribution 憑證到上限：等同一個團隊的另一個建置用完再試（45 秒後）", flush=True)
+                time.sleep(45)
+                continue
             summary("### ❌ Apple Distribution 憑證已經到上限\n"
-                    "到 developer.apple.com → Certificates 撤銷用不到的 Distribution 憑證（名稱是「StudioX CI …」的可以直接撤銷），再重跑。")
+                    "等了 12 分鐘還是滿的：到 developer.apple.com → Certificates 撤銷用不到的 Distribution 憑證，再重跑。")
             sys.exit(1)
-        raise
     output("cert_id", cert["id"])
     der = base64.b64decode(cert["attributes"]["certificateContent"])
     certificate = x509.load_der_x509_certificate(der)

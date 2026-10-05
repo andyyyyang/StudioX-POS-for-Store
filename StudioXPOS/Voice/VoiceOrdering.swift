@@ -8,47 +8,52 @@ import POSSync
 import Speech
 import SwiftUI
 
-/// 語音點餐（手機）：按住下面那條單子說話，放開就加進單子。
+/// 語音點餐（手機，要有 Apple Intelligence；沒有的手機不出現）：按住下面那條單子說話，放開就加進單子。
 ///
-///   按住 → 開始聽（字一邊出來）→ 放開 → 這一段交給 Apple 的模型（Foundation Models）整理成要點的東西
-///   （品名、價錢／規格、幾份、備註）→ 對到菜單 → 加進單子
+///   按住 → 聽寫（在手機上；字一邊出來，別字一邊改回菜單上的名字）→ 放開 → 這一段交給 Apple 的模型
+///   整理成「品項・規格・幾份・備註」（只能從菜單的名字裡選）→ 加進單子
 ///
-/// - 一段一段的：第一段還在整理，就可以按住說第二段（每一段自己整理、整理好就加）
-/// - 沒有 Apple Intelligence 的手機：直接從整句話找菜單上的品名與數量（VoiceOrderText.parse）
-/// - 對不到的不亂加：沒說哪個價錢、要選口味、賣完了的寫在這一段的結果裡（不跳警告），其他的照樣加
-/// - 聽寫在手機上做（支援的話不上網）；菜單的品名先給聽寫，認得比較準
+/// 準：
+/// - 聽寫先拿到菜單上的品名（contextualStrings）
+/// - 別字照讀音改回菜單上的名字（VoiceMenu.corrected：「壓胸」→「鴨胸」；「兩份」不會變成「涼粉」）
+/// - 模型只能從菜單的名字裡選；選了話裡沒說到的（硬湊的）不加
+/// 快：
+/// - 模型的 session 先準備好、讀過說明與菜單（prewarm）：放開時直接問；一個 session 只問一次（前一段不會越積越長）
+/// - 給模型的菜單寫成一行、不附 JSON 格式說明（格式由框架限制）、不隨機（greedy）
+/// - 放開後最多等聽寫 0.5 秒的最後結果
+/// 一段一段的：上一段還在整理就可以按住說下一段。沒說價錢、要選口味、賣完的不加，寫在那一段的結果裡（不跳警告）
 @Observable
 final class VoiceOrdering {
     struct Segment: Identifiable, Equatable {
         enum State: Equatable {
             case listening
             case thinking
-            /// 加了什麼（「鴨胸 140 ×2、鴨心 ×1」）、沒加的原因
-            case done(added: String, problems: [String])
+            /// 加了什麼（「鴨胸 140 ×2、鴨心 ×1」）、沒加的原因、放開到加好幾秒
+            case done(added: String, problems: [String], seconds: Double)
             case failed(String)
         }
 
         let id = UUID()
         var text = ""
         var state = State.listening
+        /// 放開的時候（算放開到加好花了幾秒）
+        var releasedAt: Date?
     }
 
     private(set) var segments: [Segment] = []
     /// 按住中（正在聽）
     private(set) var listening = false
-    /// 不能用的原因（沒給麥克風、語音辨識權限；這支手機不支援）
+    /// 不能用的原因（沒給麥克風、語音辨識權限）
     private(set) var problem: String?
 
     @ObservationIgnored private let recorder = SpeechRecorder()
+    @ObservationIgnored private let interpreter = VoiceInterpreter()
     @ObservationIgnored private var currentId: UUID?
     /// 第幾次按住（問權限時放開又按：只有最後這一次開麥克風）
     @ObservationIgnored private var press = 0
 
-    /// 這支手機能不能聽寫中文（不能就不出現「按住說話」）
-    var isSupported: Bool { SpeechRecorder.isSupported }
-
-    /// 現在正在聽的那一段說到哪
-    var liveText: String { segments.first { $0.id == currentId }?.text ?? "" }
+    /// 能用說的點餐：手機上能聽寫中文、有 Apple Intelligence（沒有就不出現「按住說話」）
+    var isSupported: Bool { SpeechRecorder.isSupported && VoiceInterpreter.isAvailable }
 
     // MARK: 按住、放開
 
@@ -59,6 +64,8 @@ final class VoiceOrdering {
         problem = nil
         press &+= 1
         let token = press
+        // 菜單的讀音、先熱好的模型（菜單沒變就不重做）
+        interpreter.prepare(model.catalog)
         Task { await start(model: model, press: token) }
     }
 
@@ -74,19 +81,17 @@ final class VoiceOrdering {
         segments.append(segment)
         currentId = segment.id
         let id = segment.id
-        let names = model.catalog.items.map(\.name)
         do {
-            try recorder.start(contextualStrings: names) { [weak self] text in
+            try recorder.start(contextualStrings: interpreter.vocabulary) { [weak self] text in
                 let me = self
-                Task { @MainActor in me?.update(id, text: text) }
+                Task { @MainActor in me?.update(id, heard: text) }
             } onFinal: { [weak self, weak model] text in
                 let me = self, owner = model
                 Task { @MainActor in
                     guard let me, let owner else { return }
-                    await me.finish(id, text: text, model: owner)
+                    await me.finish(id, heard: text, model: owner)
                 }
             }
-            VoiceInterpreter.prewarm(catalog: model.catalog)
         } catch {
             listening = false
             currentId = nil
@@ -98,6 +103,9 @@ final class VoiceOrdering {
     func end() {
         guard listening else { return }
         listening = false
+        if let id = currentId, let i = segments.firstIndex(where: { $0.id == id }) {
+            segments[i].releasedAt = Date()
+        }
         currentId = nil
         recorder.stop()
     }
@@ -113,9 +121,10 @@ final class VoiceOrdering {
 
     // MARK: 一段的經過
 
-    private func update(_ id: UUID, text: String) {
+    /// 聽寫的字（還在聽、整理中才更新）：別字一邊改回菜單上的名字
+    private func update(_ id: UUID, heard: String) {
         guard let i = segments.firstIndex(where: { $0.id == id }), segments[i].state == .listening || segments[i].state == .thinking else { return }
-        segments[i].text = text
+        segments[i].text = interpreter.corrected(heard)
     }
 
     private func set(_ id: UUID, _ state: Segment.State) {
@@ -123,17 +132,23 @@ final class VoiceOrdering {
         segments[i].state = state
     }
 
-    /// 聽完一段：整理 → 對到菜單 → 加進單子
-    private func finish(_ id: UUID, text raw: String, model: POSModel) async {
-        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        update(id, text: text)
-        guard !text.isEmpty else {
+    /// 聽完一段：改別字 → 模型整理 → 加進單子
+    private func finish(_ id: UUID, heard: String, model: POSModel) async {
+        update(id, heard: heard.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard let text = segments.first(where: { $0.id == id })?.text, !text.isEmpty else {
             set(id, .failed("沒有聽到"))
             autoDismiss(id)
             return
         }
         set(id, .thinking)
-        let lines = await VoiceInterpreter.lines(for: text, catalog: model.catalog)
+        let lines: [VoiceOrderText.Line]
+        do {
+            lines = try await interpreter.lines(for: text)
+        } catch {
+            set(id, .failed("沒整理出來，再說一次"))
+            autoDismiss(id, after: 6)
+            return
+        }
         guard !lines.isEmpty else {
             set(id, .failed("菜單上沒有聽到的東西"))
             autoDismiss(id, after: 6)
@@ -142,7 +157,7 @@ final class VoiceOrdering {
         var added: [String] = []
         var problems: [String] = []
         for line in lines {
-            if let why = reason(notToAdd: line, model: model) {
+            if let why = reason(notToAdd: line, text: text, model: model) {
                 problems.append(why)
                 continue
             }
@@ -151,20 +166,23 @@ final class VoiceOrdering {
             let note = line.note.isEmpty ? "" : "（\(line.note)）"
             added.append("\(line.item.name)\(variant) ×\(line.quantity)\(note)")
         }
-        set(id, .done(added: added.joined(separator: "、"), problems: problems))
+        let released = segments.first { $0.id == id }?.releasedAt ?? Date()
+        set(id, .done(added: added.joined(separator: "、"), problems: problems, seconds: Date().timeIntervalSince(released)))
         autoDismiss(id, after: problems.isEmpty ? 4 : 8)
     }
 
-    /// 不能直接加的原因（沒說價錢、要選口味、賣完…）：寫在結果裡，請店員點一下
-    private func reason(notToAdd line: VoiceOrderText.Line, model: POSModel) -> String? {
+    /// 不能直接加的原因（沒說到、沒說價錢、要選口味、賣完…）：寫在結果裡，請店員點一下
+    private func reason(notToAdd line: VoiceOrderText.Line, text: String, model: POSModel) -> String? {
         let item = line.item
+        if !interpreter.mentions(item, in: text) { return "沒聽到「\(item.name)」，沒有加" }
         if !model.isAvailable(item) { return "\(item.name) 今天賣完了" }
         if line.needsVariant {
             let options = item.activeVariants.map { item.price(of: $0).plain }.joined(separator: "／")
             return "\(item.name) 要說哪一個（\(options)）"
         }
         if let v = line.variant, !v.isAvailable { return "\(item.name) \(v.label) 今天不能賣" }
-        if model.catalog.groups(for: item).contains(where: { $0.minSelect > 0 }) { return "\(item.name) 要選\(model.catalog.groups(for: item).map(\.name).joined(separator: "、"))，請點一下" }
+        let groups = model.catalog.groups(for: item)
+        if groups.contains(where: { $0.minSelect > 0 }) { return "\(item.name) 要選\(groups.map(\.name).joined(separator: "、"))，請點一下" }
         if item.openPrice { return "\(item.name) 要打金額，請點一下" }
         if item.itemKind.needsMember { return "\(item.name) 要先找會員" }
         return nil
@@ -180,71 +198,139 @@ final class VoiceOrdering {
 
 // MARK: - 整理成要點的東西
 
-/// Apple 的模型（Foundation Models）整理出來的一段話
-@Generable
-nonisolated struct SpokenOrder {
-    @Guide(description: "這段話要點的每一樣；同一樣東西不同價錢要分成兩行")
-    var lines: [SpokenLine]
-}
-
-@Generable
-nonisolated struct SpokenLine {
-    @Guide(description: "菜單上的品名，照菜單上的寫法")
-    var name: String
-    @Guide(description: "說到的價錢或規格，例如 140、150、大、小；沒說就是空字串")
-    var option: String
-    @Guide(description: "幾份；沒說就是 1", .range(1...99))
-    var quantity: Int
-    @Guide(description: "備註，例如 不要辣、切小塊、分開裝；沒有就是空字串")
-    var note: String
-}
-
-enum VoiceInterpreter {
+/// 一段話 → 菜單上的幾樣：Apple 的模型，輸出的格式由框架限制（品項只能是菜單上的名字）
+final class VoiceInterpreter {
     /// 這支手機有 Apple Intelligence 的模型可以用
-    static var modelAvailable: Bool { SystemLanguageModel.default.isAvailable }
+    static var isAvailable: Bool { SystemLanguageModel.default.isAvailable }
 
-    /// 一段話 → 對到菜單的幾樣。有模型先用模型；模型不能用、出錯、整理不出東西就直接從整句話找
-    static func lines(for text: String, catalog: Catalog) async -> [VoiceOrderText.Line] {
-        if modelAvailable, let lines = try? await modelLines(for: text, catalog: catalog), !lines.isEmpty {
-            return lines
+    private var menu: VoiceMenu?
+    private var menuKey = ""
+    private var schema: GenerationSchema?
+    private var instructions = ""
+    /// 先準備好、讀過說明與菜單的 session；用掉一個補一個
+    private var ready: LanguageModelSession?
+
+    /// 不隨機（同一句話每次一樣、也比較快）；一段話最多二十行，夠用
+    private static let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: 400)
+
+    /// 給聽寫參考的品名
+    var vocabulary: [String] { menu?.vocabulary ?? [] }
+
+    func corrected(_ text: String) -> String { menu?.corrected(text) ?? text }
+
+    func mentions(_ item: MenuItem, in text: String) -> Bool { menu?.mentions(item, in: text) ?? true }
+
+    /// 按住時：菜單變了才重建讀音與格式；沒有熱好的 session 就熱一個（趁說話的時候讀菜單）
+    func prepare(_ catalog: Catalog) {
+        let key = Self.key(catalog)
+        if key != menuKey {
+            let menu = VoiceMenu(catalog: catalog, pronounce: Pinyin.reading)
+            self.menu = menu
+            menuKey = key
+            schema = menu.isEmpty ? nil : (try? Self.schema(menu))
+            instructions = Self.instructions(menu)
+            ready = nil
         }
-        return VoiceOrderText.parse(text, catalog: catalog)
+        if ready == nil, schema != nil { ready = warmSession() }
     }
 
-    /// 按住時先把模型叫醒（放開時比較快）
-    static func prewarm(catalog: Catalog) {
-        guard modelAvailable else { return }
-        LanguageModelSession(instructions: instructions(catalog)).prewarm()
-    }
-
-    private static func modelLines(for text: String, catalog: Catalog) async throws -> [VoiceOrderText.Line] {
-        // 每一段一個 session：好幾段同時整理也不會互相等
-        let session = LanguageModelSession(instructions: instructions(catalog))
-        let response = try await session.respond(to: text, generating: SpokenOrder.self)
-        return response.content.lines.compactMap { line in
-            guard let item = VoiceOrderText.match(name: line.name, in: catalog) else { return nil }
-            return VoiceOrderText.Line(item: item, variant: VoiceOrderText.variant(line.option, of: item),
-                                       quantity: max(1, min(line.quantity, 99)), note: line.note.trimmingCharacters(in: .whitespaces))
+    func lines(for text: String) async throws -> [VoiceOrderText.Line] {
+        guard let menu, let schema else { return [] }
+        // 用熱好的那一個（沒有就現開一個：上一段還在整理時又說了一段）
+        let session = ready ?? warmSession()
+        ready = nil
+        let response = try await session.respond(to: text, schema: schema, includeSchemaInPrompt: false, options: Self.options)
+        if ready == nil { ready = warmSession() }
+        let rows = try response.content.value([GeneratedContent].self, forProperty: "lines")
+        return rows.compactMap { row -> VoiceOrderText.Line? in
+            guard let label = try? row.value(String.self, forProperty: "item"), let item = menu.item(label: label) else { return nil }
+            let spec = (try? row.value(String.self, forProperty: "spec")) ?? ""
+            let quantity = (try? row.value(Int.self, forProperty: "qty")) ?? 1
+            let note = ((try? row.value(String.self, forProperty: "note")) ?? "").trimmingCharacters(in: .whitespaces)
+            return VoiceOrderText.Line(item: item, variant: VoiceOrderText.variant(spec, of: item),
+                                       quantity: max(1, min(quantity, 99)), note: note)
         }
     }
 
-    /// 給模型的說明：店員說的話 → 菜單上的品項；菜單一行一樣（有幾種價錢寫出來）
-    private static func instructions(_ catalog: Catalog) -> String {
-        let menu = catalog.items.map { item -> String in
-            let prices = item.activeVariants.map { item.price(of: $0).plain }
-            let detail = prices.isEmpty ? item.price.plain : prices.joined(separator: "／")
-            let unit = item.unit.contains(where: \.isNumber) ? "，\(item.unit)" : ""
-            return "- \(item.name)（\(detail)\(unit)）"
+    private func warmSession() -> LanguageModelSession {
+        let session = LanguageModelSession(instructions: instructions)
+        session.prewarm()
+        return session
+    }
+
+    /// 菜單有沒有變（品項、名字、規格的價錢）
+    private static func key(_ catalog: Catalog) -> String {
+        catalog.items.map { item in
+            let prices = item.activeVariants.map { "\($0.id)=\(item.price(of: $0).cents)" }.joined(separator: ",")
+            return "\(item.id)|\(item.categoryId)|\(item.name)|\(item.shortName ?? "")|\(prices)"
         }.joined(separator: "\n")
-        return """
-        你在台灣夜市的小吃攤幫店員點餐。把店員說的一段話整理成要點的品項。
-        - name 一定要是下面菜單上的品名（照菜單寫）；菜單上沒有的不要寫
-        - option 是說到的價錢或規格（例如「鴨胸 140」的 140）；沒說就空字串
-        - quantity 是幾份（兩份＝2、三個＝3）；沒說就是 1
-        - note 是備註（不要辣、切小塊）；沒有就空字串
-        菜單：
-        \(menu)
+    }
+
+    /// 輸出的格式：{ lines: [{ item: 菜單上的名字之一, spec?, qty, note? }] }
+    private static func schema(_ menu: VoiceMenu) throws -> GenerationSchema {
+        let item = DynamicGenerationSchema(name: "MenuItem", anyOf: menu.entries.map(\.label))
+        let text = DynamicGenerationSchema(type: String.self)
+        let count = DynamicGenerationSchema(type: Int.self)
+        let properties: [DynamicGenerationSchema.Property] = [
+            DynamicGenerationSchema.Property(name: "item", schema: item),
+            DynamicGenerationSchema.Property(name: "spec", schema: text, isOptional: true),
+            DynamicGenerationSchema.Property(name: "qty", schema: count),
+            DynamicGenerationSchema.Property(name: "note", schema: text, isOptional: true),
+        ]
+        let line = DynamicGenerationSchema(name: "Line", properties: properties)
+        let lines = DynamicGenerationSchema.Property(name: "lines", schema: DynamicGenerationSchema(arrayOf: line))
+        let order = DynamicGenerationSchema(name: "Order", properties: [lines])
+        return try GenerationSchema(root: order, dependencies: [])
+    }
+
+    /// 說明越短越快：怎麼填、菜單一行
+    private static func instructions(_ menu: VoiceMenu) -> String {
         """
+        把店員說的話整理成要點的品項 lines。
+        item：菜單上的名字；話裡沒點到的不要寫。
+        spec：菜單括號裡有幾種價錢或規格的，說到哪個寫哪個；沒說就不寫。
+        qty：幾份（兩份＝2、三個＝3）；沒說就是 1。
+        note：備註（不要辣、切小塊）；沒有就不寫。
+        菜單：\(menu.menuLine)
+        """
+    }
+}
+
+/// 一個中文字的讀音（「鴨」→「ya1」）：系統的拼音轉換，算過的記起來（菜單與說的話都用這個）
+nonisolated enum Pinyin {
+    private static let cache = ReadingCache()
+
+    static let reading: VoiceMenu.Pronounce = { c in Pinyin.cache.reading(of: c) }
+}
+
+nonisolated private final class ReadingCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var memo: [Character: String?] = [:]
+
+    func reading(of c: Character) -> String? {
+        if let hit = lock.withLock({ memo[c] }) { return hit }
+        let value = Self.compute(c)
+        lock.withLock { memo[c] = .some(value) }
+        return value
+    }
+
+    /// 「鴨」→ "yā" → 聲調 1、去掉聲調符號 "ya" →「ya1」（輕聲 5）
+    private static func compute(_ c: Character) -> String? {
+        guard c.unicodeScalars.count == 1, let u = c.unicodeScalars.first,
+              (0x4E00...0x9FFF).contains(u.value) || (0x3400...0x4DBF).contains(u.value) || (0xF900...0xFAFF).contains(u.value),
+              let latin = String(c).applyingTransform(.mandarinToLatin, reverse: false) else { return nil }
+        var tone = "5"
+        for mark in latin.decomposedStringWithCanonicalMapping.unicodeScalars {
+            switch mark.value {
+            case 0x0304: tone = "1"
+            case 0x0301: tone = "2"
+            case 0x030C: tone = "3"
+            case 0x0300: tone = "4"
+            default: break
+            }
+        }
+        let base = (latin.applyingTransform(.stripDiacritics, reverse: false) ?? latin).lowercased().filter { $0.isASCII && $0.isLetter }
+        return base.isEmpty ? nil : base + tone
     }
 }
 
@@ -304,14 +390,14 @@ nonisolated final class SpeechRecorder: @unchecked Sendable {
 
     private var current: SegmentBox?
 
-    /// 放開：不再收聲音；最後的結果晚一點回（最多等 1.5 秒，等不到就用聽到的最後一句）
+    /// 放開：不再收聲音；最後的結果晚一點回（最多等 0.5 秒，等不到就用聽到的最後一句：手機上聽寫的最後一句幾乎就是結果）
     func stop() {
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         request?.endAudio()
         request = nil
         if let box = current {
-            DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) { box.deliver() }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) { box.deliver() }
         }
         current = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)

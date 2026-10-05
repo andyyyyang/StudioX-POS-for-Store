@@ -1,11 +1,9 @@
 import Foundation
 
-/// 語音點餐：把說的話（或 Apple 的模型整理好的一行）對到菜單。
+/// 語音點餐：說的話 → 菜單上的品項。
 ///
-///   「鴨胸 140 兩份、鴨心一串」 → 鴨胸（140）×2、鴨心 ×1
-///
-/// 手機上先請 Apple 的模型（Foundation Models）整理成一行一行（品名、規格、幾份、備註），再用這裡對到菜單；
-/// 沒有模型（不支援的手機）就直接用 parse 從整句話裡找品名與數量。純函式，不碰畫面、不連網路
+/// 聽寫常把菜名寫成同音的別字（「鴨胸」→「壓胸」「鴨兄」）。先用讀音把別字改回菜單上的名字（`VoiceMenu.corrected`），
+/// 再交給 Apple 的模型整理成一行一行（模型只能從菜單的名字裡選）。純函式，不碰畫面、不連網路
 public enum VoiceOrderText {
     /// 對到菜單的一樣
     public struct Line: Sendable, Hashable {
@@ -68,26 +66,10 @@ public enum VoiceOrderText {
         return n > 0 ? n : nil
     }
 
-    // MARK: 對到菜單
+    /// 數字與量詞（「兩」「份」「個」）：改別字時不動它們（「兩份」不會變成菜單上的「涼粉」）
+    static let countWords = Set("零〇一二兩两三四五六七八九十百半幾份個串盒包碗杯支塊片條隻顆粒袋碟盤")
 
-    /// 品名對到菜單：一模一樣（含簡稱）> 菜單的名字在裡面 > 說的在菜單名字裡 > 共同的字最多（至少一半）。賣完的照樣對（加的時候再說）
-    public static func match(name raw: String, in catalog: Catalog) -> MenuItem? {
-        let name = normalized(raw)
-        guard !name.isEmpty else { return nil }
-        let items = catalog.items
-        if let exact = items.first(where: { normalized($0.name) == name || $0.shortName.map(normalized) == name }) { return exact }
-        // 菜單的名字被整個說出來了（「鴨胸肉」裡有「鴨胸」）：長的先（「鴨胸」與「鴨」都在時是鴨胸）
-        if let contained = items.filter({ name.contains(normalized($0.name)) }).max(by: { $0.name.count < $1.name.count }) { return contained }
-        if let partial = items.filter({ normalized($0.name).contains(name) }).min(by: { $0.name.count < $1.name.count }) { return partial }
-        let chars = Set(name)
-        let scored = items.map { item -> (MenuItem, Double) in
-            let n = Set(normalized(item.name))
-            let common = Double(n.intersection(chars).count)
-            return (item, common / Double(max(n.count, 1)))
-        }
-        guard let best = scored.max(by: { $0.1 < $1.1 }), best.1 >= 0.5 else { return nil }
-        return best.0
-    }
+    // MARK: 規格
 
     /// 規格：「140」對到價錢 140 的、「大」對到選項有「大」的；只有一個規格就是它
     public static func variant(_ raw: String, of item: MenuItem) -> ItemVariant? {
@@ -104,66 +86,7 @@ public enum VoiceOrderText {
         return options.count == 1 ? options[0] : nil
     }
 
-    // MARK: 沒有模型時：整句話直接找
-
-    /// 從整句話裡找菜單上的品名（長的先、不重疊），再分配數量與價錢（規格）：
-    /// - 標點、「跟」「和」「還有」「然後」「另外」把一句話分成好幾段
-    /// - 緊接在品名前面的數字（「兩份鴨胸」）就是它的；不然看後面同一段裡的（「鴨胸兩份」）；一個數字只給一樣
-    /// - 後面說的數字剛好是某個規格的價錢（「鴨胸 140」）＝那個規格
-    /// 「鴨胸 140 兩份、鴨心一串，還有三個鴨頭」→ [鴨胸 140 ×2, 鴨心 ×1, 鴨頭 ×3]
-    public static func parse(_ text: String, catalog: Catalog) -> [Line] {
-        let s = Array(segmented(text, catalog: catalog))
-        guard !s.isEmpty else { return [] }
-        // 每一個位置往後找最長的品名
-        let names = catalog.items.flatMap { item in
-            ([item.name] + [item.shortName].compactMap { $0 }).map { (Array(normalized($0)), item) }
-        }.filter { !$0.0.isEmpty }.sorted { $0.0.count > $1.0.count }
-        var hits: [(range: Range<Int>, item: MenuItem)] = []
-        var i = 0
-        while i < s.count {
-            if let hit = names.first(where: { n in i + n.0.count <= s.count && Array(s[i..<(i + n.0.count)]) == n.0 }) {
-                hits.append((i..<(i + hit.0.count), hit.1))
-                i += hit.0.count
-            } else {
-                i += 1
-            }
-        }
-        let nums = numbers(in: s)
-        var used = Set<Int>()
-        var out: [Line] = []
-        for (k, hit) in hits.enumerated() {
-            let nextStart = k + 1 < hits.count ? hits[k + 1].range.lowerBound : s.count
-            let prevEnd = k > 0 ? hits[k - 1].range.upperBound : 0
-            // 後面同一段（到下一個分隔或下一樣為止）
-            let afterEnd = (hit.range.upperBound..<nextStart).first { s[$0] == boundary } ?? nextStart
-            let after = nums.filter { $0.start >= hit.range.upperBound && $0.end <= afterEnd }
-            // 緊接在前面的（同一段、沒被前一樣用掉）
-            let beforeStart = ((prevEnd..<hit.range.lowerBound).last { s[$0] == boundary }).map { $0 + 1 } ?? prevEnd
-            let before = nums.last { $0.start >= beforeStart && $0.end == hit.range.lowerBound && !used.contains($0.start) }
-
-            let priced = after.first { n in hit.item.activeVariants.contains { hit.item.price(of: $0).cents == n.value * 100 } }
-            var variant = priced.flatMap { p in hit.item.activeVariants.first { hit.item.price(of: $0).cents == p.value * 100 } }
-            if variant == nil {
-                variant = labelVariant(in: String(s[hit.range.upperBound..<afterEnd]), of: hit.item)
-                    ?? (hit.item.activeVariants.count == 1 ? hit.item.activeVariants.first : nil)
-            }
-            var quantity = 1
-            if let b = before {
-                quantity = b.value
-                used.insert(b.start)
-            } else if let a = after.first(where: { $0.start != priced?.start && $0.value < 100 && !used.contains($0.start) }) {
-                quantity = a.value
-                used.insert(a.start)
-            }
-            if let p = priced { used.insert(p.start) }
-            out.append(Line(item: hit.item, variant: variant, quantity: max(1, min(quantity, 99))))
-        }
-        return out
-    }
-
-    // MARK: 小工具
-
-    /// 去掉空白、標點，全形轉半形、轉小寫（對名字用）
+    /// 去掉空白、標點，全形轉半形、轉小寫
     static func normalized(_ s: String) -> String {
         let skip = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters).union(.symbols)
         var out = String.UnicodeScalarView()
@@ -177,55 +100,207 @@ public enum VoiceOrderText {
         }
         return String(out)
     }
+}
 
-    private static let asciiDigits = Set("0123456789")
-    private static let chineseNumerals = Set("零〇一二兩两三四五六七八九十百")
-    private static let units = Set("份個串盒包碗杯支塊片條隻顆粒袋")
+/// 一份菜單的讀音索引：菜單變了才重建；每一段話拿來改別字、檢查模型選的品名是不是真的有說到。
+///
+/// 改別字的規則（同樣長度的一段字對菜單上的名字，一個字一個字比）：
+/// - 同一個字 3 分；同音同調 2 分（「壓」對「鴨」）；同音不同調 1 分（聲母 zh/z、ch/c、sh/s、l/n，韻母 -ng 不分）
+/// - 平均要有 2 分（「鴨兄」5 分 ≥ 4）；每個字都要有分，四個字以上的名字可以錯一個字
+/// - 一個字的名字只認一模一樣的；數字、量詞（兩、份、個）不改
+/// - 分數高的先、長的先，不重疊
+public struct VoiceMenu: Sendable {
+    /// 一個字的讀音：拼音加聲調（「鴨」→「ya1」，輕聲 5）；不是中文字回 nil
+    public typealias Pronounce = @Sendable (Character) -> String?
 
-    /// 一句話裡的數字：位置（end 含後面的量詞「份」「個」）與值。阿拉伯數字和中文數字分開算（「140兩份」是 140 和 兩）
-    private static func numbers(in chars: [Character]) -> [(value: Int, start: Int, end: Int)] {
-        var out: [(value: Int, start: Int, end: Int)] = []
+    public struct Entry: Sendable {
+        /// 給模型選的名字（同名的品項加分類：「紅茶（飲料）」）
+        public let label: String
+        public let item: MenuItem
+    }
+
+    struct Sound: Sendable, Equatable {
+        /// 拼音（聲母韻母相近的併在一起）
+        let base: String
+        let tone: Character
+
+        init?(_ raw: String?) {
+            guard var s = raw?.lowercased(), !s.isEmpty else { return nil }
+            var tone: Character = "5"
+            if let last = s.last, "12345".contains(last) {
+                tone = last
+                s.removeLast()
+            }
+            guard !s.isEmpty else { return nil }
+            self.base = Sound.fuzzy(s)
+            self.tone = tone
+        }
+
+        /// 台灣口音、聽寫常混的：zh/z、ch/c、sh/s、l/n，-ang/-an、-eng/-en、-ing/-in
+        static func fuzzy(_ s: String) -> String {
+            var t = s
+            if t.hasPrefix("zh") || t.hasPrefix("ch") || t.hasPrefix("sh") { t.remove(at: t.index(after: t.startIndex)) }
+            if t.hasPrefix("l") { t = "n" + t.dropFirst() }
+            if t.hasSuffix("ng") { t.removeLast() }
+            return t
+        }
+    }
+
+    /// 菜單上的一種寫法（名字、簡稱）
+    struct Spelling: Sendable {
+        let chars: [Character]
+        let sounds: [Sound?]
+        let entry: Int
+    }
+
+    public let entries: [Entry]
+    private let byLabel: [String: Int]
+    private let spellings: [Spelling]
+    private let pronounce: Pronounce
+
+    public init(catalog: Catalog, pronounce: @escaping Pronounce) {
+        self.pronounce = pronounce
+        var nameCount: [String: Int] = [:]
+        for item in catalog.items { nameCount[item.name, default: 0] += 1 }
+        var seen = Set<String>()
+        var entries: [Entry] = []
+        for item in catalog.items where !item.name.isEmpty {
+            var label = item.name
+            if nameCount[item.name, default: 0] > 1, let category = catalog.category(item.categoryId)?.name {
+                label = "\(item.name)（\(category)）"
+            }
+            var unique = label
+            var n = 2
+            while seen.contains(unique) {
+                unique = "\(label)\(n)"
+                n += 1
+            }
+            seen.insert(unique)
+            entries.append(Entry(label: unique, item: item))
+        }
+        self.entries = entries
+        var byLabel: [String: Int] = [:]
+        var spellings: [Spelling] = []
+        for (i, e) in entries.enumerated() {
+            byLabel[e.label] = i
+            // 簡稱一個字的不用（「大」會把「大概」改掉）
+            let names = [e.item.name] + [e.item.shortName].compactMap { $0 }.filter { $0.count >= 2 && $0 != e.item.name }
+            for name in names {
+                let chars = Array(name)
+                spellings.append(Spelling(chars: chars, sounds: chars.map { Sound(pronounce($0)) }, entry: i))
+            }
+        }
+        self.byLabel = byLabel
+        self.spellings = spellings
+    }
+
+    public var isEmpty: Bool { entries.isEmpty }
+
+    /// 模型選的名字 → 品項
+    public func item(label: String) -> MenuItem? {
+        byLabel[label].map { entries[$0].item }
+    }
+
+    /// 給聽寫參考的詞（品名、簡稱；最多 100 個）
+    public var vocabulary: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for e in entries {
+            for name in [e.item.name] + [e.item.shortName].compactMap({ $0 }) where name.count >= 2 && seen.insert(name).inserted {
+                out.append(name)
+            }
+        }
+        return Array(out.prefix(100))
+    }
+
+    /// 給模型看的菜單（一行，越短越快）：「鴨胸(140/150)、鴨心、鴨腸」——有幾種價錢或規格的寫在括號裡
+    public var menuLine: String {
+        entries.map { e in
+            let vs = e.item.activeVariants
+            guard vs.count > 1 else { return e.label }
+            let distinctPrices = Set(vs.map { e.item.price(of: $0).cents }).count == vs.count
+            let specs = distinctPrices ? vs.map { e.item.price(of: $0).plain } : vs.map(\.label)
+            return "\(e.label)(\(specs.joined(separator: "/")))"
+        }.joined(separator: "、")
+    }
+
+    // MARK: 改別字
+
+    /// 把聽寫的別字改回菜單上的名字（「壓胸兩份」→「鴨胸兩份」）；其他的字照舊
+    public func corrected(_ text: String) -> String {
+        let chars = Array(text)
+        guard !chars.isEmpty, !spellings.isEmpty else { return text }
+        let sounds = chars.map { Sound(pronounce($0)) }
+        var found: [(start: Int, length: Int, score: Int, entry: Int)] = []
+        for s in spellings where s.chars.count <= chars.count {
+            for start in 0...(chars.count - s.chars.count) {
+                if let score = score(s, at: start, chars: chars, sounds: sounds) {
+                    found.append((start, s.chars.count, score, s.entry))
+                }
+            }
+        }
+        guard !found.isEmpty else { return text }
+        // 平均分數高的先（不用除法：a/la > b/lb ⇔ a·lb > b·la）、長的先、前面的先
+        found.sort { a, b in
+            let l = a.score * b.length, r = b.score * a.length
+            if l != r { return l > r }
+            if a.length != b.length { return a.length > b.length }
+            return a.start < b.start
+        }
+        var taken = [Bool](repeating: false, count: chars.count)
+        var replace: [Int: (length: Int, entry: Int)] = [:]
+        for f in found where !taken[f.start..<(f.start + f.length)].contains(true) {
+            for k in f.start..<(f.start + f.length) { taken[k] = true }
+            replace[f.start] = (f.length, f.entry)
+        }
+        var out = ""
         var i = 0
         while i < chars.count {
-            let kind: Set<Character>? = asciiDigits.contains(chars[i]) ? asciiDigits : (chineseNumerals.contains(chars[i]) ? chineseNumerals : nil)
-            guard let kind else { i += 1; continue }
-            var j = i
-            while j < chars.count, kind.contains(chars[j]) { j += 1 }
-            if let n = number(String(chars[i..<j])) {
-                let end = j < chars.count && units.contains(chars[j]) ? j + 1 : j
-                out.append((value: n, start: i, end: end))
+            if let r = replace[i] {
+                out += entries[r.entry].item.name
+                i += r.length
+            } else {
+                out.append(chars[i])
+                i += 1
             }
-            i = j
         }
         return out
     }
 
-    /// 分段的記號（標點、「跟」「還有」換成它）
-    private static let boundary: Character = "|"
-    private static let joiners = ["還有", "然後", "另外", "再來", "跟", "和"]
-
-    /// 去掉空白，標點與連接詞換成分段記號（菜單上有品名用到的連接詞不換：「和風沙拉」的「和」）
-    static func segmented(_ s: String, catalog: Catalog) -> String {
-        var t = s
-        for j in joiners where !catalog.items.contains(where: { $0.name.contains(j) }) {
-            t = t.replacingOccurrences(of: j, with: String(boundary))
-        }
-        let breaks = CharacterSet.punctuationCharacters.union(.symbols)
-        var out = String.UnicodeScalarView()
-        for u in t.lowercased().unicodeScalars {
-            if CharacterSet.whitespacesAndNewlines.contains(u) { continue }
-            if breaks.contains(u) { out.append(UnicodeScalar(UInt8(ascii: "|"))); continue }
-            if (0xFF01...0xFF5E).contains(u.value), let half = UnicodeScalar(u.value - 0xFEE0) {
-                out.append(half)
+    /// 一段字像不像這個名字：像就回分數，不像回 nil
+    private func score(_ s: Spelling, at start: Int, chars: [Character], sounds: [Sound?]) -> Int? {
+        let length = s.chars.count
+        var total = 0
+        var misses = 0
+        for k in 0..<length {
+            let c = chars[start + k]
+            if c == s.chars[k] {
+                total += 3
+                continue
+            }
+            // 一個字的名字只認一模一樣的；數字、量詞不改
+            if length == 1 || VoiceOrderText.countWords.contains(c) { return nil }
+            if let a = sounds[start + k], let b = s.sounds[k], a.base == b.base {
+                total += a.tone == b.tone ? 2 : 1
             } else {
-                out.append(u)
+                misses += 1
+                if misses > (length >= 4 ? 1 : 0) { return nil }
             }
         }
-        return String(out)
+        return total >= 2 * length ? total : nil
     }
 
-    /// 後面說的話裡有某個規格的名字（「大」「小」「辣」）
-    private static func labelVariant(in s: String, of item: MenuItem) -> ItemVariant? {
-        item.activeVariants.first { v in v.options.contains { o in !o.isEmpty && Int(o) == nil && s.contains(normalized(o)) } }
+    // MARK: 模型選的有沒有說到
+
+    /// 模型選的品項真的有說到：名字在話裡，或至少一個字（同音也算）有說到；都沒有就是模型硬湊的（「可樂」被湊成「鴨胸」）
+    public func mentions(_ item: MenuItem, in text: String) -> Bool {
+        let names = [item.name] + [item.shortName].compactMap { $0 }.filter { $0.count >= 2 }
+        if names.contains(where: { text.contains($0) }) { return true }
+        let words = text.filter { !VoiceOrderText.countWords.contains($0) }
+        let chars = Set(words)
+        let bases = Set(words.compactMap { Sound(pronounce($0))?.base })
+        return item.name.contains { c in
+            chars.contains(c) || (Sound(pronounce(c)).map { bases.contains($0.base) } ?? false)
+        }
     }
 }
