@@ -28,7 +28,7 @@ struct TapToPaySheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SheetHeader(title: "卡緊收", subtitle: ticket.map { "\($0.number)・\(due.formatted)" }, closeLabel: "取消", close: { dismiss() })
+            SheetHeader(title: "卡緊收", subtitle: ticket.map { "\(model.orderNumber($0) ?? model.orderTitle($0))・\(due.formatted)" }, closeLabel: "取消", close: { dismiss() })
             ScrollView {
                 VStack(spacing: 22) {
                     reader

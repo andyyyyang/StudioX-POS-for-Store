@@ -508,7 +508,12 @@ struct TicketColumn: View {
     /// 「阿珠・23:19」；標題不是單號（桌號、稱呼）時前面加單號，有人數加人數：「A036・4 位・阿珠・23:19」
     private func metaLine(_ t: Ticket) -> String {
         var parts: [String] = []
-        if headerTitle(t) != t.number { parts.append(t.number) }
+        if model.hidesTicketNumber(t) {
+            // 外帶叫號的店：不寫單號（取到號在旁邊的標籤）
+            if t.queueNumber == nil { parts.append("取餐號碼結帳後給") }
+        } else if headerTitle(t) != t.number {
+            parts.append(t.number)
+        }
         if t.guests > 0 { parts.append("\(t.guests) 位") }
         parts.append(model.staffName(t.openedBy))
         parts.append(TaipeiTime.clock(t.openedAt))
@@ -521,6 +526,8 @@ struct TicketColumn: View {
         if t.orderType == .dineIn && !t.tableIds.isEmpty { return model.floor.tableNames(t.tableIds) }
         if let name = t.customerName, !name.isEmpty { return name }
         if t.serviceMode?.showsOrderType == false, let m = t.member { return m.name ?? m.maskedPhone }
+        // 外帶叫號的店：單號不寫（客人只認取餐號碼）
+        if model.hidesTicketNumber(t) { return t.queueNumber == nil ? model.orderTitle(t) : t.orderType.label }
         return t.number
     }
 
@@ -1188,7 +1195,7 @@ struct TicketColumn: View {
         switch p {
         case .salesperson: return "整張單的業績算給誰"
         case .batchDiscount: return "已選 \(checkedLines(in: t).count) 項・每一項打一樣的折扣"
-        default: return "\(t.number)・\(t.title(floor: model.floor))"
+        default: return model.orderCaption(t)
         }
     }
 

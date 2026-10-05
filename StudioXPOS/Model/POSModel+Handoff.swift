@@ -24,7 +24,7 @@ extension POSModel {
             return
         }
         guard record(.billPrinted(TicketRef(ticketId: t.id, sentFrom: handoffSource))) else { return }
-        show("\(t.title(floor: floor)) 送到結帳櫃台了，請客人到櫃台結帳", tone: .info)
+        show("\(orderTitle(t)) 送到結帳櫃台了，請客人到櫃台結帳", tone: .info)
         if isPhone, selectedTicketId == t.id { selectedTicketId = nil }
     }
 
@@ -37,7 +37,7 @@ extension POSModel {
         keypad.cancel()
         checkoutTicketId = nil
         if isPhone || selectedTicketId == t.id { selectedTicketId = nil }
-        show("\(t.title(floor: floor)) 送到櫃台付現：請客人到櫃台付 \(due.formatted)", tone: .info)
+        show("\(orderTitle(t)) 送到櫃台付現：請客人到櫃台付 \(due.formatted)", tone: .info)
     }
 
     /// 這張是送到櫃台「付現」的
@@ -74,10 +74,10 @@ extension POSModel {
             case .billPrinted(let ref):
                 guard role.hasDrawer, let from = ref.sentFrom, let t = state.tickets[ref.ticketId], t.isOpen,
                       t.billSentFrom != nil else { continue }
-                remoteActivity = "\(t.title(floor: floor)) 從\(from)送來結帳"
+                remoteActivity = "\(orderTitle(t)) 從\(from)送來結帳"
             case .ticketClosed(let c):
                 guard !role.hasDrawer, let t = state.tickets[c.ticketId], t.deviceId == device.id, t.billSentFrom != nil else { continue }
-                remoteActivity = "\(t.title(floor: floor)) 在櫃台結好了"
+                remoteActivity = "\(orderTitle(t)) 在櫃台結好了"
             default:
                 continue
             }

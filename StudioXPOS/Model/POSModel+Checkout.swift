@@ -244,14 +244,15 @@ extension POSModel {
         case .taken(let n):
             printTakeoutSlips(t, sale: sale, number: n, kitchenLines: kitchenLines, kitchenMode: kitchenMode)
             flashTakeout(n, ticket: t)
-            show("已結帳 \(t.number) \(sale.total.formatted)・取餐號碼 \(n) 號\(change)")
+            // 單號不寫（客人只認取餐號碼）
+            show("已結帳 \(sale.total.formatted)・取餐號碼 \(n) 號\(change)")
         case .failed:
             printTakeoutSlips(t, sale: sale, number: nil, kitchenLines: kitchenLines, kitchenMode: kitchenMode)
-            show("已結帳 \(t.number) \(sale.total.formatted)\(change)・叫號連不上，沒有取到號碼：連上後到「訂單」這一筆按「補取號」", tone: .warning)
+            show("已結帳 \(sale.total.formatted)\(change)・叫號連不上，沒有取到號碼：連上後到「訂單」\(t.number) 這一筆按「補取號」", tone: .warning)
         case .late:
             // 廚房先做；收據、號碼牌等號碼回來再印（takeTakeoutNumber 接手）
             if !kitchenLines.isEmpty { printKitchen(t, lines: kitchenLines, mode: kitchenMode) }
-            show("已結帳 \(t.number) \(sale.total.formatted)\(change)・叫號比較慢，號碼取到了會自動印出來", tone: .info)
+            show("已結帳 \(sale.total.formatted)\(change)・叫號比較慢，號碼取到了會自動印出來", tone: .info)
         }
     }
 

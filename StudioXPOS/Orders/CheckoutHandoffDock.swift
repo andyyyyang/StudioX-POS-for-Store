@@ -28,14 +28,15 @@ private struct CheckoutHandoffDock: ViewModifier {
         let waiting = model.incomingHandoffs
         guard let t = waiting.first else { return nil }
         let model = model
-        var detail = [t.number, "\(t.itemCount) 項", t.totals.amountDue.formatted]
+        // 外帶叫號的店不寫單號（客人只認取餐號碼）：改寫開單的時間，好幾張一起送來也分得出來
+        var detail = [model.orderNumber(t) ?? TaipeiTime.clock(t.openedAt), "\(t.itemCount) 項", t.totals.amountDue.formatted]
         if let who = model.staffMember(t.openedBy) { detail.append(who.name) }
         if let at = t.billPrintedAt { detail.append("\(TaipeiTime.clock(at)) 送來") }
         let badge = waiting.count > 1 ? DockBadge("還有 \(waiting.count - 1) 張", tone: .warning) : DockBadge("待結帳", tone: .warning)
         return DockSelection(
             id: "handoff-\(t.id)",
             kind: "從\(t.billSentFrom ?? "其他裝置")送來結帳",
-            title: t.title(floor: model.floor),
+            title: model.orderTitle(t),
             detail: detail.joined(separator: "・"),
             badge: badge,
             // 送來「付現」的：大鍵直接收現金（打收了多少、找零自動算）；其他的進結帳畫面選付款方式

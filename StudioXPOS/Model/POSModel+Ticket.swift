@@ -343,7 +343,7 @@ extension POSModel {
         var bodies: [EventBody] = [.ticketUpdated(TicketUpdated(ticketId: t.id, orderType: type, serviceChargeBps: store.serviceChargeBps(for: type)))]
         if !freed.isEmpty { bodies.append(.ticketMoved(TicketMoved(ticketId: t.id, tableIds: []))) }
         guard record(bodies), !freed.isEmpty else { return }
-        show("\(t.number) 改成\(type.label)・\(floor.tableNames(freed)) 空出來了", tone: .neutral)
+        show("\(orderNumber(t) ?? "這張單") 改成\(type.label)・\(floor.tableNames(freed)) 空出來了", tone: .neutral)
     }
 
     func setTicketNote(_ note: String, for t: Ticket) {
@@ -376,7 +376,7 @@ extension POSModel {
             printKitchen(t, lines: t.activeLines.filter(\.isSent), mode: .void)
         }
         selectedTicketId = nil
-        show("已作廢 \(t.number)", tone: .neutral)
+        show("已作廢 \(orderNumber(t) ?? orderTitle(t) + "單")", tone: .neutral)
     }
 
     // MARK: 廚房

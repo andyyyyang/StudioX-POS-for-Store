@@ -571,7 +571,8 @@ struct LastSaleStrip: View {
         HStack(spacing: 16) {
             Circle().fill(Theme.live).frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
-                Text("上一筆 \(sale.number)・\(sale.total.formatted)")
+                // 外帶叫號的店不寫單號（右邊大大的取餐號碼才是客人認的）
+                Text(model.hidesSaleNumber(sale) ? "上一筆 \(sale.total.formatted)" : "上一筆 \(sale.number)・\(sale.total.formatted)")
                     .font(.brand(15, .medium))
                     .foregroundStyle(Theme.onInverse)
                 Text(sale.invoice.map { "發票 \($0.display)・\($0.buyer.summary)" } ?? "沒有開發票")

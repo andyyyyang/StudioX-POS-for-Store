@@ -78,7 +78,7 @@ struct PaymentView: View {
         if compact {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Eyebrow("結帳・\(t.number)・\(t.title(floor: model.floor))")
+                    Eyebrow("結帳・\(model.orderCaption(t))")
                     Headline(x.isPaidInFull ? "All *paid*" : "Collect *payment*", role: .h2)
                 }
                 HStack(alignment: .bottom, spacing: 20) {
@@ -96,7 +96,7 @@ struct PaymentView: View {
     private func regularHeader(_ t: Ticket, _ x: TicketTotals) -> some View {
         HStack(alignment: .bottom, spacing: 28) {
             VStack(alignment: .leading, spacing: 6) {
-                Eyebrow("結帳・\(t.number)・\(t.title(floor: model.floor))")
+                Eyebrow("結帳・\(model.orderCaption(t))")
                 Headline(x.isPaidInFull ? "All *paid*" : "Collect *payment*", role: .h2)
             }
             Spacer()

@@ -148,8 +148,9 @@ struct PhoneOrderView: View {
     private var ticketTitle: some View {
         let t = model.selectedTicket
         return VStack(alignment: .leading, spacing: 2) {
-            Eyebrow(t?.number ?? "A000")
-            Text(t?.title(floor: model.floor) ?? "內用")
+            // 外帶叫號的店不寫單號（客人只認取餐號碼）
+            Eyebrow(t.map { model.orderNumber($0) ?? ($0.queueNumber == nil ? "取餐號碼結帳後給" : "取餐號碼") } ?? "A000")
+            Text(t.map { model.orderTitle($0) } ?? "內用")
                 .font(.brand(22, .semibold))
                 .foregroundStyle(Theme.ink)
                 .lineLimit(1)
@@ -374,7 +375,7 @@ struct PhoneOrderView: View {
 
     /// 「A2・3 項・NT$480」：點一下、往上滑打開單子
     private func ticketBar(_ t: Ticket) -> some View {
-        PhoneTicketBar(title: "\(t.title(floor: model.floor))・\(t.itemCount) 項・\(t.totals.amountDue.formatted)",
+        PhoneTicketBar(title: "\(model.orderTitle(t))・\(t.itemCount) 項・\(t.totals.amountDue.formatted)",
                        hint: ticketHint(t)) { full in
             openTicket(full: full)
         }

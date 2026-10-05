@@ -562,6 +562,36 @@ extension POSModel {
         queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty && t.queueNumber == nil
     }
 
+    /// 外帶單的取餐號碼是叫號的號碼（付完才取）：點餐、結帳畫面不寫單號（A036），免得和取餐號碼搞混。
+    /// 訂單、廚房照樣有單號（找單、補取號用）
+    func hidesTicketNumber(_ t: Ticket) -> Bool {
+        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty
+    }
+
+    /// 點餐、結帳畫面上的單子名字：外帶叫號的店＝「外帶」（取到號＝「外帶 33 號」、有稱呼＝「外帶 王小姐」）；其他照 Ticket.title
+    func orderTitle(_ t: Ticket) -> String {
+        guard hidesTicketNumber(t), t.queueNumber == nil, (t.customerName ?? "").isEmpty else { return t.title(floor: floor) }
+        if t.serviceMode?.showsOrderType == false {
+            if let m = t.member { return m.name ?? m.maskedPhone }
+            return "這一單"
+        }
+        return t.orderType.label
+    }
+
+    /// 剛結帳的那一筆（點餐頁下面那一條）：外帶叫號的店也不寫單號
+    func hidesSaleNumber(_ s: SaleRecord) -> Bool {
+        queueForTakeout && s.orderType != .dineIn && s.tableIds.isEmpty
+    }
+
+    /// 點餐、結帳畫面上寫的單號（外帶叫號的店不寫：nil）
+    func orderNumber(_ t: Ticket) -> String? { hidesTicketNumber(t) ? nil : t.number }
+
+    /// 「A036・外帶 A036」；外帶叫號的店「外帶・取餐號碼結帳後給」
+    func orderCaption(_ t: Ticket) -> String {
+        guard hidesTicketNumber(t) else { return "\(t.number)・\(t.title(floor: floor))" }
+        return t.queueNumber == nil ? "\(orderTitle(t))・取餐號碼結帳後給" : orderTitle(t)
+    }
+
     /// 號碼帶的一句話（後台叫號頁、右欄的叫號面板看得到）：「A012・3 項」
     func queueLabel(_ t: Ticket) -> String { "\(t.number)・\(t.itemCount) 項" }
 
@@ -589,7 +619,7 @@ extension POSModel {
                 printTakeoutSlips(t, sale: sale, number: n, kitchenLines: [], kitchenMode: .new)
                 if let n {
                     flashTakeout(n, ticket: t)
-                    show("\(t.number) 取號了・取餐號碼 \(n) 號")
+                    show("取號了・取餐號碼 \(n) 號")
                 } else {
                     show("\(t.number) 沒有取到號碼（叫號連不上）：收據已經印了，連上後到「訂單」這一筆按「補取號」", tone: .warning)
                 }
