@@ -485,7 +485,7 @@ struct VariantMatrix: View {
                 }
             }
         }
-        // 選到的那格會放大一點、有外框：留一點邊
+        // 選到的那格有 2 點的外框與陰影：留一點邊
         .padding(compact ? 3 : 5)
     }
 
@@ -498,8 +498,7 @@ struct VariantMatrix: View {
                 if rowsAreColors {
                     ColorSwatchDot(color: VariantPanel.swatchFill(for: value), size: compact ? 14 : 22, selected: on)
                 }
-                Text(value)
-                    .font(.brand(compact ? 12.5 : 15, on ? .semibold : .medium))
+                SteadyText(value, size: compact ? 12.5 : 15, on: on)
                     .lineLimit(1)
             }
             .foregroundStyle(on ? Theme.ink : Theme.ink2)
@@ -588,11 +587,11 @@ struct VariantMatrix: View {
             .overlay {
                 Capsule().strokeBorder(on ? Theme.accent : Theme.line, lineWidth: on ? 2 : 1)
             }
-            .scaleEffect(on ? 1.05 : 1)
             .shadow(color: on ? Theme.accent.opacity(0.18) : .clear, radius: 8, y: 3)
             .contentShape(.capsule)
         }
-        .buttonStyle(PressScale(scale: 0.94))
+        // 選到、按下都不縮放（一格一格的位置要穩）：選到的是橘框、淡橘底
+        .buttonStyle(PressTint(radius: 999))
         .disabled(!v.isAvailable)
         .accessibilityLabel(Self.accessibility(v, item: item))
         .accessibilityAddTraits(on ? .isSelected : [])
@@ -644,9 +643,13 @@ struct ColorSwatchDot: View {
             .fill(color)
             .frame(width: size, height: size)
             .overlay { Circle().strokeBorder(Theme.line, lineWidth: 1) }
-            .padding(selected ? 2.5 : 0)
+            // 選到的外圈畫在外面（不佔版面）：選來選去，色票與旁邊的字都不會被推開
             .overlay {
-                if selected { Circle().strokeBorder(Theme.accent, lineWidth: 1.5) }
+                if selected {
+                    Circle()
+                        .strokeBorder(Theme.accent, lineWidth: 1.5)
+                        .padding(-3)
+                }
             }
             .accessibilityHidden(true)
     }

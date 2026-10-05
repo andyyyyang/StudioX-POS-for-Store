@@ -253,9 +253,9 @@ struct CategoryTile: View {
                     .strokeBorder(Theme.ink, lineWidth: selected ? 2.5 : 0)
                     .padding(-4)
             }
-            .scaleEffect(selected ? 1 : 0.985)
         }
-        .buttonStyle(PressScale(scale: 0.97))
+        // 選到、按下都不縮放：一排分類的位置要穩
+        .buttonStyle(PressTint())
         .accessibilityLabel("\(category.name)，\(count) 項")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -278,21 +278,9 @@ struct ItemCard: View {
     var body: some View {
         Button(action: tap) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Theme.swatch(swatch))
-                        .frame(width: 22, height: 4)
-                    Spacer()
-                    if inTicket > 0 {
-                        Text("\(inTicket)")
-                            .font(.brand(13, .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(Theme.onAccent)
-                            .frame(minWidth: 24, minHeight: 24)
-                            .background(Theme.accent, in: .circle)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Theme.swatch(swatch))
+                    .frame(width: 22, height: 4)
                 Text(item.name)
                     .font(.brand(16, .medium))
                     .foregroundStyle(Theme.ink)
@@ -338,6 +326,8 @@ struct ItemCard: View {
                             .foregroundStyle(Theme.accentText)
                     }
                 }
+                // 「賣完」的標籤比價錢高一點：這一行固定高，標示賣完卡片也不會變高
+                .frame(minHeight: 21)
             }
             .padding(compact ? 11 : 14)
             .frame(maxWidth: .infinity, minHeight: compact ? 88 : 112, alignment: .topLeading)
@@ -346,9 +336,18 @@ struct ItemCard: View {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
                     .strokeBorder(inTicket > 0 ? Theme.accent.opacity(0.55) : Theme.line, lineWidth: inTicket > 0 ? 1.5 : 1)
             }
+            // 點了幾份：疊在右上角（不佔版面，點了卡片的大小、裡面的字都不會動）
+            .overlay(alignment: .topTrailing) {
+                if inTicket > 0 {
+                    CountBadge(count: inTicket)
+                        .offset(x: 6, y: -6)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
             .opacity(available ? 1 : 0.5)
         }
-        .buttonStyle(PressScale(scale: 0.97))
+        // 按下不縮放（位置、大小要穩，手會記住）
+        .buttonStyle(PressTint())
         .animation(Motion.spring, value: inTicket)
         .contextMenu {
             if inTicket > 0 {
@@ -411,6 +410,25 @@ struct ItemCard: View {
         if item.hasVariants, let from = VariantPanel.startingPrice(of: item) { return "\(from.short) 起" }
         if item.hasVariants { return item.price(of: item.activeVariants.first).short }
         return item.price.short
+    }
+}
+
+/// 卡片、價錢鍵右上角的「點了幾份」：疊在角上、不佔版面（點了卡片大小不變）；外圈一圈底色，和卡片的框分開
+struct CountBadge: View {
+    let count: Int
+    var size: CGFloat = 24
+
+    var body: some View {
+        Text("\(count)")
+            .font(.brand(size * 0.54, .semibold))
+            .monospacedDigit()
+            .foregroundStyle(Theme.onAccent)
+            .padding(.horizontal, size * 0.25)
+            .frame(minWidth: size, minHeight: size)
+            .background(Theme.accent, in: .capsule)
+            .overlay { Capsule().strokeBorder(Theme.page, lineWidth: 2) }
+            .fixedSize()
+            .accessibilityHidden(true)
     }
 }
 
@@ -490,7 +508,7 @@ struct BoutiqueItemCard: View {
             }
             .opacity(available ? 1 : 0.5)
         }
-        .buttonStyle(PressScale(scale: 0.97))
+        .buttonStyle(PressTint())
         .animation(Motion.spring, value: inTicket)
         .contextMenu {
             if inTicket > 0 {

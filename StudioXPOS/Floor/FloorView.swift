@@ -306,8 +306,8 @@ struct FloorView: View {
             }
         } label: {
             HStack(spacing: 7) {
-                Text(a.name.isEmpty ? "未命名" : a.name)
-                    .font(.brand(15, selected ? .semibold : .medium))
+                // 選到的變粗也不變寬：區域的分頁不會跟著動
+                SteadyText(a.name.isEmpty ? "未命名" : a.name, size: 15, on: selected)
                     .foregroundStyle(selected ? Theme.ink : Theme.ink2)
                 if !editing {
                     Text("\(busy)/\(a.tables.count)")

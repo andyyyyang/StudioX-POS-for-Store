@@ -23,6 +23,34 @@ enum BrandFonts {
     }
 }
 
+/// 選到變粗、寬度不變：先用粗體的字占好寬（看不到），真正的字疊在上面——
+/// 同一排的鍵（分類膠囊、內用／外帶／外送、規格）選來選去，後面的不會被擠動（位置要穩，手會記住）
+struct SteadyText: View {
+    let text: String
+    let size: CGFloat
+    let on: Bool
+    var off: Face = .medium
+
+    init(_ text: String, size: CGFloat, on: Bool, off: Face = .medium) {
+        self.text = text
+        self.size = size
+        self.on = on
+        self.off = off
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.brand(size, .semibold))
+            .hidden()
+            .overlay {
+                Text(text)
+                    .font(.brand(size, on ? .semibold : off))
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(text)
+    }
+}
+
 /// Inter Tight 的字重
 enum Face {
     case regular, medium, semibold, bold

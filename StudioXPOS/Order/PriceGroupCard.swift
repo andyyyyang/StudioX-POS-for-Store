@@ -7,13 +7,14 @@ import SwiftUI
 
 /// 小吃的兩種價錢（黃毛丫頭的鴨胸 140／150）：一張卡，價錢就是卡上的鍵，點哪個加哪個——不用打開選規格的卡。
 ///
-///   ━━                 3     ← 這張單點了幾份（全部的價錢加起來）
+///   ━━
 ///   鴨胸
-///   3入
+///   3入                 ②    ← 點了的那個價錢亮起來，角上疊「點了幾份」
 ///   ┌──────┐┌──────┐
-///   │ 140  ││ 150 ×2│        ← 點了的那個價錢亮起來、寫幾份
+///   │ 140  ││ 150  │
 ///   └──────┘└──────┘
 ///
+/// 點了、賣完，卡片與價錢鍵的大小、位置都不變（手會記住鍵在哪裡）：份數疊在鍵的角上、不擠價錢；賣完是蓋在鍵上的標籤。
 /// 先在右側鍵盤打數字＝加那麼多份（和一般的品項一樣）。長按：少一份、標示賣完
 struct PriceGroupCard: View {
     @Environment(POSModel.self) private var model
@@ -28,21 +29,9 @@ struct PriceGroupCard: View {
     var body: some View {
         let total = count(nil)
         VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Theme.swatch(swatch))
-                    .frame(width: 22, height: 4)
-                Spacer()
-                if total > 0 {
-                    Text("\(total)")
-                        .font(.brand(13, .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.onAccent)
-                        .frame(minWidth: 24, minHeight: 24)
-                        .background(Theme.accent, in: .circle)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
+            RoundedRectangle(cornerRadius: 2)
+                .fill(Theme.swatch(swatch))
+                .frame(width: 22, height: 4)
             Text(item.name)
                 .font(.brand(16, .medium))
                 .foregroundStyle(Theme.ink)
@@ -56,14 +45,17 @@ struct PriceGroupCard: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            if available {
-                HStack(spacing: 6) {
-                    ForEach(item.activeVariants) { v in
-                        priceKey(v)
-                    }
+            // 賣完：鍵照樣在（不能點），上面蓋「賣完」——卡片不會變矮
+            HStack(spacing: 6) {
+                ForEach(item.activeVariants) { v in
+                    priceKey(v)
                 }
-            } else {
-                StatusBadge("賣完", tone: .danger)
+            }
+            .disabled(!available)
+            .overlay {
+                if !available {
+                    StatusBadge("賣完", tone: .danger)
+                }
             }
         }
         .padding(compact ? 10 : 12)
@@ -95,29 +87,31 @@ struct PriceGroupCard: View {
         return Button {
             Task { await model.tap(item, variant: v) }
         } label: {
-            HStack(spacing: 4) {
-                Text(title)
-                    .font(.brand(16, .semibold))
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                if n > 0 {
-                    Text("×\(n)")
-                        .font(.brand(12, .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.accentText)
+            Text(title)
+                .font(.brand(16, .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .padding(.horizontal, 4)
+                .foregroundStyle(v.isAvailable ? Theme.ink : Theme.faint)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(n > 0 ? Theme.accentSoft : Theme.ink.opacity(0.06), in: .rect(cornerRadius: Metric.radius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
+                        .strokeBorder(n > 0 ? Theme.accent.opacity(0.6) : Color.clear, lineWidth: 1)
                 }
-            }
-            .foregroundStyle(v.isAvailable ? Theme.ink : Theme.faint)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background(n > 0 ? Theme.accentSoft : Theme.ink.opacity(0.06), in: .rect(cornerRadius: Metric.radius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
-                    .strokeBorder(n > 0 ? Theme.accent.opacity(0.6) : Color.clear, lineWidth: 1)
-            }
-            .contentShape(.rect)
+                .contentShape(.rect)
         }
-        .buttonStyle(PressScale(scale: 0.94))
+        // 按下不縮放：鍵的位置、大小要穩
+        .buttonStyle(PressTint(radius: Metric.radius))
+        // 點了幾份：疊在鍵的右上角（不擠價錢、鍵不變寬）
+        .overlay(alignment: .topTrailing) {
+            if n > 0 {
+                CountBadge(count: n, size: 20)
+                    .offset(x: 5, y: -8)
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
         .disabled(!v.isAvailable)
         .accessibilityLabel("\(item.name) \(title)\(n > 0 ? "，已點 \(n)" : "")\(v.isAvailable ? "" : "，賣完")")
     }

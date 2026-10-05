@@ -95,19 +95,15 @@ struct PhoneOrderView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let t = model.selectedTicket {
-                        Eyebrow(t.number)
-                        Text(t.title(floor: model.floor))
-                            .font(.brand(22, .semibold))
-                            .foregroundStyle(Theme.ink)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                    } else {
-                        Eyebrow("點餐")
-                        Headline("The *menu*", role: .h3)
-                            .lineLimit(1)
-                    }
+                // 開單前「The menu」、開了單是單號與桌名：兩種疊在一起只顯示一種，高度固定——
+                // 點了第一個品項（開了單），下面的分類與菜單不會跳
+                ZStack(alignment: .leading) {
+                    ticketTitle
+                        .opacity(model.selectedTicket == nil ? 0 : 1)
+                        .accessibilityHidden(model.selectedTicket == nil)
+                    menuTitle
+                        .opacity(model.selectedTicket == nil ? 1 : 0)
+                        .accessibilityHidden(model.selectedTicket != nil)
                 }
                 Spacer(minLength: 8)
                 PhoneQueueButton(open: $queueOpen)
@@ -145,6 +141,26 @@ struct PhoneOrderView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 10)
+    }
+
+    private var ticketTitle: some View {
+        let t = model.selectedTicket
+        return VStack(alignment: .leading, spacing: 2) {
+            Eyebrow(t?.number ?? "A000")
+            Text(t?.title(floor: model.floor) ?? "內用")
+                .font(.brand(22, .semibold))
+                .foregroundStyle(Theme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+
+    private var menuTitle: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Eyebrow("點餐")
+            Headline("The *menu*", role: .h3)
+                .lineLimit(1)
+        }
     }
 
     /// 「掃碼」：手機不接條碼機，用相機掃——商品一個接一個、會員卡、發票載具、折價券（POSModel.handleScan 照內容判斷）
@@ -185,8 +201,8 @@ struct PhoneOrderView: View {
                                 Circle()
                                     .fill(Theme.swatch(c.swatch))
                                     .frame(width: 9, height: 9)
-                                Text(c.name)
-                                    .font(.brand(15, on ? .semibold : .medium))
+                                // 選到的變粗也不變寬：後面的膠囊不會被擠動
+                                SteadyText(c.name, size: 15, on: on)
                                     .lineLimit(1)
                             }
                             .foregroundStyle(on ? Theme.page : Theme.ink)
@@ -196,7 +212,7 @@ struct PhoneOrderView: View {
                             .overlay { Capsule().strokeBorder(on ? Color.clear : Theme.line) }
                             .contentShape(.capsule)
                         }
-                        .buttonStyle(PressScale(scale: 0.96))
+                        .buttonStyle(PressTint(radius: 20))
                         .id(c.id)
                         .accessibilityLabel(c.name)
                         .accessibilityAddTraits(on ? .isSelected : [])
@@ -208,7 +224,8 @@ struct PhoneOrderView: View {
             .padding(.bottom, 10)
             .onChange(of: categoryId) { _, id in
                 guard let id else { return }
-                withAnimation(Motion.fast) { proxy.scrollTo(id, anchor: .center) }
+                // 點的那一顆已經看得到就不捲（膠囊的位置要穩）；左右滑換到畫面外的分類才捲到剛好看得到
+                withAnimation(Motion.fast) { proxy.scrollTo(id) }
             }
         }
     }
@@ -235,7 +252,8 @@ struct PhoneOrderView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 2)
+                // 卡片右上角疊的份數超出卡片 6 點：上面留 8 點才不會被切
+                .padding(.top, 8)
                 .padding(.bottom, 16)
                 // 換分類：整區從左右推進來
                 .id(query.isEmpty ? (categoryId ?? "all") : "search")

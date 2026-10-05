@@ -1448,7 +1448,8 @@ private struct OrderTypeSwitch: View {
                 Button {
                     pick(type)
                 } label: {
-                    Text(type.label)
+                    // 選到的變粗也不變寬：三段的位置不會跟著動
+                    SteadyText(type.label, size: 13.5, on: type == selected)
                         .lineLimit(1)
                         .fixedSize()
                         .padding(.horizontal, 11)
@@ -1477,7 +1478,6 @@ private struct OrderTypeSegmentStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.brand(13.5, selected ? .semibold : .medium))
             .foregroundStyle(selected ? Theme.page : (isEnabled ? Theme.ink2 : Theme.faint))
             .background(selected ? Theme.ink : (configuration.isPressed ? Theme.press : Color.clear),
                         in: .rect(cornerRadius: Metric.radiusSm, style: .continuous))

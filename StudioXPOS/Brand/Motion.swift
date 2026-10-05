@@ -93,6 +93,21 @@ struct PressScale: ButtonStyle {
     }
 }
 
+/// 按下只淡淡變暗、不縮放：菜單的卡片、價錢鍵、分類（位置與大小要穩，手會記住在哪裡）
+struct PressTint: ButtonStyle {
+    var radius: CGFloat = Metric.radiusLg
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay {
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(Theme.ink.opacity(configuration.isPressed ? 0.08 : 0))
+                    .allowsHitTesting(false)
+            }
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
 /// 清單的一列：按下時淡底（不縮放，列要對齊）
 struct RowPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
