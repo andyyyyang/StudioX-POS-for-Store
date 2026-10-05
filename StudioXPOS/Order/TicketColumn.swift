@@ -21,10 +21,6 @@ import SwiftUI
 struct TicketColumn: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
-    /// 截圖（-preselect）時先選起第一行；看不到的那一份（直的 iPad、手機只為了交出整張單的動作）不要選
-    var preselects = true
-    /// 手機：「掃碼（會員・載具・折價券）」放進整張單的「⋯」。點餐頁下面那條（看不到的單子欄）不放：掃碼鍵在頁首（同一個動作只出現一次）
-    var offersScan = true
     @State private var splitting: Ticket?
     /// 備註要寫在哪幾行（一行；或「選取」勾起來的好幾行，用同一個備註）
     @State private var noteFor: [TicketLine] = []
@@ -127,7 +123,7 @@ struct TicketColumn: View {
             }
             // 截圖：先選起第一行（只在 Debug、帶 -preselect）
             .task(id: model.selectedTicketId) {
-                if preselects && LaunchArguments.preselect { preselectForScreenshot() }
+                if LaunchArguments.preselect { preselectForScreenshot() }
             }
     }
 
@@ -822,7 +818,7 @@ struct TicketColumn: View {
             out.append(POSAction("找會員", icon: "user-circle") { Task { await model.attachMember(to: t) } })
         }
         // 手機沒有條碼機：相機掃（「⋯」裡，沒有六個鍵的限制）；iPad 的在「更多…」
-        if model.isPhone && offersScan {
+        if model.isPhone {
             out.append(POSAction("掃碼（會員・載具・折價券）", icon: "qr-code") { model.requestScan(.any) })
         }
         if model.mode.staffPerTicket {

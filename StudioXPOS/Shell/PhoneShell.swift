@@ -132,6 +132,8 @@ final class PhoneUI {
     var openTicketOnArrival = false
     /// 「更多 → 出單機」開著（這支手機自己的出單機：號碼牌、收據、發票證明聯）
     var printersOpen = false
+    /// 按住單子那一條說話點餐（一段一段的結果在那一條上面）
+    let voice = VoiceOrdering()
 }
 
 // MARK: - 上面選、下面做

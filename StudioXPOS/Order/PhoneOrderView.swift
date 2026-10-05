@@ -52,7 +52,6 @@ struct PhoneOrderView: View {
         }
         // 卡片的字級（更多 → 這支手機）
         .environment(\.menuText, model.settings.menuText)
-        .background { hiddenTicketColumn }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomStrip }
         .dockSelection(model.selectedTicket == nil ? openPage : nil)
         .dockPanel(isPresented: $opening, title: "開單", subtitle: openSubtitle) {
@@ -309,24 +308,17 @@ struct PhoneOrderView: View {
 
     // MARK: 下面：單子
 
-    /// 看不到的單子欄：整張單的動作（送單、送到結帳櫃台／結帳、找會員、折扣、更多…）和 iPad 同一份，交給下面的大鍵與「⋯」
-    @ViewBuilder
-    private var hiddenTicketColumn: some View {
-        if model.selectedTicket != nil {
-            TicketColumn(preselects: false, offersScan: false)
-                .hidden()
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
-    }
-
+    /// 下面：說話點餐的結果（一段一段）、單子那一條（點一下、往上滑打開；按住說話）。
+    /// 結帳、送單都在打開的單子裡（看過單子才結帳；這一頁沒有直接結帳的鍵）
     private var bottomStrip: some View {
-        VStack(spacing: 0) {
-            if let t = model.selectedTicket {
-                ticketBar(t)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
+        VStack(spacing: 6) {
+            VoiceOrderPanel(voice: ui.voice)
+            if model.selectedTicket == nil, let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
                 LastSaleStrip(sale: sale)
+            }
+            if model.selectedTicket != nil || ui.voice.isSupported {
+                ticketBar(model.selectedTicket)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .animation(Motion.spring, value: model.selectedTicketId)
@@ -349,11 +341,21 @@ struct PhoneOrderView: View {
         }
     }
 
-    /// 「A2・3 項・NT$480」：點一下、往上滑打開單子
-    private func ticketBar(_ t: Ticket) -> some View {
-        PhoneTicketBar(title: "\(model.orderTitle(t))・\(t.itemCount) 項・\(t.totals.amountDue.formatted)",
-                       hint: ticketHint(t)) { full in
-            openTicket(full: full)
+    /// 「A2・3 項・NT$480」：點一下、往上滑打開單子；按住說要點什麼（還沒有單子時也在，說了就開一張）
+    private func ticketBar(_ t: Ticket?) -> some View {
+        PhoneTicketBar(title: t.map { "\(model.orderTitle($0))・\($0.itemCount) 項・\($0.totals.amountDue.formatted)" },
+                       hint: t.map { ticketHint($0) } ?? "放開就加進單子・也可以點上面的品項",
+                       listening: ui.voice.listening,
+                       hold: ui.voice.isSupported ? { (down: Bool) in hold(down) } : nil,
+                       open: { full in openTicket(full: full) })
+    }
+
+    /// 按住說話：按下去開始聽、放開交給模型整理（上一段還在整理也可以再按）
+    private func hold(_ down: Bool) {
+        if down {
+            ui.voice.begin(model: model)
+        } else {
+            ui.voice.end()
         }
     }
 
@@ -478,8 +480,13 @@ private struct FreeTable: Identifiable {
 /// 下面那條單子：點一下＝打開單子（半高）；往上滑＝跟著手指升起來，放開就打開（滑得長、快＝全高）。
 /// 自己一個 view：拖的時候只有這一條重畫，菜單不跟著重畫
 private struct PhoneTicketBar: View {
-    let title: String
+    /// nil＝還沒有單子（這條只用來按住說話）
+    let title: String?
     let hint: String
+    /// 按住中、正在聽
+    let listening: Bool
+    /// 按住說話：true＝按下去、false＝放開；nil＝這支手機不能聽寫
+    let hold: ((Bool) -> Void)?
     /// true＝全高
     let open: (Bool) -> Void
 
@@ -489,34 +496,43 @@ private struct PhoneTicketBar: View {
     @State private var armed = false
     /// 這一下是滑的（不再當成點一下，免得打開兩次、全高又被改回半高）
     @State private var swiped = false
+    /// 這一下是按住說話（放開時那一下的點、滑都不算）
+    @State private var held = false
 
     var body: some View {
         Button {
-            guard !swiped else { return }
+            guard !swiped, !held, title != nil else { return }
             open(false)
         } label: {
             HStack(spacing: 12) {
-                HeroIcon("list-bullet", size: 20)
+                HeroIcon(listening || title == nil ? "microphone" : "list-bullet", size: 20)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
+                    Text(listening ? "在聽…放開就加進單子" : title ?? "按住這裡說要點什麼")
                         .font(.brand(16.5, .semibold))
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.75)
-                    Text(hint)
+                    Text(listening ? "說品名、價錢、幾份，一次可以說好幾樣" : hint)
                         .font(.brand(12.5, .regular))
-                        .foregroundStyle(Theme.inverseMuted)
+                        .foregroundStyle(listening ? Theme.onAccent.opacity(0.85) : Theme.inverseMuted)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.up")
-                    .font(.system(size: 14, weight: .semibold))
-                    .offset(y: armed ? -3 : 0)
+                if title != nil && !listening {
+                    if hold != nil {
+                        // 按住可以說話（小小的提示，位置固定）
+                        HeroIcon("microphone", size: 15)
+                            .foregroundStyle(Theme.inverseMuted)
+                    }
+                    Image(systemName: "chevron.up")
+                        .font(.system(size: 14, weight: .semibold))
+                        .offset(y: armed ? -3 : 0)
+                }
             }
-            .foregroundStyle(Theme.onInverse)
+            .foregroundStyle(listening ? Theme.onAccent : Theme.onInverse)
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, minHeight: 58)
-            .background(Theme.inverse, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+            .background(listening ? Theme.accent : Theme.inverse, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
             .contentShape(.rect)
         }
         .buttonStyle(PressScale(scale: 0.98))
@@ -526,15 +542,41 @@ private struct PhoneTicketBar: View {
                 .onChanged { v in drag(v.translation.height) }
                 .onEnded { v in end(v) }
         )
+        .gesture(HoldGesture(isEnabled: hold != nil, onBegan: beginHold, onEnded: endHold))
         .sensoryFeedback(.impact(weight: .light), trigger: armed) { _, now in now }
+        .sensoryFeedback(.impact(weight: .medium), trigger: held) { _, now in now }
+        .animation(Motion.fast, value: listening)
         .padding(.horizontal, 12)
         .padding(.top, 6)
         .padding(.bottom, 4)
-        .accessibilityLabel("單子 \(title)")
-        .accessibilityHint("打開單子；也可以往上滑")
+        .accessibilityLabel(title.map { "單子 \($0)" } ?? "按住說要點什麼")
+        .accessibilityHint(hold == nil ? "打開單子；也可以往上滑" : "打開單子；按住可以用說的點餐")
+    }
+
+    private func beginHold() {
+        // 已經在往上滑（打開單子）：不算按住
+        guard let hold, !swiped, !held else { return }
+        held = true
+        withAnimation(Motion.spring) {
+            lift = 0
+            armed = false
+        }
+        hold(true)
+    }
+
+    private func endHold() {
+        guard held else { return }
+        hold?(false)
+        Task {
+            // 放開那一下的點（Button）晚一點才到：等它過了才算結束
+            try? await Task.sleep(for: .milliseconds(300))
+            held = false
+        }
     }
 
     private func drag(_ dy: CGFloat) {
+        // 按住說話時手指動了：照樣是在說話，不拉
+        guard !held else { return }
         swiped = true
         // 只認往上：最多升 28 點、越拉越緊
         let up = max(-dy, 0)
@@ -557,7 +599,7 @@ private struct PhoneTicketBar: View {
             swiped = false
         }
         // 往上滑一段、或往上甩一下就打開；滑得長、甩得用力＝全高
-        guard up > 36 || (flingUp > 120 && up > 12) else { return }
+        guard !held, title != nil, up > 36 || (flingUp > 120 && up > 12) else { return }
         open(up > 140 || flingUp > 420)
     }
 }
