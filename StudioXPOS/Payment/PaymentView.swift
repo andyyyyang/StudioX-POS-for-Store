@@ -672,6 +672,13 @@ struct PaymentView: View {
                 .textRole(.small)
                 .foregroundStyle(Theme.muted)
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if model.isPhone {
+                // 回到點餐、平分、小費、會員、退回付款：和金額同一行（iPad 在右欄）
+                let actions = checkoutActions(t, x)
+                MoreMenu(actions: actions.filter { !$0.isDestructive } + actions.filter(\.isDestructive))
+                    .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 6 }
+            }
         }
         .padding(.horizontal, compact ? 16 : 24)
         .padding(.vertical, 14)
@@ -685,6 +692,12 @@ struct PaymentView: View {
     /// 結帳的右欄：大鍵＝完成結帳（收齊了才有）；動作鍵＝回到點餐、平分、小費、會員、退回付款
     private func dock(_ t: Ticket, _ x: TicketTotals) -> DockSelection {
         let done: POSAction? = x.isPaidInFull ? POSAction("完成結帳", icon: "check-circle") { Task { await model.complete(t) } } : nil
+        // 手機：「…」放在最下面「尚欠」那一行（不另外佔一條、左邊空一大塊）；下面的大鍵只有收齊了才出現
+        return .page("checkout-\(t.id)", primary: done, accent: true, actions: model.isPhone ? [] : checkoutActions(t, x))
+    }
+
+    /// 回到點餐、平分、小費、會員、退回付款（iPad 在右欄；手機在最下面那一行的「…」）
+    private func checkoutActions(_ t: Ticket, _ x: TicketTotals) -> [POSAction] {
         var actions: [POSAction] = [POSAction("回到點餐", icon: "arrow-left") { model.cancelCheckout() }]
         if shares.isEmpty {
             actions.append(POSAction("平分…", icon: "users", enabled: !x.isPaidInFull) {
@@ -711,7 +724,7 @@ struct PaymentView: View {
                 Task { await model.voidPayment(p, in: t) }
             })
         }
-        return .page("checkout-\(t.id)", primary: done, accent: true, actions: actions)
+        return actions
     }
 }
 
