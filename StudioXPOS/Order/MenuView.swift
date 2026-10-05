@@ -71,6 +71,8 @@ struct MenuView: View {
                 LastSaleStrip(sale: sale)
             }
         }
+        // 卡片的字級（每台自己選）
+        .environment(\.menuText, model.settings.menuText)
         .animation(Motion.ease, value: model.modifierItem)
         .animation(Motion.ease, value: model.variantItem)
         // 結帳櫃台：手機送來結帳的單（還沒開單時在右欄，大鍵「去結帳」）
@@ -114,6 +116,8 @@ struct MenuView: View {
             .lineLimit(1)
             .layoutPriority(1)
             Spacer(minLength: 12)
+            // 菜單的字大小（每台自己選；設定 → 外觀與安全也能改）
+            MenuTextSizeMenu()
             HStack(spacing: 8) {
                 HeroIcon("magnifying-glass", size: 16)
                     .foregroundStyle(Theme.muted)
@@ -169,7 +173,10 @@ struct MenuView: View {
             // 名字都很短（小吃、飲料）而且品項多：卡片小一點、一排放多一點
             let dense = list.count >= 8 && list.allSatisfy { $0.name.count <= 5 }
             VStack(alignment: .leading, spacing: 12) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: dense ? 112 : 150, maximum: dense ? 190 : 240), spacing: dense ? 10 : 12)],
+                // 字大了卡片跟著變寬（一排少放一點，名字才不會被切掉）
+                let k = model.settings.menuText.space
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: (dense ? 112 : 150) * k, maximum: (dense ? 190 : 240) * k),
+                                             spacing: dense ? 10 : 12)],
                           spacing: dense ? 10 : 12) {
                     ForEach(list) { item in
                         if item.hasVariants && VariantPanel.isSimple(item) {
@@ -275,6 +282,8 @@ struct ItemCard: View {
     let tap: () -> Void
     let minus: () -> Void
     let toggleAvailability: () -> Void
+    /// 菜單的字級（設定裡選；卡片跟著變大）
+    @Environment(\.menuText) private var text
 
     var body: some View {
         Button(action: tap) {
@@ -283,14 +292,14 @@ struct ItemCard: View {
                     .fill(Theme.swatch(swatch))
                     .frame(width: 22, height: 4)
                 Text(item.name)
-                    .font(.brand(16, .medium))
+                    .font(text.font(16, .medium))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if let meta {
                     HStack(spacing: 5) {
-                        HeroIcon(meta.icon, size: 13)
+                        HeroIcon(meta.icon, size: 13 * text.scale)
                         Text(meta.text)
                             .lineLimit(1)
                         if let trailing = meta.trailing {
@@ -301,13 +310,13 @@ struct ItemCard: View {
                                 .foregroundStyle(meta.warn ? Theme.warningFG : Theme.muted)
                         }
                     }
-                    .font(.brand(12, .medium))
+                    .font(text.font(12, .medium))
                     .foregroundStyle(Theme.muted)
                 }
                 Spacer(minLength: 0)
                 HStack(alignment: .firstTextBaseline) {
                     Text(priceText)
-                        .font(.brand(15, .medium))
+                        .font(text.font(15, .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.ink2)
                     Spacer()
@@ -315,23 +324,23 @@ struct ItemCard: View {
                         StatusBadge("賣完", tone: .danger)
                     } else if item.hasVariants {
                         Text("選規格")
-                            .font(.brand(11.5, .medium))
+                            .font(text.font(11.5, .medium))
                             .foregroundStyle(Theme.muted)
                     } else if hasOptions {
                         Text("可選")
-                            .font(.brand(11.5, .medium))
+                            .font(text.font(11.5, .medium))
                             .foregroundStyle(Theme.muted)
                     } else if let m = multiplier, m > 1 {
                         Text("+\(m)")
-                            .font(.brand(12, .semibold))
+                            .font(text.font(12, .semibold))
                             .foregroundStyle(Theme.accentText)
                     }
                 }
                 // 「賣完」的標籤比價錢高一點：這一行固定高，標示賣完卡片也不會變高
-                .frame(minHeight: 21)
+                .frame(minHeight: 21 * text.scale)
             }
             .padding(compact ? 11 : 14)
-            .frame(maxWidth: .infinity, minHeight: compact ? 88 : 112, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: (compact ? 88 : 112) * text.space, alignment: .topLeading)
             .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
@@ -340,7 +349,7 @@ struct ItemCard: View {
             // 點了幾份：疊在右上角（不佔版面，點了卡片的大小、裡面的字都不會動）
             .overlay(alignment: .topTrailing) {
                 if inTicket > 0 {
-                    CountBadge(count: inTicket)
+                    CountBadge(count: inTicket, size: text.badge)
                         .offset(x: 6, y: -6)
                         .transition(.scale.combined(with: .opacity))
                 }
@@ -443,6 +452,7 @@ struct BoutiqueItemCard: View {
     let tap: () -> Void
     let minus: () -> Void
     let toggleAvailability: () -> Void
+    @Environment(\.menuText) private var text
 
     private var total: Int? { item.totalStock }
 
@@ -453,12 +463,7 @@ struct BoutiqueItemCard: View {
                     .frame(height: 124)
                     .overlay(alignment: .topTrailing) {
                         if inTicket > 0 {
-                            Text("\(inTicket)")
-                                .font(.brand(13, .semibold))
-                                .monospacedDigit()
-                                .foregroundStyle(Theme.onAccent)
-                                .frame(minWidth: 24, minHeight: 24)
-                                .background(Theme.accent, in: .circle)
+                            CountBadge(count: inTicket, size: text.badge)
                                 .padding(10)
                                 .transition(.scale.combined(with: .opacity))
                         }
@@ -477,18 +482,18 @@ struct BoutiqueItemCard: View {
                     }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.name)
-                        .font(.brand(15.5, .medium))
+                        .font(text.font(15.5, .medium))
                         .foregroundStyle(Theme.ink)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text(VariantPanel.summary(of: item))
-                        .font(.brand(12, .medium))
+                        .font(text.font(12, .medium))
                         .foregroundStyle(Theme.muted)
                         .lineLimit(1)
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
                         Text(priceText)
-                            .font(.brand(15.5, .semibold))
+                            .font(text.font(15.5, .semibold))
                             .monospacedDigit()
                             .foregroundStyle(Theme.ink)
                         Spacer(minLength: 4)
@@ -530,7 +535,7 @@ struct BoutiqueItemCard: View {
                     .fill(stockColor(total))
                     .frame(width: 6, height: 6)
                 Text(total > 0 ? "\(total)" : "缺貨")
-                    .font(.brand(12, .medium))
+                    .font(text.font(12, .medium))
                     .monospacedDigit()
                     .foregroundStyle(total > 0 ? Theme.muted : Theme.warningFG)
             }

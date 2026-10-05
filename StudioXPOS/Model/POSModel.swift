@@ -786,6 +786,8 @@ final class LocalSettings {
     var queueSpeaks: Bool { didSet { d.set(queueSpeaks, forKey: "queueSpeaks") } }
     /// 也印別台取的號碼（取代樹莓派出單；一家店只開一台）。要這台有「號碼牌」出單機
     var queuePrintsOthers: Bool { didSet { d.set(queuePrintsOthers, forKey: "queuePrintsOthers") } }
+    /// 菜單卡片的字級（MenuTextSize 的 rawValue）
+    var menuTextSize: String { didSet { d.set(menuTextSize, forKey: "menuTextSize") } }
 
     var consoleURL: URL { URL(string: consoleURLString) ?? URL(string: "https://console.studiox.tw")! }
 
@@ -809,6 +811,7 @@ final class LocalSettings {
         workstation = d.string(forKey: "workstation") ?? ""
         queueSpeaks = d.object(forKey: "queueSpeaks") as? Bool ?? false
         queuePrintsOthers = d.object(forKey: "queuePrintsOthers") as? Bool ?? false
+        menuTextSize = d.string(forKey: "menuTextSize") ?? MenuTextSize.standard.rawValue
     }
 }
 

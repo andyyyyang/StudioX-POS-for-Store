@@ -212,6 +212,13 @@ struct PhoneMoreView: View {
                 }
             }
             Rule(color: Theme.hair)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("菜單的字")
+                    .font(.brand(15.5, .medium))
+                    .foregroundStyle(Theme.ink)
+                MenuTextSizePicker()
+            }
+            Rule(color: Theme.hair)
             HStack {
                 Text("閒置自動鎖定")
                     .font(.brand(15.5, .medium))

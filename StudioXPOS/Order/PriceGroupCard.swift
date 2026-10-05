@@ -25,6 +25,8 @@ struct PriceGroupCard: View {
     var compact = false
     let minus: () -> Void
     let toggleAvailability: () -> Void
+    /// 菜單的字級（設定裡選；卡片、價錢鍵跟著變大）
+    @Environment(\.menuText) private var text
 
     var body: some View {
         let total = count(nil)
@@ -33,14 +35,14 @@ struct PriceGroupCard: View {
                 .fill(Theme.swatch(swatch))
                 .frame(width: 22, height: 4)
             Text(item.name)
-                .font(.brand(16, .medium))
+                .font(text.font(16, .medium))
                 .foregroundStyle(Theme.ink)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let portion {
                 Text(portion)
-                    .font(.brand(12, .medium))
+                    .font(text.font(12, .medium))
                     .foregroundStyle(Theme.muted)
                     .lineLimit(1)
             }
@@ -59,7 +61,7 @@ struct PriceGroupCard: View {
             }
         }
         .padding(compact ? 10 : 12)
-        .frame(maxWidth: .infinity, minHeight: compact ? 88 : 112, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: (compact ? 88 : 112) * text.space, alignment: .topLeading)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
@@ -88,13 +90,13 @@ struct PriceGroupCard: View {
             Task { await model.tap(item, variant: v) }
         } label: {
             Text(title)
-                .font(.brand(16, .semibold))
+                .font(text.font(16, .semibold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .padding(.horizontal, 4)
                 .foregroundStyle(v.isAvailable ? Theme.ink : Theme.faint)
-                .frame(maxWidth: .infinity, minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: 44 * text.space)
                 .background(n > 0 ? Theme.accentSoft : Theme.ink.opacity(0.06), in: .rect(cornerRadius: Metric.radius, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: Metric.radius, style: .continuous)
@@ -107,7 +109,7 @@ struct PriceGroupCard: View {
         // 點了幾份：疊在鍵的右上角（不擠價錢、鍵不變寬）
         .overlay(alignment: .topTrailing) {
             if n > 0 {
-                CountBadge(count: n, size: 20)
+                CountBadge(count: n, size: text.badge * 0.84)
                     .offset(x: 5, y: -8)
                     .transition(.scale.combined(with: .opacity))
             }

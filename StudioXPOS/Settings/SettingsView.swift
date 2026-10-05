@@ -1970,6 +1970,14 @@ private struct SettingsAppearanceSection: View {
             }
             .panel(padding: 22)
             VStack(alignment: .leading, spacing: 14) {
+                Eyebrow("菜單的字")
+                MenuTextSizePicker(height: 76)
+                Text("點餐頁卡片上的品名、價錢多大；字大了一排放少一點。只改這台，點餐頁上面的「Aa」也能換。")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+            }
+            .panel(padding: 22)
+            VStack(alignment: .leading, spacing: 14) {
                 Eyebrow("閒置自動鎖定")
                 HStack(spacing: 8) {
                     ForEach(Self.lockChoices, id: \.self) { m in

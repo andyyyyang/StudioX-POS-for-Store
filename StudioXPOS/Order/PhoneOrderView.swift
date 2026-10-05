@@ -50,6 +50,8 @@ struct PhoneOrderView: View {
             }
             items
         }
+        // 卡片的字級（更多 → 這支手機）
+        .environment(\.menuText, model.settings.menuText)
         .background { hiddenTicketColumn }
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomStrip }
         .dockSelection(model.selectedTicket == nil ? openPage : nil)
