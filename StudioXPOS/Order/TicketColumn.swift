@@ -510,7 +510,7 @@ struct TicketColumn: View {
         var parts: [String] = []
         if model.hidesTicketNumber(t) {
             // 外帶叫號的店：不寫單號（取到號在旁邊的標籤）
-            if t.queueNumber == nil { parts.append("取餐號碼結帳後給") }
+            if t.queueNumber == nil { parts.append(model.pendingNumberText(t)) }
         } else if headerTitle(t) != t.number {
             parts.append(t.number)
         }

@@ -732,6 +732,9 @@ actor DemoAPI: POSAPI {
             guard q.current != n else { break }
             guard q.waiting.contains(n) else { throw APIError.http(status: 404, code: "not_found", message: "\(n) 號不在等候中") }
             q.call(n, at: now)
+        case .cancel(let n, _):
+            // 作廢的單放回號碼（已經不在了也算成功：重送不會出錯）
+            q.cancel(n)
         }
         line = q
         var s = q.state(now: now)
@@ -944,6 +947,19 @@ nonisolated struct DemoQueue: Sendable {
     mutating func unmiss(_ n: Int) {
         missed.removeAll { $0 == n }
         marked.removeAll { $0 == n }
+    }
+
+    /// 放回號碼（單子作廢）：哪裡都拿掉；正在叫的就停（不算服務完）
+    mutating func cancel(_ n: Int) {
+        waiting.removeAll { $0 == n }
+        missed.removeAll { $0 == n }
+        marked.removeAll { $0 == n }
+        if current == n {
+            current = nil
+            calledAt = nil
+        }
+        takenAt[n] = nil
+        entries[n] = nil
     }
 
     mutating func reset(at now: Date) {

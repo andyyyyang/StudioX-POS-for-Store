@@ -342,7 +342,12 @@ extension POSModel {
         let freed = type == .dineIn ? [] : t.tableIds
         var bodies: [EventBody] = [.ticketUpdated(TicketUpdated(ticketId: t.id, orderType: type, serviceChargeBps: store.serviceChargeBps(for: type)))]
         if !freed.isEmpty { bodies.append(.ticketMoved(TicketMoved(ticketId: t.id, tableIds: []))) }
-        guard record(bodies), !freed.isEmpty else { return }
+        // 外帶改內用：已經取的取餐號碼放回去（內用照桌號）
+        let dropsNumber = type == .dineIn && t.orderType != .dineIn && t.queueNumber != nil && queueForTakeout
+        if dropsNumber { bodies.append(.ticketUpdated(TicketUpdated(ticketId: t.id, queueNumber: 0))) }
+        guard record(bodies) else { return }
+        if dropsNumber { releaseNumber(of: t) }
+        guard !freed.isEmpty else { return }
         show("\(orderNumber(t) ?? "這張單") 改成\(type.label)・\(floor.tableNames(freed)) 空出來了", tone: .neutral)
     }
 
@@ -371,7 +376,9 @@ extension POSModel {
             show("這張單已經收了錢，請先退回付款再作廢", tone: .danger)
             return
         }
-        record(.ticketVoided(TicketVoided(ticketId: t.id, reason: reason, authorizedBy: auth.authorizerId)))
+        guard record(.ticketVoided(TicketVoided(ticketId: t.id, reason: reason, authorizedBy: auth.authorizerId))) else { return }
+        // 外帶單已經取了號碼（一進結帳就取）：放回去，叫號螢幕不再列它
+        releaseNumber(of: t)
         if t.lines.contains(where: \.isSent), settings.printKitchenTickets {
             printKitchen(t, lines: t.activeLines.filter(\.isSent), mode: .void)
         }

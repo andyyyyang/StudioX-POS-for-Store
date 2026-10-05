@@ -557,9 +557,24 @@ extension POSModel {
 
     // MARK: - 外帶：結帳完成時自動取號
 
-    /// 這張單結帳完成時要自動取號：叫號用在外帶取餐、不是內用（有桌子）的單、還沒有號碼（從叫號頁開的單已經有了）
+    /// 這張單用叫號的號碼當單號（叫號用在外帶取餐、不是內用有桌子的單）：一進結帳就取號，
+    /// 結帳畫面、收據、廚房、叫號、QR 都是這一個號碼。結帳時沒取到（斷網）就結完再取一次
     func takesTakeoutNumber(_ t: Ticket) -> Bool {
-        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty && t.queueNumber == nil
+        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty
+    }
+
+    /// 一進結帳就取號（取號＝印號碼牌，客人付完就拿得到）。取不到也不擋結帳，結完再取
+    func takeNumberForCheckout(_ t: Ticket) {
+        guard takesTakeoutNumber(t), t.queueNumber == nil, features.queue, api != nil else { return }
+        Task { await requestTakeoutNumber(t) }
+    }
+
+    /// 作廢的外帶單：號碼放回去（叫號螢幕、等候清單不再列它）。連不上就算了（店員可以在叫號頁按過號）
+    func releaseNumber(of t: Ticket) {
+        guard let n = t.queueNumber, features.queue, queueMode == .native, let api else { return }
+        Task {
+            if let s = try? await api.queue(.cancel(n, requestId: "cancel-\(t.id)")) { applyQueue(s) }
+        }
     }
 
     /// 外帶單的取餐號碼是叫號的號碼（付完才取）：點餐、結帳畫面不寫單號（A036），免得和取餐號碼搞混。
@@ -586,10 +601,22 @@ extension POSModel {
     /// 點餐、結帳畫面上寫的單號（外帶叫號的店不寫：nil）
     func orderNumber(_ t: Ticket) -> String? { hidesTicketNumber(t) ? nil : t.number }
 
-    /// 「A036・外帶 A036」；外帶叫號的店「外帶・取餐號碼結帳後給」
+    /// 「A036・外帶 A036」；外帶叫號的店「外帶 33 號」（還沒取到：結帳中「取號中…」、還沒結帳「結帳時給號碼」）
     func orderCaption(_ t: Ticket) -> String {
         guard hidesTicketNumber(t) else { return "\(t.number)・\(t.title(floor: floor))" }
-        return t.queueNumber == nil ? "\(orderTitle(t))・取餐號碼結帳後給" : orderTitle(t)
+        guard t.queueNumber == nil else { return orderTitle(t) }
+        return "\(orderTitle(t))・\(pendingNumberText(t))"
+    }
+
+    /// 外帶單還沒有號碼時寫什麼：結帳中＝正在向叫號取號；還沒結帳＝結帳時才給
+    func pendingNumberText(_ t: Ticket) -> String {
+        checkoutTicketId == t.id ? "取號中…" : "結帳時給號碼"
+    }
+
+    /// 外帶單的號碼網頁（號碼牌、收據上的 QR）：叫到幾號、前面幾位、大約還要等多久。
+    /// day：哪一個營業日的號碼（補印舊收據時用那一天；號碼每天從 1 開始）
+    func queueLink(_ n: Int, waiting: Int, day: String? = nil) -> String? {
+        queueConfig?.customerLink(number: n, waiting: waiting, date: (day ?? businessDate).replacingOccurrences(of: "-", with: ""))
     }
 
     /// 號碼帶的一句話（後台叫號頁、右欄的叫號面板看得到）：「A012・3 項」
@@ -628,7 +655,8 @@ extension POSModel {
         return result
     }
 
-    /// 送出取號（帶這張單）：取到就掛在單子上（ticket.updated 的 queueNumber）、這台有號碼牌出單機就印。連不上回 nil
+    /// 送出取號（帶這張單）：取到就掛在單子上（ticket.updated 的 queueNumber）、這台有號碼牌出單機就印。連不上回 nil。
+    /// 已經有號碼（一進結帳就取了）直接用；同一張單用同一個 requestId，重送後台給回同一個號碼
     @discardableResult
     func requestTakeoutNumber(_ t: Ticket) async -> Int? {
         if let n = state.tickets[t.id]?.queueNumber { return n }
@@ -812,7 +840,7 @@ extension POSModel {
         }
         let now = Date()
         for n in numbers {
-            let ticket = QueueTicket(layout: layout, number: n, waiting: waiting, link: queueConfig?.customerLink(number: n, waiting: waiting),
+            let ticket = QueueTicket(layout: layout, number: n, waiting: waiting, link: queueLink(n, waiting: waiting),
                                      storeName: store.name, at: now, background: background)
             printers.printQueueTicket(ticket)
         }

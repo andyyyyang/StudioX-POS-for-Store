@@ -149,7 +149,7 @@ struct PhoneOrderView: View {
         let t = model.selectedTicket
         return VStack(alignment: .leading, spacing: 2) {
             // 外帶叫號的店不寫單號（客人只認取餐號碼）
-            Eyebrow(t.map { model.orderNumber($0) ?? ($0.queueNumber == nil ? "取餐號碼結帳後給" : "取餐號碼") } ?? "A000")
+            Eyebrow(t.map { model.orderNumber($0) ?? ($0.queueNumber == nil ? model.pendingNumberText($0) : "取餐號碼") } ?? "A000")
             Text(t.map { model.orderTitle($0) } ?? "內用")
                 .font(.brand(22, .semibold))
                 .foregroundStyle(Theme.ink)

@@ -63,6 +63,16 @@ struct QueueTests {
         #expect(try body(.unmiss(19)) == #"{"number":19}"#)
         #expect(QueueAction.unmark(25).path == "unmark")
         #expect(try body(.reset(staffId: "staff-1")) == #"{"staffId":"staff-1"}"#)
+        // 作廢的單放回號碼
+        #expect(QueueAction.cancel(33, requestId: "cancel-t1").path == "cancel")
+        #expect(try body(.cancel(33, requestId: "cancel-t1")) == #"{"number":33,"requestId":"cancel-t1"}"#)
+    }
+
+    /// 網址樣板的 {date}：營業日（號碼每天從 1 開始）；沒給日期就空白
+    @Test func customerLinkFillsTheDate() throws {
+        let c = try decode(QueueConfig.self, #"{ "customerUrl": "https://yellowgirl.tw/q/{number}?d={date}" }"#)
+        #expect(c.customerLink(number: 33, waiting: 5, date: "20261005") == "https://yellowgirl.tw/q/33?d=20261005")
+        #expect(c.customerLink(number: 33, waiting: 5) == "https://yellowgirl.tw/q/33?d=")
     }
 
     /// 版面：沒給的用樹莓派的預設；給一半的補齊；給錯的也印得出來

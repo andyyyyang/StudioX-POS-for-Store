@@ -377,12 +377,12 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 
 | usage | 情境 | POS 怎麼用 |
 |---|---|---|
-| `takeout` | 全外帶（夜市攤、手搖飲；黃毛丫頭） | 外帶單**結帳完成時自動取號**（`take` 帶 `ticketId`）、印號碼牌、單子掛上號碼（`ticket.updated` 的 `queueNumber`）；做好了在右欄叫號（`call` 指定號碼：先做好的先叫） |
+| `takeout` | 全外帶（夜市攤、手搖飲；黃毛丫頭） | **一張單一個號碼**：外帶單**一進結帳就取號**（`take` 帶 `ticketId`，`requestId` 固定是 `take-<ticketId>`：重送、結完再取都拿回同一個號碼）、印號碼牌、單子掛上號碼（`ticket.updated` 的 `queueNumber`）。這個號碼就是單號：結帳畫面、收據（取餐號碼＋QR）、廚房、叫號都寫它，A036 這種單號只留在訂單、交易序號（查帳、退貨）。取號時連不上：照樣結帳，結完再取一次。單子作廢、改成內用：`cancel` 放回號碼。做好了在右欄叫號（`call` 指定號碼：先做好的先叫） |
 | `dineIn` | 排隊等內用 | 取號時打人數（`take` 帶 `guests`）；叫到號時選桌入座（開內用單、掛上號碼） |
 | 都沒開 | 只有「叫號」頁 | 店員自己取號、叫號（和原本的 TicketSystem App 一樣） |
 
 開機資料：`features.queue`（沒開就沒有這一頁）、`queue: { mode, customerUrl, ticket, usage }`：
-- `customerUrl`：印在號碼牌 QR 的網址樣板，`{number}`、`{waiting}` 會被換掉。`native` 預設是後台的 `/q`；`legacy` 沒有預設，要在後台貼上樹莓派原本 `qr_url.txt` 的網址（沒填就不印 QR）
+- `customerUrl`：印在號碼牌、收據 QR 的網址樣板，`{number}`、`{waiting}`、`{date}`（營業日 `20261005`：號碼每天從 1 開始，舊的號碼牌掃了知道是哪一天的）會被換掉。黃毛丫頭：`https://yellowgirl.tw/q/{number}?d={date}`（叫到幾號、前面幾位、大約還要等多久）。`native` 預設是後台的 `/q`；`legacy` 沒有預設，要在後台貼上樹莓派原本 `qr_url.txt` 的網址（沒填就不印 QR）
 - `ticket`：號碼牌的版面（**iPad 直接印**，不用樹莓派）。座標都以 58 mm 的 384 點寬為準（80 mm 的機器等比放大），預設值和樹莓派原本印的一模一樣：
 
 ```json
@@ -419,6 +419,7 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 | `unmiss` | `{ "number": 19 }` | 從過號清單刪掉（同時取消標記） |
 | `mark`／`unmark` | `{ "number": 25 }` | 標記／取消標記 |
 | `reset` | `{ "staffId": "…" }` | 全部歸零（iPad 先要店長 PIN） |
+| `cancel` | `{ "number": 33, "requestId" }` | 放回號碼（外帶單作廢、改成內用）：從 `waiting`／`missed`／`marked` 拿掉，正在叫的就停（不算服務完）；已經不在了也回 200（重送不出錯）。`requestId` 是 `cancel-<ticketId>`。只有 `native` |
 
 錯誤：`409 queue_off`（後台沒開叫號）、`502 upstream`（`legacy` 模式連不到原本的伺服器；iPad 顯示「叫號伺服器連不上」，不要重試動作類的請求）。
 iPad 在叫號頁每 2 秒 `GET /queue`；動作的回應直接拿來更新畫面。叫號要網路（和原本的 App 一樣），斷線時這一頁只能看不能按。

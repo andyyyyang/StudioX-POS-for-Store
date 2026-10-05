@@ -87,6 +87,13 @@ struct PrintingTests {
         let pickup = Templates.saleReceipt(sale, store: store, pickupNumber: Templates.pickupNumber("A007")).plainText(width: .mm58)
         #expect(pickup.hasPrefix("            取餐號碼") || pickup.contains("取餐號碼"))
         #expect(Templates.pickupNumber("B120") == "120")
+        // 叫號的號碼（有網頁）：號碼下面印 QR、單號那一行改成取餐號碼、交易序號放最下面
+        let queued = Templates.saleReceipt(sale, store: store, pickupNumber: "33", pickupLink: "https://yellowgirl.tw/q/33?d=20261005")
+            .plainText(width: .mm58)
+        #expect(queued.contains("[QR https://yellowgirl.tw/q/"))
+        #expect(queued.contains("取餐 33 號"))
+        #expect(queued.contains("交易序號 \(sale.number)"))
+        #expect(!queued.contains("單號 \(sale.number)"))
         // 58 mm 與 80 mm：每一行都放得進紙寬
         for w in PaperWidth.allCases {
             for line in Templates.saleReceipt(sale, store: store).plainText(width: w).split(separator: "\n") {

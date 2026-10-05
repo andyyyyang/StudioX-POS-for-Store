@@ -822,10 +822,13 @@ public struct QueueConfig: Codable, Sendable, Hashable {
         if !usage.isEmpty { try c.encode(QueueUsage.allCases.filter(usage.contains).map(\.rawValue), forKey: .usage) }
     }
 
-    /// 號碼牌上的 QR：這個號碼的網址（沒設網址樣板是 nil）
-    public func customerLink(number: Int, waiting: Int) -> String? {
+    /// 號碼牌、收據上的 QR：這個號碼的網址（沒設網址樣板是 nil）。
+    /// 樣板可以用 {number}、{waiting}、{date}（營業日 20261005：號碼每天從 1 開始，舊的號碼牌掃了知道是哪一天的）
+    public func customerLink(number: Int, waiting: Int, date: String? = nil) -> String? {
         guard let t = customerUrl else { return nil }
-        return t.replacingOccurrences(of: "{number}", with: String(number)).replacingOccurrences(of: "{waiting}", with: String(waiting))
+        return t.replacingOccurrences(of: "{number}", with: String(number))
+            .replacingOccurrences(of: "{waiting}", with: String(waiting))
+            .replacingOccurrences(of: "{date}", with: date ?? "")
     }
 }
 
@@ -992,6 +995,8 @@ public enum QueueAction: Sendable, Hashable {
     case takeOne(entry: QueueEntry, requestId: String)
     /// 叫指定的號碼（外帶：先做好的先叫）：等候中的那一號變成 current（只有 native）
     case call(Int, requestId: String)
+    /// 放回號碼：這張單作廢了，號碼從等候、過號拿掉（叫號螢幕不再列它；只有 native）
+    case cancel(Int, requestId: String)
 
     /// POST /queue/<path>
     public var path: String {
@@ -1007,6 +1012,7 @@ public enum QueueAction: Sendable, Hashable {
         case .reset: "reset"
         case .takeOne: "take"
         case .call: "call"
+        case .cancel: "cancel"
         }
     }
 
@@ -1018,7 +1024,7 @@ public enum QueueAction: Sendable, Hashable {
         case .recall(let n), .unmiss(let n), .mark(let n), .unmark(let n): QueueActionBody(number: n)
         case .reset(let staffId): QueueActionBody(staffId: staffId)
         case .takeOne(let e, let id): QueueActionBody(count: 1, requestId: id, guests: e.guests, ticketId: e.ticketId, label: e.label)
-        case .call(let n, let id): QueueActionBody(requestId: id, number: n)
+        case .call(let n, let id), .cancel(let n, let id): QueueActionBody(requestId: id, number: n)
         }
     }
 }

@@ -9,14 +9,22 @@ public enum Templates {
     /// pickupNumber：櫃台、咖啡模式的取餐號碼（印在最上面、很大，客人拿著等叫號）
     /// staffNames：服務人員 id → 名字（美業、課程每一行印是誰做的）
     /// accountLines：結帳後的會員帳戶（「儲值金餘額 8,500」「剪髮 10 次卡 剩 9 次」）
+    /// pickupLink：叫號的號碼的網頁（掃了看叫到幾號、大約還要等多久）。有的話號碼下面印 QR，
+    /// 單號那一行改成取餐號碼（客人手上只有一個號碼），交易序號放到最下面（退貨、查帳用）
     public static func saleReceipt(_ sale: SaleRecord, store: StoreProfile, reprint: Bool = false, pickupNumber: String? = nil,
+                                   pickupLink: String? = nil,
                                    staffNames: [String: String] = [:], accountLines: [String] = []) -> Receipt {
         var r = Receipt(doc: pickupNumber == nil ? .receipt : .pickup)
         if let pickupNumber {
             r.add(.text("取餐號碼", ReceiptStyle(align: .center, bold: true)))
             r.add(.text(pickupNumber, ReceiptStyle(align: .center, bold: true, scale: 3)))
+            if let pickupLink {
+                r.add(.qr(pickupLink))
+                r.add(.text("掃描看叫到幾號、大約還要等多久", .center))
+            }
             r.add(.doubleRule)
         }
+        let queued = pickupNumber != nil && pickupLink != nil
         let top = r.blocks.count
         r.add(.text(store.name, .title))
         if !store.address.isEmpty { r.add(.text(store.address, .center)) }
@@ -26,7 +34,7 @@ public enum Templates {
         r.add(.rule)
         let showsType = sale.serviceMode?.showsOrderType ?? true
         let where_ = showsType ? sale.orderType.label + (sale.tableNames.isEmpty ? "" : " \(sale.tableNames)") : (sale.customerName ?? "")
-        r.add(.row("單號 \(sale.number)", where_, .strong))
+        r.add(.row(queued ? "取餐 \(pickupNumber ?? "") 號" : "單號 \(sale.number)", where_, .strong))
         r.add(.row(TaipeiTime.dayString(sale.closedAt) + " " + TaipeiTime.clock(sale.closedAt), sale.staffName, .body))
         if sale.guests > 0 { r.add(.text("人數 \(sale.guests)", .body)) }
         r.add(.rule)
@@ -64,6 +72,7 @@ public enum Templates {
             r.add(.row("會員", (m.name ?? "") + " " + m.maskedPhone, .body))
             for line in accountLines { r.add(.detail(line)) }
         }
+        if queued { r.add(.detail("交易序號 \(sale.number)")) }
         if !store.receiptFooter.isEmpty {
             r.add(.feed(1))
             r.add(.text(store.receiptFooter, .center))

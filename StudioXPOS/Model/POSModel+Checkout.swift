@@ -24,6 +24,8 @@ extension POSModel {
         selectedTicketId = t.id
         checkoutTicketId = t.id
         if ![.order, .floor, .orders, .appointments, .checkIn, .members].contains(section) { section = .order }
+        // 外帶叫號：一進結帳就取號——結帳畫面、收據、廚房、叫號、QR 都是這一個號碼
+        takeNumberForCheckout(t)
         // 換貨單：退回的商品先抵掉；抵完了（新的比較便宜或一樣）直接結帳、退差額
         if t.exchange != nil {
             applyExchangeCredit(t)
@@ -191,7 +193,7 @@ extension POSModel {
         if let invoice, invoice.printed {
             printers.printInvoice(InvoiceProof(invoice: invoice, storeName: store.name, qrKey: invoiceSettings.qrKey), detail: sale, store: store)
         }
-        // 叫號用在外帶取餐：結帳完成時自動取號，取餐號碼就是叫號的號碼（不用單號，免得和叫號螢幕上的搞混）
+        // 叫號用在外帶取餐：取餐號碼就是叫號的號碼（一進結帳就取了；沒取到的這時候再取）
         if takesTakeoutNumber(t) {
             await completeTakeout(t, sale: sale, unsent: unsent, toKitchen: toKitchen)
             return
@@ -263,7 +265,10 @@ extension POSModel {
         for s in staff { names[s.id] = s.name }
         let queued = sale.orderType == .dineIn ? nil
             : (state.sales[sale.ticketId]?.queueNumber ?? state.tickets[sale.ticketId]?.queueNumber ?? sale.queueNumber)
-        return Templates.saleReceipt(sale, store: store, reprint: reprint, pickupNumber: queued.map { String($0) } ?? pickupNumber, staffNames: names,
+        // 叫號的號碼：號碼下面印 QR（掃了看叫到幾號、大約還要等多久）
+        let link = queued.flatMap { queueLink($0, waiting: queue.state?.waiting.count ?? 0, day: sale.businessDate) }
+        return Templates.saleReceipt(sale, store: store, reprint: reprint, pickupNumber: queued.map { String($0) } ?? pickupNumber,
+                                     pickupLink: link, staffNames: names,
                                      accountLines: reprint ? [] : accountLines(for: sale.member))
     }
 
