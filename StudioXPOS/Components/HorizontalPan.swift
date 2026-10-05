@@ -9,13 +9,15 @@ import UIKit
 /// 只接橫的拖：一開始的方向就決定（橫的比直的多才開始），直的交給外面的 ScrollView（不會兩個打架）。
 /// 開始了就鎖住橫的：之後手指歪了也不會變成捲動；一開始是直的，這一次碰到就不會再變成橫拖。
 ///
-/// 用在單子的一行（SwipeRow）與菜單左右滑換分類（CategorySwipeArea）
+/// 用在單子的一行（SwipeRow）、菜單左右滑換分類（CategorySwipeArea）、手機從左邊邊往右滑回上一頁（SwipeBack）
 struct HorizontalPan: UIGestureRecognizerRepresentable {
     var isEnabled: Bool
     /// 橫的要是直的幾倍才開始（1 ≈ 斜 45 度以內都算、1.3 ≈ 37 度以內）
     var ratio: CGFloat = 1.3
     /// 從螢幕左右邊這麼近的地方開始的不接（留給系統的手勢、拿手機的手指）
     var edgeInset: CGFloat = 0
+    /// 只接從螢幕左邊這麼近的地方開始、往右拖的（回上一頁）；0＝哪裡開始都可以
+    var leadingEdge: CGFloat = 0
     /// 另外的條件（例如菜單剛捲過不算）
     var shouldBegin: () -> Bool = { true }
     var onBegan: () -> Void
@@ -24,7 +26,7 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
     var onCancelled: () -> Void
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator(ratio: ratio, edgeInset: edgeInset, shouldBegin: shouldBegin)
+        Coordinator(ratio: ratio, edgeInset: edgeInset, leadingEdge: leadingEdge, shouldBegin: shouldBegin)
     }
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
@@ -39,6 +41,7 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
         recognizer.isEnabled = isEnabled
         context.coordinator.ratio = ratio
         context.coordinator.edgeInset = edgeInset
+        context.coordinator.leadingEdge = leadingEdge
         context.coordinator.shouldBegin = shouldBegin
     }
 
@@ -62,11 +65,13 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var ratio: CGFloat
         var edgeInset: CGFloat
+        var leadingEdge: CGFloat
         var shouldBegin: () -> Bool
 
-        init(ratio: CGFloat, edgeInset: CGFloat, shouldBegin: @escaping () -> Bool) {
+        init(ratio: CGFloat, edgeInset: CGFloat, leadingEdge: CGFloat, shouldBegin: @escaping () -> Bool) {
             self.ratio = ratio
             self.edgeInset = edgeInset
+            self.leadingEdge = leadingEdge
             self.shouldBegin = shouldBegin
         }
 
@@ -78,10 +83,11 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
             let v = pan.velocity(in: pan.view)
             let d = hypot(t.x, t.y) >= 6 ? t : v
             guard abs(d.x) > abs(d.y) * ratio else { return false }
-            if edgeInset > 0, let window = pan.view?.window {
+            if let window = pan.view?.window, edgeInset > 0 || leadingEdge > 0 {
                 // 手指一開始按下去的地方（現在的位置往回扣已經拖的）
                 let x = pan.location(in: window).x - pan.translation(in: window).x
-                if x < edgeInset || x > window.bounds.width - edgeInset { return false }
+                if edgeInset > 0, x < edgeInset || x > window.bounds.width - edgeInset { return false }
+                if leadingEdge > 0, x > leadingEdge || d.x <= 0 { return false }
             }
             return shouldBegin()
         }

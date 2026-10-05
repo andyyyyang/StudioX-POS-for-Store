@@ -78,8 +78,11 @@ struct PhoneShell: View {
     @ViewBuilder
     private var page: some View {
         if let t = model.checkoutTicket, t.isOpen, [.order, .floor, .orders].contains(model.section) {
-            // 這支手機也能收款：結帳畫面（刷卡、電子支付）
+            // 這支手機也能收款：結帳畫面（刷卡、電子支付）。從左邊邊往右滑＝回到點餐（已經收的款照樣在單子上）
             PaymentView(ticketId: t.id)
+                .swipeBack(model.section == .orders ? "訂單" : (model.section == .floor ? "桌位" : "點餐")) {
+                    model.cancelCheckout()
+                }
         } else {
             switch model.section {
             case .order: PhoneOrderView()
@@ -622,6 +625,9 @@ struct PhoneSubpage<Content: View>: View {
             content()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Theme.page)
+        // 從左邊邊往右滑＝回上一頁（和左上角的「‹ 更多」一樣）
+        .swipeBack(back) { onBack() }
     }
 }
 
