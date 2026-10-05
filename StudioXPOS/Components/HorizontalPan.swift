@@ -16,8 +16,11 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
     var ratio: CGFloat = 1.3
     /// 從螢幕左右邊這麼近的地方開始的不接（留給系統的手勢、拿手機的手指）
     var edgeInset: CGFloat = 0
-    /// 只接從螢幕左邊這麼近的地方開始、往右拖的（回上一頁）；0＝哪裡開始都可以
+    /// 只接從螢幕左邊這麼近的地方開始的；0＝哪裡開始都可以
     var leadingEdge: CGFloat = 0
+    /// 只接往右拖的（回上一頁）：往左拖照樣給頁面裡的東西；
+    /// 手指下面有可以左右捲、還沒捲到最左邊的（一排膠囊、照片）先讓它捲
+    var rightwardOnly = false
     /// 另外的條件（例如菜單剛捲過不算）
     var shouldBegin: () -> Bool = { true }
     var onBegan: () -> Void
@@ -26,7 +29,7 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
     var onCancelled: () -> Void
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator(ratio: ratio, edgeInset: edgeInset, leadingEdge: leadingEdge, shouldBegin: shouldBegin)
+        Coordinator(ratio: ratio, edgeInset: edgeInset, leadingEdge: leadingEdge, rightwardOnly: rightwardOnly, shouldBegin: shouldBegin)
     }
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
@@ -42,6 +45,7 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
         context.coordinator.ratio = ratio
         context.coordinator.edgeInset = edgeInset
         context.coordinator.leadingEdge = leadingEdge
+        context.coordinator.rightwardOnly = rightwardOnly
         context.coordinator.shouldBegin = shouldBegin
     }
 
@@ -66,12 +70,14 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
         var ratio: CGFloat
         var edgeInset: CGFloat
         var leadingEdge: CGFloat
+        var rightwardOnly: Bool
         var shouldBegin: () -> Bool
 
-        init(ratio: CGFloat, edgeInset: CGFloat, leadingEdge: CGFloat, shouldBegin: @escaping () -> Bool) {
+        init(ratio: CGFloat, edgeInset: CGFloat, leadingEdge: CGFloat, rightwardOnly: Bool, shouldBegin: @escaping () -> Bool) {
             self.ratio = ratio
             self.edgeInset = edgeInset
             self.leadingEdge = leadingEdge
+            self.rightwardOnly = rightwardOnly
             self.shouldBegin = shouldBegin
         }
 
@@ -87,9 +93,27 @@ struct HorizontalPan: UIGestureRecognizerRepresentable {
                 // 手指一開始按下去的地方（現在的位置往回扣已經拖的）
                 let x = pan.location(in: window).x - pan.translation(in: window).x
                 if edgeInset > 0, x < edgeInset || x > window.bounds.width - edgeInset { return false }
-                if leadingEdge > 0, x > leadingEdge || d.x <= 0 { return false }
+                if leadingEdge > 0, x > leadingEdge { return false }
+            }
+            if rightwardOnly {
+                guard d.x > 0 else { return false }
+                if let view = pan.view, Self.scrollsBack(under: pan.location(in: view), in: view) { return false }
             }
             return shouldBegin()
+        }
+
+        /// 手指下面有沒有可以往左捲回去的（左右捲的清單還沒在最左邊）：有就讓它捲，不當成回上一頁
+        private static func scrollsBack(under point: CGPoint, in view: UIView) -> Bool {
+            var v = view.hitTest(point, with: nil)
+            while let current = v, current !== view.superview {
+                if let scroll = current as? UIScrollView,
+                   scroll.contentSize.width > scroll.bounds.width + 1,
+                   scroll.contentOffset.x > -scroll.adjustedContentInset.left + 1 {
+                    return true
+                }
+                v = current.superview
+            }
+            return false
         }
 
         /// 外面的拖（ScrollView 的捲動、sheet 往下滑關掉）等這一個先放棄：直的一動這一個就放棄，橫的就是這一個的

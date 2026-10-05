@@ -5,11 +5,11 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 手機：從螢幕左邊邊往右滑＝回上一頁（和 iOS 一樣）。
+/// 手機：往右滑＝回上一頁（和 iOS 26 一樣，整頁哪裡都可以滑，不用從邊邊）。
 ///
 ///   ┃‹ 點餐 ┃  頁面          ← 頁面跟著手指往右走，左邊露出要回去的地方
 ///
-/// - 從左邊 28 點以內開始、往右拖才算（中間的左右滑留給頁面自己：換分類、單子的一行）
+/// - 往右拖才算（偏上偏下 45 度以內）；往左拖、上下捲照樣給頁面；手指下面有左右捲、還沒捲到最左邊的先讓它捲
 /// - 拉過三分之一（或往右甩一下）名字變實心、輕震＝放開就回去；沒拉到、往回拉＝彈回來
 /// - 拖的時候只有這一層在動（頁面本身不重畫）
 struct SwipeBack: ViewModifier {
@@ -38,7 +38,7 @@ struct SwipeBack: ViewModifier {
             .gesture(HorizontalPan(
                 isEnabled: enabled,
                 ratio: 1,
-                leadingEdge: 28,
+                rightwardOnly: true,
                 onBegan: {},
                 onChanged: { x in move(x) },
                 onEnded: { x, vx in end(x, velocity: vx) },
