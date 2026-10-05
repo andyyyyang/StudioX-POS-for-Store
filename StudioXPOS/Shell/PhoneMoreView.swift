@@ -10,6 +10,7 @@ import SwiftUI
 /// 個人的手機（用 StudioX 帳號登入）：寫「這支手機是 王小美 的（個人）」，沒有換人；「⋯」裡是「登出這支手機」
 struct PhoneMoreView: View {
     @Environment(POSModel.self) private var model
+    @Environment(PhoneUI.self) private var ui
 
     @State private var confirmEndDemo = false
     @State private var confirmUnpair = false
@@ -240,14 +241,39 @@ struct PhoneMoreView: View {
                     .overlay { Capsule().strokeBorder(Theme.line) }
                 }
             }
-            Text(model.printers.printers.isEmpty
-                 ? "出單機、收據、發票在 iPad 的「設定」改。這支手機送出的單，廚房螢幕馬上看得到；這支手機沒有出單機，不會自己印廚房單。"
-                 : "出單機、收據、發票在 iPad 的「設定」改。這支手機送出的單，廚房螢幕馬上看得到，廚房單從這支手機設定的出單機印。")
-                .textRole(.xs)
-                .foregroundStyle(Theme.muted)
-                .fixedSize(horizontal: false, vertical: true)
+            Rule(color: Theme.hair)
+            printersRow
         }
         .panel(padding: 18)
+    }
+
+    /// 這支手機自己的出單機：每支手機可以接不一樣的（號碼牌、收據、發票證明聯、廚房單）
+    private var printersRow: some View {
+        let list = model.printers.printers
+        let roles = PrinterRole.allCases.filter { r in list.contains { $0.roles.contains(r) } }.map(\.label)
+        return Button {
+            ui.printersOpen = true
+        } label: {
+            HStack(spacing: 12) {
+                HeroIcon("printer", size: 20)
+                    .foregroundStyle(Theme.ink2)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("出單機")
+                        .font(.brand(15.5, .medium))
+                        .foregroundStyle(Theme.ink)
+                    Text(list.isEmpty ? "還沒有：號碼牌、收據、發票從這支手機印，要先接一台" : "\(list.count) 台・\(roles.joined(separator: "、"))")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                HeroIcon("chevron-right", size: 14)
+                    .foregroundStyle(Theme.muted)
+            }
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 
     private var currentAppearance: String {

@@ -819,9 +819,10 @@ extension POSModel {
 
     /// 叫到了：跳一句話；這台設定要唸（或 force：「再唸一次」）就用 iPad 的喇叭唸
     func announceQueue(_ n: Int, prefix: String = "", force: Bool = false) {
-        show("\(prefix)叫號 \(n) 號")
+        // 和叫號螢幕、廣播一樣的說法：「請 33 號客人」（全外帶的店唸「請 33 號客人取餐」）
+        show("\(prefix)請 \(n) 號客人")
         guard force || settings.queueSpeaks else { return }
-        let u = AVSpeechUtterance(string: "請 \(n) 號取餐")
+        let u = AVSpeechUtterance(string: "請 \(n) 號客人" + (queueForTakeout && !queueForDineIn ? "取餐" : ""))
         u.voice = AVSpeechSynthesisVoice(language: "zh-TW")
         if queue.speaker.isSpeaking { _ = queue.speaker.stopSpeaking(at: .word) }
         queue.speaker.speak(u)

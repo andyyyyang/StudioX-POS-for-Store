@@ -25,10 +25,6 @@ struct SettingsView: View {
     @Environment(PrinterHub.self) private var printers
 
     @State private var group: SettingsGroup = .device
-    /// 正在新增／編輯的出單機（存檔前只改這一份）
-    @State private var draft: PrinterConfig?
-    /// 最近列印的預覽（這個用 sheet：不需要鍵盤）
-    @State private var preview: PrintJob?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,9 +39,6 @@ struct SettingsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .sheet(item: $preview) { job in
-            SettingsPrintPreview(job: job, paper: paper(for: job))
-        }
     }
 
     // MARK: - 上面
@@ -76,7 +69,6 @@ struct SettingsView: View {
                 ForEach(SettingsGroup.allCases.filter { $0 != .queue || model.features.queue }) { g in
                     Button {
                         group = g
-                        draft = nil
                     } label: {
                         HStack(spacing: 12) {
                             HeroIcon(g.icon, size: 18)
@@ -139,10 +131,10 @@ struct SettingsView: View {
                 case .workstation: SettingsWorkstationSection()
                 case .mode: SettingsModeSection()
                 case .store: SettingsStoreSection()
-                case .printers: printersSection
+                case .printers: PrinterSettingsSection()
                 case .receipts: SettingsReceiptsSection()
                 case .invoice: SettingsInvoiceSection()
-                case .queue: SettingsQueueSection(openPrinters: { group = .printers; draft = nil })
+                case .queue: SettingsQueueSection(openPrinters: { group = .printers })
                 case .appearance: SettingsAppearanceSection()
                 case .data: SettingsDataSection()
                 case .advanced: SettingsAdvancedSection()
@@ -156,8 +148,25 @@ struct SettingsView: View {
         .scrollDismissesKeyboard(.interactively)
         .id(group)
     }
+}
 
-    // MARK: 出單機
+// MARK: - 出單機（iPad 設定的「出單機」、手機「更多 → 出單機」共用：每台自己的出單機，存在這台）
+
+/// 列表 ⇄ 編輯：存檔前只改 draft 那一份；儲存、測試列印、刪除在右欄（手機是下面的大鍵）
+struct PrinterSettingsSection: View {
+    @Environment(POSModel.self) private var model
+    @Environment(PrinterHub.self) private var printers
+    /// 正在新增／編輯的出單機（存檔前只改這一份）
+    @State private var draft: PrinterConfig?
+    /// 最近列印的預覽（這個用 sheet：不需要鍵盤）
+    @State private var preview: PrintJob?
+
+    var body: some View {
+        printersSection
+            .sheet(item: $preview) { job in
+                SettingsPrintPreview(job: job, paper: paper(for: job))
+            }
+    }
 
     @ViewBuilder
     private var printersSection: some View {
@@ -861,7 +870,7 @@ private struct SettingsPrinterList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
-            SettingsHeading(title: "出單機", detail: "網路（Wi-Fi、網路線，埠 9100）或藍牙 BLE 的熱感機；每台自己選 58 或 80 mm。設定存在這台 iPad。點一台編輯；新增在右邊。")
+            SettingsHeading(title: "出單機", detail: "網路（Wi-Fi、網路線，埠 9100）或藍牙 BLE 的熱感機；每台自己選 58 或 80 mm。設定存在這台（每台、每支手機可以接不一樣的）。點一台編輯；「新增出單機」在右欄（手機在下面）。")
             if printers.printers.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("還沒有出單機")

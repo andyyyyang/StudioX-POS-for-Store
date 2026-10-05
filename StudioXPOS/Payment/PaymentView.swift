@@ -128,9 +128,17 @@ struct PaymentView: View {
     private static let otherTenders: [Tender] = Tender.selectable.filter { $0 != .cash }
 
     private func tenders(_ t: Ticket, _ x: TicketTotals) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        // 手機沒有發票出單機、這張又要印證明聯：刷卡、電子支付反灰（不跳警告），到櫃台付款
+        let counter = model.needsCounterForInvoice(t)
+        return VStack(alignment: .leading, spacing: 12) {
             // 付款方式是「選一個」（格子），不是一排動作；平分、小費這些在下面的「⋯」
             Eyebrow("付款方式")
+            if counter {
+                Text("要印發票證明聯：上面輸入手機條碼或捐贈就能在這裡收，不然請到櫃台付款")
+                    .textRole(.small)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             // 現金最大（台灣最常用）；沒有錢櫃的崗位（前場）不收現金
             if model.role.hasDrawer {
                 Button {
@@ -151,15 +159,18 @@ struct PaymentView: View {
                 .buttonStyle(.choice(true, height: 84))
                 .disabled(x.isPaidInFull)
             } else {
-                // 沒有錢櫃（收款的手機、報到接待）：現金到櫃台付——送過去，櫃台的大鍵直接是收現金；這台回去點下一張
+                // 沒有錢櫃（收款的手機、報到接待）：現金到櫃台付——送過去，櫃台的大鍵直接是收現金；這台回去點下一張。
+                // 要印發票證明聯（這支手機印不了）：到櫃台付款，用什麼付都可以
                 Button {
-                    model.sendToRegisterForCash(t)
+                    model.sendToRegisterForCash(t, cash: !counter)
                 } label: {
                     HStack(spacing: 14) {
                         HeroIcon("banknotes", size: 26)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("到櫃台付現").font(.brand(20, .semibold))
-                            Text("送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)；這台沒有錢櫃").font(.brand(12.5, .regular)).opacity(0.7)
+                            Text(counter ? "到櫃台付款" : "到櫃台付現").font(.brand(20, .semibold))
+                            Text(counter ? "送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)、拿發票"
+                                 : "送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)；這台沒有錢櫃")
+                                .font(.brand(12.5, .regular)).opacity(0.7)
                         }
                         Spacer()
                         Text("→").font(.brand(22, .regular))
@@ -167,7 +178,7 @@ struct PaymentView: View {
                     .padding(.horizontal, 20)
                     .frame(maxWidth: .infinity, minHeight: 84)
                 }
-                .buttonStyle(.choice(false, height: 84))
+                .buttonStyle(.choice(counter, height: 84))
                 .disabled(x.isPaidInFull)
             }
 
@@ -189,7 +200,7 @@ struct PaymentView: View {
                     .frame(maxWidth: .infinity, minHeight: 84)
                 }
                 .buttonStyle(.choice(false, height: 84))
-                .disabled(x.isPaidInFull)
+                .disabled(x.isPaidInFull || counter)
             }
 
             prepaidTile(t, x)
@@ -207,7 +218,7 @@ struct PaymentView: View {
                         .frame(maxWidth: .infinity, minHeight: 74)
                     }
                     .buttonStyle(.choice(false, height: 74))
-                    .disabled(x.isPaidInFull)
+                    .disabled(x.isPaidInFull || counter)
                 }
             }
         }

@@ -29,15 +29,24 @@ extension POSModel {
     }
 
     /// 結帳到一半要付現金、這台又沒有錢櫃（收款的手機、報到接待）：送到結帳櫃台「付現」，客人到櫃台付。
-    /// 櫃台跳出「從手機（付現）送來結帳」，大鍵直接是收現金；這台回到點餐（刷卡、電子支付已經收的照樣算）
-    func sendToRegisterForCash(_ t: Ticket) {
+    /// 櫃台跳出「從手機（付現）送來結帳」，大鍵直接是收現金；這台回到點餐（刷卡、電子支付已經收的照樣算）。
+    /// cash＝false：要印發票證明聯、這支手機又沒有發票出單機——到櫃台用什麼付都可以（櫃台照一般的結帳）
+    func sendToRegisterForCash(_ t: Ticket, cash: Bool = true) {
         guard !t.activeLines.isEmpty else { return }
         let due = t.totals.balance
-        guard record(.billPrinted(TicketRef(ticketId: t.id, sentFrom: "\(handoffSource)（付現）"))) else { return }
+        let from = cash ? "\(handoffSource)（付現）" : handoffSource
+        guard record(.billPrinted(TicketRef(ticketId: t.id, sentFrom: from))) else { return }
         keypad.cancel()
         checkoutTicketId = nil
         if isPhone || selectedTicketId == t.id { selectedTicketId = nil }
-        show("\(orderTitle(t)) 送到櫃台付現：請客人到櫃台付 \(due.formatted)", tone: .info)
+        show("\(orderTitle(t)) 送到櫃台\(cash ? "付現" : "結帳")：請客人到櫃台付 \(due.formatted)", tone: .info)
+    }
+
+    /// 手機結帳：這張要印電子發票證明聯（紙本、統編），這支手機又沒有發票出單機＝不能在這裡收（刷卡、電子支付反灰，不跳警告）：
+    /// 輸入手機條碼、捐贈就能收；不然到櫃台付款
+    func needsCounterForInvoice(_ t: Ticket) -> Bool {
+        guard isPhone, features.invoice, invoiceSettings.enabled, t.invoiceBuyer.printsProof, printers.targets(.invoice).isEmpty else { return false }
+        return InvoiceBuilder.coverage(for: t, prepaid: store.prepaidInvoicing).amount.cents > 0
     }
 
     /// 這張是送到櫃台「付現」的

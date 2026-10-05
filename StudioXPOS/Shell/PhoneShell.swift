@@ -45,7 +45,10 @@ struct PhoneShell: View {
         .background { AddHaptic() }
         .environment(ui)
         .onAppear { normalizeSection() }
-        .onChange(of: model.section) { _, _ in normalizeSection() }
+        .onChange(of: model.section) { _, _ in
+            normalizeSection()
+            ui.printersOpen = false
+        }
         // 和 iPad 一樣：開不了發票、要不要印交易明細（這支手機打開「也能收款」時才會用到）
         .confirmationDialog(
             "開不了發票", isPresented: Binding(get: { model.pendingInvoiceFailure != nil }, set: { if !$0 { model.pendingInvoiceFailure = nil } }),
@@ -94,7 +97,20 @@ struct PhoneShell: View {
                 PhoneSubpage(back: "更多", onBack: { model.go(.settings) }) {
                     MembersView()
                 }
-            default: PhoneMoreView()
+            default:
+                if ui.printersOpen {
+                    // 這支手機自己的出單機（和 iPad 設定的「出單機」同一份畫面）
+                    PhoneSubpage(back: "更多", onBack: { ui.printersOpen = false }) {
+                        ScrollView {
+                            PrinterSettingsSection()
+                                .padding(16)
+                        }
+                        .scrollIndicators(.hidden)
+                        .scrollDismissesKeyboard(.interactively)
+                    }
+                } else {
+                    PhoneMoreView()
+                }
             }
         }
     }
@@ -114,6 +130,8 @@ final class PhoneUI {
     var ticketOpen = false
     /// 從「訂單」點一張單：到點餐頁後直接打開單子
     var openTicketOnArrival = false
+    /// 「更多 → 出單機」開著（這支手機自己的出單機：號碼牌、收據、發票證明聯）
+    var printersOpen = false
 }
 
 // MARK: - 上面選、下面做
