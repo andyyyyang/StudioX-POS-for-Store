@@ -233,7 +233,7 @@ final class POSModel {
         }
         startTimers()
         if let mesh = meshConfig, mesh.enabled, let key = Crypto.bytes(hex: mesh.key) {
-            self.mesh.start(deviceId: deviceId, key: key) { [weak self] events in
+            self.mesh.start(deviceId: deviceId, key: key, kind: isPhone ? "phone" : "pad") { [weak self] events in
                 self?.merge(events, source: "同一個 Wi-Fi")
             } summary: { [weak self] in
                 self?.ledger?.journal.allEvents ?? []

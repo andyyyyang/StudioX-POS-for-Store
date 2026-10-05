@@ -28,6 +28,13 @@ extension POSModel {
         role.takesPayment && (!isPhone || PhoneSettings.shared.takesPayment)
     }
 
+    /// 手機要和櫃台的 iPad（母裝置）在同一個 Wi-Fi 才能進結帳：區網連得到一台 iPad。
+    /// 店家沒開區網同步（後台的 mesh）就不限；示範模式不限
+    var phoneOnStoreWiFi: Bool {
+        guard isPhone, !isDemo, meshConfig?.enabled == true else { return true }
+        return mesh.hasPadPeer
+    }
+
     /// 要不要發票號碼段：會收錢的才要（不收款的手機不佔號碼）
     var issuesInvoices: Bool { takesPayment }
 

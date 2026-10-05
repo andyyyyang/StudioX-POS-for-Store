@@ -805,7 +805,9 @@ struct TicketColumn: View {
     private func checkoutAction(_ t: Ticket) -> POSAction {
         let hasLines = !t.activeLines.isEmpty
         if model.takesPayment {
-            return POSAction("結帳", icon: "banknotes", enabled: hasLines) { model.beginCheckout(t) }
+            // 手機要和櫃台的 iPad 在同一個 Wi-Fi 才能結帳：連不到就反灰（不跳警告），鍵上寫原因
+            let here = model.phoneOnStoreWiFi
+            return POSAction(here ? "結帳" : "結帳・要連店裡的 Wi-Fi", icon: "banknotes", enabled: hasLines && here) { model.beginCheckout(t) }
         }
         let sent = t.billPrintedAt != nil && t.billSentFrom != nil
         return POSAction(sent ? "再送一次到櫃台" : "送到結帳櫃台", icon: "paper-airplane", enabled: hasLines) {

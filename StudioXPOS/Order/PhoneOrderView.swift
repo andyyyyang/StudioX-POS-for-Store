@@ -358,6 +358,7 @@ struct PhoneOrderView: View {
     }
 
     private func ticketHint(_ t: Ticket) -> String {
+        if model.takesPayment && !model.phoneOnStoreWiFi { return "和櫃台的 iPad 連同一個 Wi-Fi 才能結帳" }
         if model.couponShortfall(t) != nil { return "未達最低消費，結帳前會拿掉折價券" }
         if t.billPrintedAt != nil { return t.billSentFrom != nil ? "已送到結帳櫃台・點開看單子" : "已印結帳單・點開看單子" }
         let unsent = t.unsentLines.reduce(0) { $0 + $1.quantity }

@@ -18,6 +18,13 @@ final class MeshService {
     /// 現在連著的其他 iPad（裝置 id）
     private(set) var peers: [String] = []
     private(set) var running = false
+    /// 區網上看到的每一台是什麼（Bonjour 的 TXT「kind」：pad／phone）。舊版沒有寫的當作 iPad
+    private(set) var peerKinds: [String: String] = [:]
+
+    /// 有沒有連著一台 iPad（手機要和櫃台的 iPad 在同一個 Wi-Fi 才能結帳）：連線本身用店家的金鑰驗過，TXT 只用來分手機、iPad
+    var hasPadPeer: Bool {
+        peers.contains { (peerKinds[$0] ?? "pad") == "pad" }
+    }
 
     private var listener: NWListener?
     private var browser: NWBrowser?
@@ -30,7 +37,8 @@ final class MeshService {
 
     static let serviceType = "_studiox-pos._tcp"
 
-    func start(deviceId: String, key: [UInt8], onEvents: @escaping ([POSEvent]) -> Void, summary: @escaping () -> [POSEvent]) {
+    /// kind：這台是 pad 還是 phone（寫在 Bonjour 的 TXT，別台看得到）
+    func start(deviceId: String, key: [UInt8], kind: String = "pad", onEvents: @escaping ([POSEvent]) -> Void, summary: @escaping () -> [POSEvent]) {
         stop()
         self.deviceId = deviceId
         self.key = key
@@ -40,7 +48,7 @@ final class MeshService {
 
         do {
             let l = try NWListener(using: .tcp)
-            l.service = NWListener.Service(name: deviceId, type: Self.serviceType)
+            l.service = NWListener.Service(name: deviceId, type: Self.serviceType, txtRecord: NWTXTRecord(["kind": kind]).data)
             l.newConnectionHandler = { [weak self] conn in
                 Task { @MainActor in self?.attach(conn) }
             }
@@ -51,10 +59,19 @@ final class MeshService {
             return
         }
 
-        let b = NWBrowser(for: .bonjour(type: Self.serviceType, domain: nil), using: .tcp)
+        let b = NWBrowser(for: .bonjourWithTXTRecord(type: Self.serviceType, domain: nil), using: .tcp)
         b.browseResultsChangedHandler = { [weak self] results, _ in
             let endpoints = results.map(\.endpoint)
-            Task { @MainActor in self?.found(endpoints) }
+            var kinds: [String: String] = [:]
+            for r in results {
+                if case .service(let name, _, _, _) = r.endpoint, case .bonjour(let txt) = r.metadata, let k = txt["kind"] {
+                    kinds[name] = k
+                }
+            }
+            Task { @MainActor in
+                self?.peerKinds = kinds
+                self?.found(endpoints)
+            }
         }
         b.start(queue: .global(qos: .utility))
         browser = b
@@ -69,6 +86,7 @@ final class MeshService {
         links = [:]
         linkPeer = [:]
         peers = []
+        peerKinds = [:]
         running = false
     }
 

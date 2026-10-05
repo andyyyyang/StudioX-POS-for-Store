@@ -18,6 +18,11 @@ extension POSModel {
             show("這台是「\(role.label)」，請到結帳櫃台結帳（單子已經同步過去了）", tone: .info)
             return
         }
+        // 手機離開店裡的 Wi-Fi（連不到櫃台的 iPad）：不能結帳（單子上的「結帳」本來就反灰，這裡是其他入口）
+        guard phoneOnStoreWiFi else {
+            show("和櫃台的 iPad 連同一個 Wi-Fi 才能結帳", tone: .info)
+            return
+        }
         keypad.cancel()
         // 折價券：改了品項、小計低於最低消費的，結帳前拿掉（提示說一聲；單子上之前已經提醒過）
         dropCouponBelowMinimum(t)

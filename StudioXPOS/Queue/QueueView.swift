@@ -335,6 +335,12 @@ struct QueueView: View {
                 ]
             )
         }
+        // 外帶叫號：號碼是結帳時自動取的（一張單一個號碼），這裡不手動取號；叫下一號是手動
+        var manualTake: [POSAction] = []
+        if !model.queueForTakeout {
+            manualTake.append(POSAction("取號", icon: "ticket", enabled: can && !model.queueCooling(.take)) { Task { await model.takeQueue(1) } })
+            manualTake.append(POSAction("取幾張…", icon: "rectangle-stack", enabled: can && !model.queueCooling(.take)) { Task { await model.askTakeQueue() } })
+        }
         return DockSelection.page(
             "queue",
             primary: POSAction(next.map { "下一號 \($0)" } ?? "下一號", icon: "megaphone",
@@ -342,9 +348,7 @@ struct QueueView: View {
                 Task { await model.nextQueue() }
             },
             accent: true,
-            actions: [
-                POSAction("取號", icon: "ticket", enabled: can && !model.queueCooling(.take)) { Task { await model.takeQueue(1) } },
-                POSAction("取幾張…", icon: "rectangle-stack", enabled: can && !model.queueCooling(.take)) { Task { await model.askTakeQueue() } },
+            actions: manualTake + [
                 POSAction("過號", icon: "minus-circle", enabled: can && calling && !model.queueCooling(.miss)) { Task { await model.missQueue() } },
                 POSAction("返回前一號", icon: "arrow-uturn-left", enabled: can && calling) { Task { await model.previousQueue() } },
                 POSAction("歸零", icon: "arrow-path", destructive: true, enabled: can) { confirmReset = true },

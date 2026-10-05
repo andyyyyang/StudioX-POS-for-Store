@@ -105,7 +105,7 @@ struct QueuePinnedTakeout: View {
         .accessibilityLabel("叫號：現在 \(state.current.map { "\($0) 號" } ?? "還沒叫")，\(trailing)")
     }
 
-    /// 剛結帳取到的號碼：「24 號　A023 已結帳」
+    /// 剛結帳取到的號碼：「取號 24 號　已結帳」
     private func justTaken(_ flash: QueueJustTaken) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("取號")
@@ -121,7 +121,8 @@ struct QueuePinnedTakeout: View {
                 .font(.brand(compact ? 15 : 17, .semibold))
                 .foregroundStyle(Theme.accentText)
             Spacer(minLength: 6)
-            Text("\(flash.ticketNumber) 已結帳")
+            // 一張單一個號碼：不再寫單號（A023）
+            Text("已結帳")
                 .font(.brand(13, .medium))
                 .monospacedDigit()
                 .foregroundStyle(Theme.ink2)
