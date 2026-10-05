@@ -26,6 +26,8 @@ struct PhoneOrderView: View {
     @State private var categoryId: String?
     /// 換分類時新的品項從哪一邊推進來（左右滑、點分類）
     @State private var pushFrom: Edge = .trailing
+    /// 左右滑換分類時，品項跟著手指走的距離
+    @State private var swipeShift: CGFloat = 0
     @State private var query = ""
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -238,11 +240,14 @@ struct PhoneOrderView: View {
                 // 換分類：整區從左右推進來
                 .id(query.isEmpty ? (categoryId ?? "all") : "search")
                 .transition(.push(from: pushFrom))
+                .offset(x: swipeShift)
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.immediately)
-            // 左右滑換分類（搜尋中不換）
-            .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { v in swipe(v) })
+            // 左右滑換分類（搜尋中不換；防誤觸見 CategorySwipe）
+            .categorySwipe(model.catalog.categories, current: categoryId, enabled: query.isEmpty, shift: $swipeShift) { id in
+                select(id)
+            }
             .sensoryFeedback(.selection, trigger: categoryId)
         }
     }
@@ -275,12 +280,6 @@ struct PhoneOrderView: View {
                 model.toggleAvailability(item)
             }
         }
-    }
-
-    private func swipe(_ v: DragGesture.Value) {
-        guard query.isEmpty, let step = CategorySwipe.step(for: v),
-              let next = CategorySwipe.neighbor(of: categoryId, by: step, in: model.catalog.categories) else { return }
-        select(next)
     }
 
     /// 換分類：新的品項從對的那一邊推進來（上面的膠囊跟著捲到中間）

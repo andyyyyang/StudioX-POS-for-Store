@@ -15,6 +15,8 @@ struct MenuView: View {
     @State private var areaHeight: CGFloat = 700
     /// 換分類時新的品項從哪一邊推進來（左右滑、點分類）
     @State private var pushFrom: Edge = .trailing
+    /// 左右滑換分類時，品項跟著手指走的距離
+    @State private var swipeShift: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +32,7 @@ struct MenuView: View {
                             categories
                         }
                         items
+                            .offset(x: swipeShift)
                     }
                     .padding(.horizontal, 24)
                     // 第一排的選取框（分類方塊的框畫在方塊外 4 點）、品項卡的框與數量圓點：ScrollView 會切掉邊界外的，
@@ -38,8 +41,10 @@ struct MenuView: View {
                     .padding(.bottom, 28)
                 }
                 .scrollIndicators(.hidden)
-                // 左右滑換分類（搜尋中、客製的卡開著時不換）
-                .simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { v in swipe(v) })
+                // 左右滑換分類（搜尋中、客製的卡開著時不換；防誤觸見 CategorySwipe）
+                .categorySwipe(model.catalog.categories, current: categoryId, enabled: swipeEnabled, shift: $swipeShift) { id in
+                    select(id)
+                }
                 .sensoryFeedback(.selection, trigger: categoryId)
                 if let item = model.variantItem ?? model.modifierItem {
                     Theme.page.opacity(0.55)
@@ -73,11 +78,8 @@ struct MenuView: View {
         }
     }
 
-    private func swipe(_ v: DragGesture.Value) {
-        guard query.isEmpty, model.variantItem == nil, model.modifierItem == nil,
-              let step = CategorySwipe.step(for: v),
-              let next = CategorySwipe.neighbor(of: categoryId, by: step, in: model.catalog.categories) else { return }
-        select(next)
+    private var swipeEnabled: Bool {
+        query.isEmpty && model.variantItem == nil && model.modifierItem == nil
     }
 
     /// 換分類：新的品項從對的那一邊推進來

@@ -4,7 +4,6 @@ import POSInvoice
 import POSPrinting
 import POSSync
 import SwiftUI
-import UIKit
 
 /// 一列可以左右滑（單子上的一行；不是 List，所以自己做）：
 ///
@@ -13,7 +12,7 @@ import UIKit
 ///   露出來的鍵 keepsOpen（−1、+1）：可以連按，這一列開著不收，內容（數量）照樣看得到、跟著變
 ///
 /// - 一次只開一列：外面的清單給一個 `openId`，開了這一列，別列自己收起來
-/// - 不搶直的捲動、不搶 sheet 往下滑關掉：用 UIKit 的 pan，橫的速度明顯大過直的才開始（gestureRecognizerShouldBegin）；
+/// - 不搶直的捲動、不搶 sheet 往下滑關掉：用 UIKit 的 pan（HorizontalPan），橫的速度明顯大過直的才開始；
 ///   捲動與 sheet 的拖曳等這一個先放棄才開始（直的一動就放棄，所以捲起來不會慢）
 /// - 超過可以滑的範圍會越拉越緊（rubber band）；過了「滑到底」的那條線震一下，放開就做
 /// - 開著的時候點這一列＝收起來（不會順便選起來）
@@ -70,6 +69,8 @@ struct SwipeRow<Content: View>: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { width = $0 })
         .gesture(HorizontalPan(
             isEnabled: enabled && !(leading.isEmpty && trailing.isEmpty),
+            // 斜斜的捲動不打開這一列（橫的要是直的 1.8 倍：大約 30 度以內）
+            ratio: 1.8,
             onBegan: {
                 start = offset
                 dragging = true
@@ -237,62 +238,5 @@ struct SwipeAction: Identifiable {
         self.foreground = foreground
         self.keepsOpen = keepsOpen
         self.perform = perform
-    }
-}
-
-/// 只接橫的拖：橫的速度明顯大過直的才開始，直的交給外面的 ScrollView（不會兩個打架）
-private struct HorizontalPan: UIGestureRecognizerRepresentable {
-    var isEnabled: Bool
-    var onBegan: () -> Void
-    var onChanged: (CGFloat) -> Void
-    var onEnded: (CGFloat, CGFloat) -> Void
-    var onCancelled: () -> Void
-
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
-        Coordinator()
-    }
-
-    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
-        let pan = UIPanGestureRecognizer()
-        pan.maximumNumberOfTouches = 1
-        pan.delegate = context.coordinator
-        pan.isEnabled = isEnabled
-        return pan
-    }
-
-    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        recognizer.isEnabled = isEnabled
-    }
-
-    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
-        let dx = recognizer.translation(in: recognizer.view).x
-        switch recognizer.state {
-        case .began:
-            onBegan()
-            onChanged(dx)
-        case .changed:
-            onChanged(dx)
-        case .ended:
-            onEnded(dx, recognizer.velocity(in: recognizer.view).x)
-        case .cancelled, .failed:
-            onCancelled()
-        default:
-            break
-        }
-    }
-
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        /// 橫的明顯大過直的才接手（斜斜的、直的都交給捲動）
-        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
-            let v = pan.velocity(in: pan.view)
-            return abs(v.x) > abs(v.y) * 1.6
-        }
-
-        /// 外面的拖（ScrollView 的捲動、sheet 往下滑關掉）等這一個先放棄：直的一動這一個就放棄，橫的就是這一個的
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-            otherGestureRecognizer is UIPanGestureRecognizer && otherGestureRecognizer.view !== gestureRecognizer.view
-        }
     }
 }
