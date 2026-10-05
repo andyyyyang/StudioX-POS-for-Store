@@ -291,28 +291,11 @@ struct ItemCard: View {
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Theme.swatch(swatch))
                     .frame(width: 22, height: 4)
-                Text(item.name)
-                    .font(text.font(16, .medium))
-                    .foregroundStyle(Theme.ink)
+                // 份量、時間這種小字接在名字後面（「鴨心 1串」），不另外佔一行
+                nameLine
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if let meta {
-                    HStack(spacing: 5) {
-                        HeroIcon(meta.icon, size: 13 * text.scale)
-                        Text(meta.text)
-                            .lineLimit(1)
-                        if let trailing = meta.trailing {
-                            Spacer(minLength: 4)
-                            Text(trailing)
-                                .monospacedDigit()
-                                .lineLimit(1)
-                                .foregroundStyle(meta.warn ? Theme.warningFG : Theme.muted)
-                        }
-                    }
-                    .font(text.font(12, .medium))
-                    .foregroundStyle(Theme.muted)
-                }
                 Spacer(minLength: 0)
                 HStack(alignment: .firstTextBaseline) {
                     Text(priceText)
@@ -340,7 +323,7 @@ struct ItemCard: View {
                 .frame(minHeight: 21 * text.scale)
             }
             .padding(compact ? 11 : 14)
-            .frame(maxWidth: .infinity, minHeight: (compact ? 88 : 112) * text.space, alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: (compact ? 76 : 92) * text.space, alignment: .topLeading)
             .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
@@ -366,6 +349,18 @@ struct ItemCard: View {
             Button(available ? "標示賣完" : "恢復供應", systemImage: available ? "nosign" : "checkmark") { toggleAvailability() }
         }
         .accessibilityLabel("\(item.name)，\(priceText)\(meta.map { "，\($0.text)" } ?? "")\(available ? "" : "，賣完")\(inTicket > 0 ? "，已點 \(inTicket)" : "")")
+    }
+
+    /// 名字＋小字（份量、時間、次數）同一段：「鴨心 1串」，長的就跟著換行
+    private var nameLine: Text {
+        let name = Text(item.name)
+            .font(text.font(16, .medium))
+            .foregroundStyle(Theme.ink)
+        guard let meta else { return name }
+        let small = [meta.text, meta.trailing].compactMap { $0 }.joined(separator: "・")
+        return name + Text("  " + small)
+            .font(text.font(12.5, .medium))
+            .foregroundStyle(meta.warn ? Theme.warningFG : Theme.muted)
     }
 
     // MARK: 依種類的小字

@@ -34,18 +34,16 @@ struct PriceGroupCard: View {
             RoundedRectangle(cornerRadius: 2)
                 .fill(Theme.swatch(swatch))
                 .frame(width: 22, height: 4)
-            Text(item.name)
+            // 份量接在名字後面（「鴨腸 3入」），不另外佔一行
+            (Text(item.name)
                 .font(text.font(16, .medium))
                 .foregroundStyle(Theme.ink)
+             + Text(portion.map { "  " + $0 } ?? "")
+                .font(text.font(12.5, .medium))
+                .foregroundStyle(Theme.muted))
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if let portion {
-                Text(portion)
-                    .font(text.font(12, .medium))
-                    .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-            }
             Spacer(minLength: 0)
             // 賣完：鍵照樣在（不能點），上面蓋「賣完」——卡片不會變矮
             HStack(spacing: 6) {
@@ -61,7 +59,7 @@ struct PriceGroupCard: View {
             }
         }
         .padding(compact ? 10 : 12)
-        .frame(maxWidth: .infinity, minHeight: (compact ? 88 : 112) * text.space, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: (compact ? 76 : 92) * text.space, alignment: .topLeading)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
