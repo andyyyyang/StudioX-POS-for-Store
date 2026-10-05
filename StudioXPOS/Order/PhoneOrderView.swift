@@ -26,8 +26,8 @@ struct PhoneOrderView: View {
     @State private var categoryId: String?
     /// 換分類時新的品項從哪一邊推進來（左右滑、點分類）
     @State private var pushFrom: Edge = .trailing
-    /// 左右滑換分類時，品項跟著手指走的距離
-    @State private var swipeShift: CGFloat = 0
+    /// 左右滑換分類時，品項跟著手指走的距離（拖的時候只有品項那一層重畫）
+    @State private var swipeShift = SwipeShift()
     @State private var query = ""
     @State private var searching = false
     @FocusState private var searchFocused: Bool
@@ -246,24 +246,26 @@ struct PhoneOrderView: View {
                        message: query.isEmpty ? "到後台「門市 POS → 菜單」新增" : nil)
         } else {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                    ForEach(list) { item in
-                        card(item)
+                // 左右滑時只有這一層跟著手指走（菜單其他地方不用重畫）
+                SwipeShifted(shift: swipeShift) {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        ForEach(list) { item in
+                            card(item)
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    // 卡片右上角疊的份數超出卡片 6 點：上面留 8 點才不會被切
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+                    // 換分類：整區從左右推進來
+                    .id(query.isEmpty ? (categoryId ?? "all") : "search")
+                    .transition(.push(from: pushFrom))
                 }
-                .padding(.horizontal, 16)
-                // 卡片右上角疊的份數超出卡片 6 點：上面留 8 點才不會被切
-                .padding(.top, 8)
-                .padding(.bottom, 16)
-                // 換分類：整區從左右推進來
-                .id(query.isEmpty ? (categoryId ?? "all") : "search")
-                .transition(.push(from: pushFrom))
-                .offset(x: swipeShift)
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.immediately)
             // 左右滑換分類（搜尋中不換；防誤觸見 CategorySwipe）
-            .categorySwipe(model.catalog.categories, current: categoryId, enabled: query.isEmpty, shift: $swipeShift) { id in
+            .categorySwipe(model.catalog.categories, current: categoryId, enabled: query.isEmpty, shift: swipeShift) { id in
                 select(id)
             }
             .sensoryFeedback(.selection, trigger: categoryId)

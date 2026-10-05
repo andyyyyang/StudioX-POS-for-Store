@@ -69,8 +69,8 @@ struct SwipeRow<Content: View>: View {
         .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { width = $0 })
         .gesture(HorizontalPan(
             isEnabled: enabled && !(leading.isEmpty && trailing.isEmpty),
-            // 斜斜的捲動不打開這一列（橫的要是直的 1.8 倍：大約 30 度以內）
-            ratio: 1.8,
+            // 偏上偏下一點也算（大約 37 度以內）；更斜的是捲動
+            ratio: 1.3,
             onBegan: {
                 start = offset
                 dragging = true

@@ -15,8 +15,8 @@ struct MenuView: View {
     @State private var areaHeight: CGFloat = 700
     /// 換分類時新的品項從哪一邊推進來（左右滑、點分類）
     @State private var pushFrom: Edge = .trailing
-    /// 左右滑換分類時，品項跟著手指走的距離
-    @State private var swipeShift: CGFloat = 0
+    /// 左右滑換分類時，品項跟著手指走的距離（拖的時候只有品項那一層重畫）
+    @State private var swipeShift = SwipeShift()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,8 +31,9 @@ struct MenuView: View {
                         if query.isEmpty {
                             categories
                         }
-                        items
-                            .offset(x: swipeShift)
+                        SwipeShifted(shift: swipeShift) {
+                            items
+                        }
                     }
                     .padding(.horizontal, 24)
                     // 第一排的選取框（分類方塊的框畫在方塊外 4 點）、品項卡的框與數量圓點：ScrollView 會切掉邊界外的，
@@ -42,7 +43,7 @@ struct MenuView: View {
                 }
                 .scrollIndicators(.hidden)
                 // 左右滑換分類（搜尋中、客製的卡開著時不換；防誤觸見 CategorySwipe）
-                .categorySwipe(model.catalog.categories, current: categoryId, enabled: swipeEnabled, shift: $swipeShift) { id in
+                .categorySwipe(model.catalog.categories, current: categoryId, enabled: swipeEnabled, shift: swipeShift) { id in
                     select(id)
                 }
                 .sensoryFeedback(.selection, trigger: categoryId)

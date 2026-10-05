@@ -7,18 +7,18 @@ import SwiftUI
 
 /// 菜單左右滑換分類：往左滑＝下一類、往右滑＝上一類（到頭就停，不繞回去）。
 ///
-/// 防誤觸（忙的時候手指歪一下、捲一捲，不會跳到別的分類）：
-/// - 一開始就要是橫的（橫的速度是直的 2 倍以上）；一開始是直的＝捲動，這一次碰到就不會變成換分類
-/// - 菜單還在捲、剛停下來 0.3 秒內不算（那時候的橫拖多半是要按住捲動）
-/// - 從螢幕左右邊邊開始的不算；兩根手指不算
-/// - 品項跟著手指走一點、邊邊浮出下一類的名字：拉過一段（至少 96 點）名字變成實心、輕震一下＝放開就換；
+/// 好滑、也不會誤觸：
+/// - 斜的也算：偏上偏下 45 度以內都是左右滑；更斜的是捲動。一開始就決定，開始了就鎖住（之後手指歪了也不會變成捲動）
+/// - 菜單還在捲、剛停下來 0.12 秒內不算（那一下多半是要按住捲動）；從螢幕最邊邊開始的、兩根手指不算
+/// - 品項緊跟著手指走、邊邊浮出下一類的名字：拉過一段（至少 80 點）名字變成實心、輕震一下＝放開就換；
 ///   沒拉到、或放開前往回拉＝不換，彈回去
-/// - 短短的甩一下：要甩得夠快、也拉了 56 點以上才算
+/// - 甩一下也行：夠快、也拉了 44 點以上
 /// - 點品項、點價錢鍵不受影響（開始橫拖了，那一下點擊就取消，不會又加品項又換分類）
+/// - 拖的時候只有品項那一層跟著動（SwipeShift），整個菜單不用每一格重畫，跟手不卡
 enum CategorySwipe {
-    /// 拉多遠放開就換（看菜單寬：手機 96、iPad 大約 130，最多 160）
+    /// 拉多遠放開就換（看菜單寬：手機 80、iPad 大約 120，最多 140）
     static func distance(for width: CGFloat) -> CGFloat {
-        min(max(width * 0.22, 96), 160)
+        min(max(width * 0.2, 80), 140)
     }
 
     /// 放開時換不換：拉夠遠，或甩得夠快（也拉了一段）；放開前是往回拉的＝反悔，不換
@@ -27,14 +27,14 @@ enum CategorySwipe {
         let forward = (vx < 0) == (dx < 0)
         if !forward && abs(vx) > 220 { return false }
         let far = abs(dx) >= distance(for: width)
-        let flick = forward && abs(vx) > 650 && abs(dx) >= 56
+        let flick = forward && abs(vx) > 500 && abs(dx) >= 44
         return far || flick
     }
 
-    /// 品項跟著手指走多少：一半；過了「放開就換」的線越拉越緊
+    /// 品項跟著手指走多少：緊跟著（八成）；過了「放開就換」的線慢慢變緊
     static func follow(_ dx: CGFloat, distance d: CGFloat) -> CGFloat {
         let a = abs(dx)
-        let f = a <= d ? a * 0.5 : d * 0.5 + (a - d) * 0.15
+        let f = a <= d ? a * 0.8 : d * 0.8 + (a - d) * 0.3
         return dx < 0 ? -f : f
     }
 
@@ -60,7 +60,7 @@ enum CategorySwipe {
     }
 }
 
-/// 菜單剛捲過嗎（還在捲、剛停 0.3 秒內）：不觸發畫面更新，只給手勢開始前問
+/// 菜單剛捲過嗎（還在捲、剛停 0.12 秒內）：不觸發畫面更新，只給手勢開始前問
 final class ScrollSettle {
     private var moving = false
     private var stoppedAt = Date.distantPast
@@ -75,17 +75,33 @@ final class ScrollSettle {
         }
     }
 
-    var isSettled: Bool { !moving && Date().timeIntervalSince(stoppedAt) > 0.3 }
+    var isSettled: Bool { !moving && Date().timeIntervalSince(stoppedAt) > 0.12 }
 }
 
-/// 放在菜單的 ScrollView 上：左右滑換分類（防誤觸見 CategorySwipe）。
-/// shift＝品項跟著手指走的距離，外面放在品項的 `.offset(x:)`（分類方塊不動）
+/// 左右滑時品項跟著手指走的距離：放在這裡（不是外面頁面的 @State），拖的時候只有 SwipeShifted 那一層重畫
+@Observable
+final class SwipeShift {
+    var x: CGFloat = 0
+}
+
+/// 品項那一層：跟著 SwipeShift 左右移（菜單其他地方不用跟著重畫）
+struct SwipeShifted<Content: View>: View {
+    let shift: SwipeShift
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content.offset(x: shift.x)
+    }
+}
+
+/// 放在菜單的 ScrollView 上：左右滑換分類（見 CategorySwipe）。
+/// shift＝品項跟著手指走的距離，外面用 SwipeShifted 包住品項（分類方塊不動）
 struct CategorySwipeArea: ViewModifier {
     let categories: [MenuCategory]
     let current: String?
     /// 搜尋中、客製的卡開著：不換
     let enabled: Bool
-    @Binding var shift: CGFloat
+    let shift: SwipeShift
     let select: (String) -> Void
 
     @State private var width: CGFloat = 0
@@ -102,8 +118,9 @@ struct CategorySwipeArea: ViewModifier {
             .onGeometryChange(for: CGFloat.self, of: { $0.size.width }, action: { width = $0 })
             .gesture(HorizontalPan(
                 isEnabled: enabled && categories.count > 1,
-                ratio: 2,
-                edgeInset: 22,
+                // 偏上偏下 45 度以內都算左右滑
+                ratio: 1,
+                edgeInset: 10,
                 shouldBegin: { s.isSettled },
                 onBegan: { dragging = true },
                 onChanged: { x in move(x) },
@@ -127,7 +144,7 @@ struct CategorySwipeArea: ViewModifier {
         dx = x
         let d = CategorySwipe.distance(for: width)
         let has = target(x) != nil
-        shift = has ? CategorySwipe.follow(x, distance: d) : CategorySwipe.resist(x)
+        shift.x = has ? CategorySwipe.follow(x, distance: d) : CategorySwipe.resist(x)
         let now = has && abs(x) >= d
         if now != armed {
             withAnimation(Motion.fast) { armed = now }
@@ -140,14 +157,14 @@ struct CategorySwipeArea: ViewModifier {
         armed = false
         dx = 0
         if let next { select(next.id) }
-        withAnimation(Motion.spring) { shift = 0 }
+        withAnimation(Motion.spring) { shift.x = 0 }
     }
 
     private func reset() {
         dragging = false
         armed = false
         dx = 0
-        withAnimation(Motion.spring) { shift = 0 }
+        withAnimation(Motion.spring) { shift.x = 0 }
     }
 
     /// 邊邊浮出來的下一類：越拉越清楚，過線變成實心（放開就換）
@@ -189,7 +206,7 @@ struct CategorySwipeArea: ViewModifier {
 
 extension View {
     /// 菜單左右滑換分類（放在菜單的 ScrollView 上）
-    func categorySwipe(_ categories: [MenuCategory], current: String?, enabled: Bool, shift: Binding<CGFloat>,
+    func categorySwipe(_ categories: [MenuCategory], current: String?, enabled: Bool, shift: SwipeShift,
                        select: @escaping (String) -> Void) -> some View {
         modifier(CategorySwipeArea(categories: categories, current: current, enabled: enabled, shift: shift, select: select))
     }
