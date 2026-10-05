@@ -127,6 +127,12 @@ struct PaymentView: View {
     /// 現金以外、可以手動選的付款方式（儲值金看會員；換貨抵用是自動的，不列）
     private static let otherTenders: [Tender] = Tender.selectable.filter { $0 != .cash }
 
+    /// 這台格子裡的付款方式。手機只收「卡緊收」（上面那張大卡）和 LINE Pay；其他（現金、刷卡、街口…）都到櫃台結帳
+    private var gridTenders: [Tender] {
+        if model.isPhone { return [.linePay] }
+        return Self.otherTenders.filter { !(model.offersTapToPay && $0 == .tapToPay) }
+    }
+
     private func tenders(_ t: Ticket, _ x: TicketTotals) -> some View {
         // 手機沒有發票出單機、這張又要印證明聯：刷卡、電子支付反灰（不跳警告），到櫃台付款
         let counter = model.needsCounterForInvoice(t)
@@ -134,13 +140,13 @@ struct PaymentView: View {
             // 付款方式是「選一個」（格子），不是一排動作；平分、小費這些在下面的「⋯」
             Eyebrow("付款方式")
             if counter {
-                Text("要印發票證明聯：上面輸入手機條碼或捐贈就能在這裡收，不然請到櫃台付款")
+                Text("要印發票證明聯：上面輸入手機條碼或捐贈就能在這裡收，不然請到櫃台結帳")
                     .textRole(.small)
                     .foregroundStyle(Theme.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            // 現金最大（台灣最常用）；沒有錢櫃的崗位（前場）不收現金
-            if model.role.hasDrawer {
+            // 現金最大（台灣最常用）；沒有錢櫃的崗位（前場）不收現金；手機一律到櫃台結帳
+            if model.role.hasDrawer && !model.isPhone {
                 Button {
                     Task { await model.takeCash(t) }
                 } label: {
@@ -159,16 +165,17 @@ struct PaymentView: View {
                 .buttonStyle(.choice(true, height: 84))
                 .disabled(x.isPaidInFull)
             } else {
-                // 沒有錢櫃（收款的手機、報到接待）：現金到櫃台付——送過去，櫃台的大鍵直接是收現金；這台回去點下一張。
-                // 要印發票證明聯（這支手機印不了）：到櫃台付款，用什麼付都可以
+                // 沒有錢櫃（報到接待）：現金到櫃台付——送過去，櫃台的大鍵直接是收現金；這台回去點下一張。
+                // 手機：到櫃台結帳（現金、刷卡、街口…在櫃台付）；要印發票證明聯（這台印不了）也是到櫃台
+                let anyway = counter || model.isPhone
                 Button {
-                    model.sendToRegisterForCash(t, cash: !counter)
+                    model.sendToRegisterForCash(t, cash: !anyway)
                 } label: {
                     HStack(spacing: 14) {
                         HeroIcon("banknotes", size: 26)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(counter ? "到櫃台付款" : "到櫃台付現").font(.brand(20, .semibold))
-                            Text(counter ? "送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)、拿發票"
+                            Text(anyway ? "到櫃台結帳" : "到櫃台付現").font(.brand(20, .semibold))
+                            Text(anyway ? "送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)（現金、刷卡都可以）"
                                  : "送到結帳櫃台，客人到櫃台付 \(x.balance.formatted)；這台沒有錢櫃")
                                 .font(.brand(12.5, .regular)).opacity(0.7)
                         }
@@ -203,11 +210,14 @@ struct PaymentView: View {
                 .disabled(x.isPaidInFull || counter)
             }
 
-            prepaidTile(t, x)
+            // 儲值金在櫃台扣（手機只收卡緊收、LINE Pay）
+            if !model.isPhone {
+                prepaidTile(t, x)
+            }
 
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 10)], spacing: 10) {
                 // 手機的感應支付在上面的「卡緊收」：這裡不再列一次
-                ForEach(Self.otherTenders.filter { !(model.offersTapToPay && $0 == .tapToPay) }, id: \.self) { tender in
+                ForEach(gridTenders, id: \.self) { tender in
                     Button {
                         Task { await model.take(tender, for: t) }
                     } label: {
