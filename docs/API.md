@@ -5,76 +5,55 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 
 ## 共通規則
 
-- 路徑前綴：`{CMS_URL}/api/pos/v1`。配對碼查店家走 console：`{CONSOLE_URL}/api/pos/resolve`。
-- 認證：配對後每個請求帶 `Authorization: Bearer <token>`（`sxpos_<deviceId>.<secret>`；後台只存 SHA-256）。
+- 路徑前綴：`{CMS_URL}/api/pos/v1`。登入、選店走 console：`{CONSOLE_URL}/api/pos/sites`、`/api/pos/personal-pair`。
+- 認證：登入後每個請求帶 `Authorization: Bearer <token>`（`sxpos_<deviceId>.<secret>`；後台只存 SHA-256）。
 - 金額：**整數「分」**（NT$60 → `6000`），和後台資料庫一樣。
 - 時間：ISO 8601、UTC、毫秒（`2026-09-21T14:13:20.000Z`）。營業日 `businessDate` 是台北時間的 `YYYY-MM-DD`（凌晨 4 點前算前一天，店家可改）。
 - JSON key 是 camelCase；選填欄位沒有值時**不出現**（不是 `null`）。
 - 錯誤：HTTP 4xx/5xx ＋ `{ "error": "<code>", "message": "給人看的一句話" }`。
-  - `401 unauthorized`：token 不對 → App 回到配對畫面
-  - `401 revoked`：後台移除了這台 → App 清掉本機資料、回到配對畫面
+  - `401 unauthorized`：token 不對 → App 回到登入畫面
+  - `401 revoked`：後台移除了這台 → App 清掉本機資料、回到登入畫面
   - `401 staff_inactive`：個人裝置綁的門市人員被停用 → **不清**本機資料，鎖起來等店長重新啟用（見「用 StudioX 帳號登入」）
   - `401 wrong_pin`：`/staff/verify-pin` 的 PIN 不對 → 只是這一次授權失敗，不是登出
   - `403 service_off`：StudioX 沒開通／店家暫停了「門市 POS」 → App 照常營業（離線模式），提示「後台暫停同步」
   - `429 rate_limited`
 
-## 配對
+## 用 StudioX 帳號登入（唯一的開始方式）
 
-### `POST {CONSOLE_URL}/api/pos/resolve`（不用登入）
-
-接 StudioX 的店家：iPad 上只要在右側鍵盤打 8 位數配對碼，不用打網址。
-
-```json
-→ { "code": "48213907" }
-← { "cmsUrl": "https://cms.example.tw", "siteName": "晨麥手作" }
-```
-`404 not_found`（碼不存在或過期）。後台產生配對碼時把 `{code, cmsUrl, expiresAt}` 登記到 console（`POST {CONSOLE_URL}/api/platform/pos/pairing`，用網站的 `sxk_` 憑證）。
-
-### `POST /pair`（不用登入）
-
-```json
-→ { "code": "48213907", "device": { "name": "櫃台 iPad", "model": "iPad16,3", "systemVersion": "26.1", "appVersion": "1.0 (2610031200)" } }
-← samples/pair-response.json
-```
-- 配對碼 8 位數、10 分鐘有效、用一次就失效；產生時就決定角色（收銀機／點餐機／廚房螢幕）與名稱。
-- `deviceCode`：這家店還沒被使用中的裝置用掉的第一個字母（A–Z）。單號 = 字母＋當天流水號（A001）。
-- 錯 5 次鎖這個 IP 10 分鐘。
-
-### 用 StudioX 帳號登入（手機、iPad：個人的，或店裡共用的）
-
-店員用自己的手機點餐：在配對畫面按「用 StudioX 帳號登入」，和 StudioX App 同一個帳號（Apple、Email、邀請）。登入的人就是這支手機的門市人員，之後打開 App 直接是他（離開一陣子回來用 Face ID／手機密碼解鎖），不用打 PIN、不能換人。
+每台（iPad、手機）都用 StudioX 帳號登入（和 StudioX App 同一個帳號：Apple、Email、邀請），**綁著登入的那個人**：之後打開 App 直接是他
+（離開一陣子回來用 Face ID／手機密碼解鎖），不用配對碼、不用 PIN。換人＝在設定（手機是「更多」）登出，再用自己的帳號登入。
+沒有配對碼、沒有店裡共用的裝置；人員 PIN 只用在主管授權（`/staff/verify-pin`）。
 
 1. **登入 console**：OAuth 2.1＋PKCE，`{CONSOLE_URL}/api/oauth/authorize`，`client_id=studiox-pos`、`redirect_uri=studiox-pos://oauth`、`scope=pos:staff`；`POST /api/oauth/token` 換 `access`（1 小時）／`refresh`（30 天，輪替）。只拿來配對、換店，不拿來同步
-2. **哪幾家店**：`GET {CONSOLE_URL}/api/pos/sites`（Bearer）→ `{ "sites": [{ "id", "name", "icon", "level", "cmsUrl" }] }`：這個人是成員、而且開通了門市 POS 的網站。只有一家就直接用
-3. **配對**：`POST {CONSOLE_URL}/api/pos/personal-pair`（Bearer）`{ "siteId", "device": { name, model, systemVersion, appVersion } }`
-   → console 簽一張給那個網站的一次性通行證（ES256、`typ: "pos-personal"`、`sub`＝console 的使用者、`email`、`name`、`level`，60 秒），代轉到網站的 `POST /pair/personal`
-   ← 和 `POST /pair` 一樣的回應，另外多 `cmsUrl`、`siteName`、`personal: true`、`staff: { id, name, role }`
-   - **店裡共用的裝置**（iPad 當收銀台、廚房螢幕、點餐機）：多帶 `"mode": "shared", "role": "register"|"handheld"|"reception"|"kitchen"|"expo", "name": "櫃台 iPad"`。
-     只有負責人、管理者（console 的 `level`，和在後台產生配對碼的權限一樣）可以；其他人 `403 forbidden`「要店長才能新增店裡的裝置」。
-     網站新增一台一般的裝置（`personal: false`、不綁人；和用配對碼配對的一模一樣），回應沒有 `staff`、`personal: false`；之後大家照樣用 PIN 登入。
-     通行證多帶 `mode`、`role`、`name`（console 簽進去，網站只信通行證裡的；共用時 `name` 是裝置的名字，不是人）。`mode` 沒給＝`personal`
-   - App：手機預設「我自己的」；iPad 登入後先問「這台是…」：**店裡共用的**（選崗位、取名字）或 **我自己的**
-4. **網站的 `POST /pair/personal`**（`Authorization: Bearer <通行證>`；`mode: "shared"` 時照上面新增一般的裝置，以下是個人的）：
-   - 用 `email` 找網站的使用者 → 綁著那個使用者的門市人員（`pos_staff.user_id`）；沒有就新增一位（名字用 `name`，角色照 console 的 `level`：負責人→`owner`、管理者→`manager`、其他→`cashier`（已經有的門市人員保留店家設的角色）；PIN 隨機、他用不到）
-   - 新增一台 `role: "handheld"`、`personal: true`、`staff_id` 綁那個人的裝置（後台「裝置」頁顯示「王小美的手機（個人）」，可以停用）
-   - 同一個人同一支手機（`device.name`＋`model`）再登入：停用舊的那台、發新的
+2. **哪幾家店**：`GET {CONSOLE_URL}/api/pos/sites`（Bearer）→ `{ "sites": [{ "id", "name", "icon", "level", "cmsUrl" }] }`：這個人是成員、而且開通了門市 POS 的網站。只有一家就不用選
+3. **這台做什麼**：iPad 選崗位——`register` 收銀台、`handheld` 前場點餐、`reception` 接待、`kitchen` 廚房、`expo` 出餐口（上次在這台選的先選好）；手機一律 `handheld`
+4. **配對**：`POST {CONSOLE_URL}/api/pos/personal-pair`（Bearer）`{ "siteId", "role": "register", "device": { name, model, systemVersion, appVersion } }`
+   - `role` 沒給＝`handheld`（舊版 App）；不是上面五個 → `400 invalid`。body 裡的 `mode` 不理（沒有店裡共用的裝置了）
+   - console 簽一張給那個網站的一次性通行證（ES256、`typ: "pos-personal"`、`sub`＝console 的使用者、`email`、`name`、`level`、`mode: "personal"`、`role`，60 秒、`jti` 只能用一次），代轉到網站的 `POST /pair/personal`
+   - ← `{ deviceId, token, deviceCode, role, storeName }`（samples/pair-response.json），另外多 `cmsUrl`、`siteName`、`personal: true`、`staff: { id, name, role }`
+   - `deviceCode`：這家店還沒被使用中的裝置用掉的第一個字母（A–Z）。單號 = 字母＋當天流水號（A001）
+   - `409 register_limit`：選收銀台、但方案的收銀機台數滿了（點餐、接待、廚房、出餐口不限）
+5. **網站的 `POST /pair/personal`**（`Authorization: Bearer <通行證>`；網站只信通行證裡的人、職能與崗位，本文只拿裝置的型號、版本）：
+   - 用 `email` 找網站的使用者 → 綁著那個使用者的門市人員（`pos_staff.user_id`）；沒有就新增一位（名字用 `name`，角色照 console 的 `level`：負責人→`owner`、管理者→`manager`、其他→`cashier`（已經有的門市人員保留店家設的角色）；PIN 隨機，店長可以在後台幫他設主管授權用的 PIN）
+   - 新增一台 `role`＝通行證的崗位、`personal: true`、`staff_id` 綁那個人的裝置（後台「裝置」頁顯示「王小美・收銀台」，可以改崗位、停用）
+   - 同一個人、同一個型號、同一個崗位再登入：停用舊的那台、發新的
    - 門市人員被停用（`is_active=false`）：`403 staff_inactive`
-5. **之後**：和一般的裝置一樣用網站發的 token（`GET /bootstrap` 的 `device` 多了 `personal`、`staffId`）。個人手機：
-   - 開 App 直接登入 `staffId` 那位；鎖定畫面換成 Face ID／手機密碼
-   - 裝置被停用（`401 revoked`）→ 回到配對畫面
+6. **之後**：用網站發的裝置 token（`GET /bootstrap` 的 `device` 有 `personal`、`staffId`）：
+   - 開 App 直接登入 `staffId` 那位；鎖定畫面是 Face ID／手機密碼
+   - 裝置被停用（`401 revoked`）→ 回到登入畫面
    - 這位門市人員被停用（`401 staff_inactive`）：**不清本機資料**（還沒送出的帳要留著），顯示「你在這家店的門市人員被停用了，請找店長」；店長重新啟用後照常
-   - 個人裝置送出別人（`staffId` 不是綁的那位）的事件：照收（不斷鏈）但不算進帳、通知店長
-   - **個人裝置拿不到 PIN 雜湊**：開機資料的 `staff[]` 照樣有每個人（名字、角色、職稱），但 `pinHash`、`pinSalt`、`pinIterations` 不給
-     （4–6 位數的 PIN 在自己的手機上很容易離線試出來）。要主管授權（作廢已送出的、超過上限的折扣、退款…）時，App 改問後台：
+   - 送出別人（`staffId` 不是綁的那位）的事件：照收（不斷鏈）但不算進帳、通知店長
+   - **裝置拿不到 PIN 雜湊**：開機資料的 `staff[]` 照樣有每個人（名字、角色、職稱），但 `pinHash`、`pinSalt`、`pinIterations` 不給
+     （4–6 位數的 PIN 拿到雜湊很容易離線試出來）。要主管授權（作廢已送出的、超過上限的折扣、退款…）時，App 問後台：
      `POST /staff/verify-pin { "staffId": "…"（可省略：看 PIN 對到誰）, "pin": "1234", "purpose": "void" }`
      → `{ "staff": { id, name, role } }`；錯了 `401 wrong_pin`（停用的人的 PIN 也是）；`staffId` 省略時兩個人 PIN 一樣取職能最高的。
-     - 同一台（個人的裝置另外再算同一個人：換一支手機也一樣）10 分鐘錯 5 次 → 第 5 次起鎖 10 分鐘 `429 rate_limited`；**打對不會重算**；鎖著的時候對的也不驗
+     - 同一台（另外再算同一個人：換一台也一樣）10 分鐘錯 5 次 → 第 5 次起鎖 10 分鐘 `429 rate_limited`；**打對不會重算**；鎖著的時候對的也不驗
      - PIN 不是 4–6 位數字、`staffId` 格式不對 → `400 invalid`（不算錯一次）；`purpose` 選填（App 送權限的名字，例如 `voidTicket`），只記在鎖住的紀錄
      - 後台數不了錯幾次（Redis 不通）→ `503 unavailable`「主管授權暫時不能用」（不放行）
      - PIN 不寫進任何紀錄
-     斷網時個人裝置不能做主管授權（「主管授權要連線」）；共用裝置照舊在本機驗。個人的裝置也拿不到 `invoice.qrKey`（只點餐、不開發票）。
-     上線後：在這之前配對過的個人手機已經下載過舊的雜湊——負責人、店長請換一次 PIN
-   - 設定 →「登出這支手機」：`POST /devices/self/revoke`（網站停用這台），清掉 console 的 token
+     斷網時不能做主管授權（「主管授權要連線」）。
+   - `invoice.qrKey`（財政部 QR Code 的金鑰）只給收銀台（`register`）：開發票的是收銀台；點餐、廚房、出餐口拿不到
+   - 設定（手機是「更多」）→「登出這台」：`POST /devices/self/revoke`（網站停用這台），清掉 console 的 token
 
 ## 開機資料
 

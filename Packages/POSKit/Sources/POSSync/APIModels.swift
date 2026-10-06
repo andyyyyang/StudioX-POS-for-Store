@@ -71,22 +71,7 @@ public struct DeviceInfo: Codable, Sendable, Hashable {
 
 // MARK: - 配對
 
-/// POST {console}/api/pos/resolve：8 位數配對碼 → 這家店的後台網址（接 StudioX 的店家不用打網址）
-public struct ResolveRequest: Codable, Sendable { public var code: String; public init(code: String) { self.code = code } }
-public struct ResolveResponse: Codable, Sendable, Hashable {
-    public init(cmsUrl: String, siteName: String) { self.cmsUrl = cmsUrl; self.siteName = siteName }
-
-    public var cmsUrl: String
-    public var siteName: String
-}
-
-/// POST {cms}/api/pos/v1/pair
-public struct PairRequest: Codable, Sendable {
-    public var code: String
-    public var device: DeviceInfo
-    public init(code: String, device: DeviceInfo) { self.code = code; self.device = device }
-}
-
+/// 配對的結果（用 StudioX 帳號登入，console 代轉回來的那一份）
 public struct PairResponse: Codable, Sendable, Hashable {
     public init(deviceId: String, token: String, deviceCode: String, role: DeviceRole, storeName: String) { self.deviceId = deviceId; self.token = token; self.deviceCode = deviceCode; self.role = role; self.storeName = storeName }
 

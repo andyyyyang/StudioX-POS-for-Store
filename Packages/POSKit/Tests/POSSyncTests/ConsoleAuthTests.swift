@@ -82,10 +82,10 @@ struct ConsoleAuthTests {
         """
         let list = try EventCoding.decoder().decode(ConsoleSiteList.self, from: Data(json.utf8))
         #expect(list.sites.count == 4)
-        #expect(list.sites[0].icon?.fill == true && list.sites[0].icon?.imageData != nil && list.sites[0].canAddSharedDevices)
-        #expect(list.sites[1].icon?.url?.host == "yellowgirl.tw" && list.sites[1].icon?.imageData == nil && !list.sites[1].canAddSharedDevices)
-        #expect(list.sites[2].icon == nil && list.sites[2].canAddSharedDevices)
-        #expect(list.sites[3].icon == nil && list.sites[3].level == nil && !list.sites[3].canAddSharedDevices)
+        #expect(list.sites[0].icon?.fill == true && list.sites[0].icon?.imageData != nil)
+        #expect(list.sites[1].icon?.url?.host == "yellowgirl.tw" && list.sites[1].icon?.imageData == nil)
+        #expect(list.sites[2].icon == nil)
+        #expect(list.sites[3].icon == nil && list.sites[3].level == nil)
         // SVG 畫不出來：當作沒有圖
         #expect(ConsoleSiteIcon(src: "data:image/svg+xml;base64,PHN2Zz4=").imageData == nil)
     }
@@ -113,15 +113,15 @@ struct ConsoleAuthTests {
         #expect(try EventCoding.decoder().decode(PersonalPairResponse.self, from: Data(odd.utf8)).staff?.role == "trainee")
     }
 
-    @Test func pairRequestEncodesOnlyWhatTheModeNeeds() throws {
+    @Test func pairRequestCarriesTheRole() throws {
         let enc = EventCoding.encoder()
-        let p = try JSONSerialization.jsonObject(with: enc.encode(PersonalPairRequest.personal(siteId: "site-1", device: Self.device))) as? [String: Any]
+        let p = try JSONSerialization.jsonObject(with: enc.encode(PersonalPairRequest(siteId: "site-1", device: Self.device))) as? [String: Any]
         #expect(p?["siteId"] as? String == "site-1")
-        #expect(p?["mode"] == nil && p?["role"] == nil && p?["name"] == nil)
+        #expect(p?["role"] == nil && p?["mode"] == nil)
         #expect((p?["device"] as? [String: Any])?["model"] as? String == "iPhone18,1")
 
-        let s = try JSONSerialization.jsonObject(with: enc.encode(PersonalPairRequest.shared(siteId: "site-1", device: Self.device, role: .register, name: "櫃台 iPad"))) as? [String: Any]
-        #expect(s?["mode"] as? String == "shared" && s?["role"] as? String == "register" && s?["name"] as? String == "櫃台 iPad")
+        let r = try JSONSerialization.jsonObject(with: enc.encode(PersonalPairRequest(siteId: "site-1", device: Self.device, role: .register))) as? [String: Any]
+        #expect(r?["role"] as? String == "register" && r?["mode"] == nil)
     }
 
     @Test func bootstrapDeviceCarriesPersonal() throws {

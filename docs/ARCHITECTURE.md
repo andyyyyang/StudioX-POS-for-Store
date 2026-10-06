@@ -6,7 +6,7 @@
 
 ```
             ┌──────────── StudioX Console（console.studiox.tw）────────────┐
-            │  配對碼查店家 /api/pos/resolve                                    │
+            │  用 StudioX 帳號登入：/api/pos/sites、/api/pos/personal-pair      │
             │  服務插件開通「門市 POS」「電子發票」、方案（幾台收銀機）           │
             │  /api/app/me 的 sites[].pos（App 首頁的門市營收）                  │
             └──────────────▲───────────────────────────▲───────────────────┘

@@ -291,7 +291,6 @@ private struct ScannerConfirmCard: View {
 
 /// 要掃哪些條碼
 enum ScanKind {
-    static let pairing: [DataScannerViewController.RecognizedDataType] = [.barcode(symbologies: [.qr])]
     /// 手機條碼載具是 Code 39
     static let carrier: [DataScannerViewController.RecognizedDataType] = [.barcode(symbologies: [.code39, .qr])]
     static let product: [DataScannerViewController.RecognizedDataType] = [.barcode(symbologies: [.ean13, .ean8, .upce, .code128, .code39, .qr])]

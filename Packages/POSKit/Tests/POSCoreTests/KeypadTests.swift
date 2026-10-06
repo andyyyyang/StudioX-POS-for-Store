@@ -20,7 +20,7 @@ struct KeypadTests {
         var q = KeypadEntry(.quantity(name: "珍奶", current: 1))
         q.press(.digit(0)); q.press(.digit(3))
         #expect(q.value == 3)
-        var code = KeypadEntry(.pairingCode)
+        var code = KeypadEntry(KeypadSpec(kind: .code(minLength: 8, maxLength: 8), title: "代碼"))
         for d in [0, 0, 1, 2, 3, 4, 5, 6] { code.press(.digit(d)) }
         #expect(code.digits == "00123456")
         #expect(code.canCommit)

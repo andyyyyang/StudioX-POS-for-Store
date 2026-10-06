@@ -22,7 +22,7 @@
 			<string>tw.studiox.pos.pair</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<!-- 後台「裝置」頁的 QR Code：studiox-pos://pair?cms=…&code=… -->
+				<!-- 用 StudioX 帳號登入：登入視窗回到 studiox-pos://oauth -->
 				<string>studiox-pos</string>
 			</array>
 		</dict>

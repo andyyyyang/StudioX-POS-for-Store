@@ -62,7 +62,7 @@ struct PhoneMoreView: View {
             Button("結束示範", role: .destructive) { model.reset() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("示範的單、班、打卡都會清掉，回到配對畫面。")
+            Text("示範的單、班、打卡都會清掉，回到登入畫面。")
         }
         .confirmationDialog("解除配對？", isPresented: $confirmUnpair, titleVisibility: .visible) {
             Button("解除配對並清掉這支手機的資料", role: .destructive) {
@@ -70,7 +70,7 @@ struct PhoneMoreView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("還沒送出去的資料會先試著送到後台。之後要再用，請在後台「門市 POS → 裝置」產生新的配對碼。")
+            Text("還沒送出去的資料會先試著送到後台。之後要再用，請用 StudioX 帳號登入。")
         }
     }
 

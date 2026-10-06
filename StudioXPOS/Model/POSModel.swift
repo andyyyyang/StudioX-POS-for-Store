@@ -388,10 +388,10 @@ final class POSModel {
         let id = pairing?.deviceId
         reset()
         DeviceStore.forget(deviceId: id)
-        alert = AlertInfo(title: "這台已經從後台移除", message: "本機的資料已經清掉。要再使用，請在後台「門市 POS → 裝置」產生新的配對碼。")
+        alert = AlertInfo(title: "這台已經從後台移除", message: "本機的資料已經清掉。要再使用，請用 StudioX 帳號登入。")
     }
 
-    /// 回到配對畫面（解除配對、示範結束）
+    /// 回到登入畫面（解除配對、示範結束）
     func reset() {
         timers.forEach { $0.cancel() }
         timers = []
@@ -422,24 +422,8 @@ final class POSModel {
 
     // MARK: - 配對
 
-    /// 打 8 位數配對碼：先問 console 是哪一家店，再到那家店的後台配對
-    func pair(code: String, cmsURL explicit: URL? = nil) async throws {
-        let cmsURL: URL
-        if let explicit {
-            cmsURL = explicit
-        } else {
-            let r = try await POSClient.resolve(code: code, consoleURL: settings.consoleURL)
-            guard let url = URL(string: r.cmsUrl) else { throw APIError.decoding("後台網址不對") }
-            cmsURL = url
-        }
-        let info = DeviceInfo(name: UIDevice.current.name, model: UIDevice.current.modelIdentifier,
-                              systemVersion: UIDevice.current.systemVersion, appVersion: Bundle.main.appVersion)
-        let r = try await POSClient.pair(cmsURL: cmsURL, request: PairRequest(code: code, device: info))
-        try await completePairing(cmsURL: cmsURL, response: r)
-    }
-
-    /// 拿到後台發的裝置 token 之後（配對碼、StudioX 帳號都走這裡）：存起來、抓開機資料、打開這台的日誌。
-    /// personalStaff：用 StudioX 帳號登入的個人裝置綁著的人（直接登入，不用 PIN）
+    /// 用 StudioX 帳號登入、拿到後台發的裝置 token 之後：存起來、抓開機資料、打開這台的日誌。
+    /// personalStaff：這台綁著的人（直接登入，不用 PIN）
     func completePairing(cmsURL: URL, response r: PairResponse, personalStaff: PersonalStaff? = nil) async throws {
         var p = DeviceStore.Pairing(cmsURL: cmsURL, deviceId: r.deviceId, deviceCode: r.deviceCode, role: r.role, storeName: r.storeName, pairedAt: Date())
         if let personalStaff {

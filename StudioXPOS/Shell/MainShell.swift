@@ -294,7 +294,7 @@ struct MainShell: View {
             return
         }
         if let r = keypad.request, !r.keepsSelection, Self.scanAnswers(r.spec.kind, code) {
-            // 鍵盤在問一串碼（統編、愛心碼、配對碼…）：掃到的就是答案
+            // 鍵盤在問一串碼（統編、愛心碼、品號…）：掃到的就是答案
             keypad.fill(code)
             return
         }

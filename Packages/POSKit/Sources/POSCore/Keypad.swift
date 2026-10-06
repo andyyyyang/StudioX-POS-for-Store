@@ -2,7 +2,7 @@ import Foundation
 
 // 右側固定鍵盤的輸入規則。
 //
-// POS 上所有要打數字的地方（數量、改價、折扣、收現金、小費、PIN、統編、電話、愛心碼、點錢、配對碼…）
+// POS 上所有要打數字的地方（數量、改價、折扣、收現金、小費、PIN、統編、電話、愛心碼、點錢、品號…）
 // 都用畫面最右邊同一個位置、同一個大小的鍵盤：手不用找、眼睛不用找，打了什麼大字顯示在鍵盤上方，
 // 合不合規則（統編檢查碼、PIN 位數）當場告訴你，按下確認鍵才算數。
 // 這裡只有規則（沒有畫面），App 的 KeypadDock 照這個畫。
@@ -23,7 +23,7 @@ public struct KeypadSpec: Sendable, Hashable {
         case phone
         /// 愛心碼（3–7 碼）
         case loveCode
-        /// 一般代碼：品號、配對碼、桌號（固定或最多幾碼）
+        /// 一般代碼：品號、桌號（固定或最多幾碼）
         case code(minLength: Int, maxLength: Int)
         /// 張數、人數（0–9999）
         case count
@@ -276,7 +276,6 @@ extension KeypadSpec {
     public static let taxId = KeypadSpec(kind: .taxId, title: "統一編號", subtitle: "打統編的發票會印證明聯", confirmLabel: "使用")
     public static let phone = KeypadSpec(kind: .phone, title: "會員電話", confirmLabel: "查詢")
     public static let loveCode = KeypadSpec(kind: .loveCode, title: "愛心碼", subtitle: "捐贈發票", confirmLabel: "捐贈")
-    public static let pairingCode = KeypadSpec(kind: .code(minLength: 8, maxLength: 8), title: "配對碼", subtitle: "後台「門市 POS → 裝置」產生的 8 位數", confirmLabel: "配對")
     public static let plu = KeypadSpec(kind: .code(minLength: 1, maxLength: 13), title: "品號", confirmLabel: "加入")
 
     public static func tip(base: Money) -> KeypadSpec {

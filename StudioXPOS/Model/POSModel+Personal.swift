@@ -12,13 +12,13 @@ import UIKit
 ///
 ///   - 開 App 直接是他（不用 PIN、沒有人員名單、不能換人）
 ///   - 鎖定（閒置、離開一陣子回來）換成 Face ID／手機密碼解鎖（PersonalLockView）
-///   - 這台被停用（401 revoked）：清掉這台、回配對畫面，說清楚是怎麼了
+///   - 這台被停用（401 revoked）：清掉這台、回登入畫面，說清楚是怎麼了
 ///   - 他被停用（401 staff_inactive）：**不清**本機資料（還沒送的帳要留著），擋住畫面「請找店長」＋重試（PersonalBlockedView）；
 ///     店長重新啟用之後同步恢復就自動解開
-///   - 設定「登出這支手機」：網站停用這台（POST /devices/self/revoke）、清掉 StudioX 帳號的 token、回配對畫面
+///   - 設定「登出這支手機」：網站停用這台（POST /devices/self/revoke）、清掉 StudioX 帳號的 token、回登入畫面
 ///   - 開機資料的人員沒有 PIN 雜湊：主管授權（作廢、退款、超過上限的折扣…）問後台（authorizeOnline），斷網不能授權
 ///
-/// 店裡共用的裝置（配對碼、或用 StudioX 帳號登入時選「店裡共用的」）照舊：大家用 PIN 登入。
+/// 每台都是用 StudioX 帳號登入的（沒有配對碼、沒有店裡共用的裝置）；只有示範的店（和以前用配對碼配對、還沒登出的）是大家用 PIN 登入。
 extension POSModel {
     /// 為什麼這台被登出了
     enum PersonalLoss {
@@ -156,7 +156,7 @@ extension POSModel {
         }
     }
 
-    /// 這台不能再用了：清掉本機的資料與 StudioX 帳號的 token，回配對畫面，跳一句說明
+    /// 這台不能再用了：清掉本機的資料與 StudioX 帳號的 token，回登入畫面，跳一句說明
     func personalDeviceLost(_ why: PersonalLoss) {
         let noun = deviceNoun
         forgetPersonalDevice()
@@ -168,7 +168,7 @@ extension POSModel {
     }
 
     /// 設定「登出這支手機」：先把還沒送的送出去，網站停用這台（POST /devices/self/revoke；網路不通也照樣登出），
-    /// 清掉本機的資料與 StudioX 帳號的 token，回配對畫面
+    /// 清掉本機的資料與 StudioX 帳號的 token，回登入畫面
     func signOutPersonalDevice() async {
         if isDemo {
             reset()
@@ -198,7 +198,7 @@ extension POSModel {
 
     // MARK: 用 StudioX 帳號配對
 
-    /// console 代轉配對回來之後：和配對碼一樣存起來、抓開機資料；個人的直接登入綁著的那位
+    /// console 代轉配對回來之後：存起來、抓開機資料，直接登入綁著的那位
     func completeAccountPairing(_ r: PersonalPairResponse) async throws {
         guard let url = URL(string: r.cmsUrl), url.host() != nil else {
             throw APIError.decoding("後台網址不對")

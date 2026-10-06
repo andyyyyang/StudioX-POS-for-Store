@@ -28,7 +28,7 @@ struct KeypadDock: View {
     var idleActions: IdleActions? = nil
     /// 畫面交上來的：選起來的那一筆、蓋住整欄的面板（MainShell 收集）
     var content = DockContent()
-    /// 題目右上的「取消」。鎖定、配對畫面的鍵盤一直在等 PIN／配對碼，取消沒有意義
+    /// 題目右上的「取消」。鎖定畫面的鍵盤一直在等 PIN，取消沒有意義
     var showsCancel = true
     /// 最上面固定的一塊（DockPinned：外帶的叫號）。只有收銀台的右欄放
     var showsPinned = false

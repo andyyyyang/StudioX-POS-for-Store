@@ -487,7 +487,7 @@ extension POSModel {
 
     // MARK: - 示範
 
-    /// 開一家示範的店（配對畫面選的、或啟動參數 `-demo apparel|salon|fitness|cafe`）：
+    /// 開一家示範的店（登入畫面選的、或啟動參數 `-demo apparel|salon|fitness|cafe`）：
     /// 每家從自己的預設營業模式開始；上一家示範查過的會員、歷史不帶過來
     func startDemo(kind: DemoKind) {
         DemoStore.kind = kind

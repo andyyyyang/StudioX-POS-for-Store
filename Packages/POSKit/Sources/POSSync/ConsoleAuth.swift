@@ -8,9 +8,10 @@ import POSCore
 //
 //   1. OAuth 2.1＋PKCE 登入 console（和 StudioX App 同一個帳號；client_id=studiox-pos、scope=pos:staff）
 //   2. GET  {console}/api/pos/sites          這個人是成員、而且開通了門市 POS 的店
-//   3. POST {console}/api/pos/personal-pair  console 代轉到那家店的 POST /pair/personal，回應和 POST /pair 一樣（多了店的網址、是不是個人的、綁的人）
+//   3. POST {console}/api/pos/personal-pair  console 代轉到那家店的 POST /pair/personal：這台綁著登入的人、帶崗位
 //
-// console 的 token 只拿來配對、換店，不拿來同步：之後和用配對碼配對的裝置一樣，用網站發的裝置 token。
+// 門市 POS 只有這一種開始的方式（沒有配對碼、沒有店裡共用的裝置）：每台都綁著登入的那個人，換人＝登出再登入。
+// console 的 token 只拿來配對、換店，不拿來同步：之後用網站發的裝置 token。
 // token 存在哪裡由 App 決定（Keychain）；這裡只管格式、換 token、帶 token 呼叫。
 
 // MARK: - console 的網站
@@ -28,14 +29,6 @@ public struct ConsoleSite: Codable, Sendable, Hashable, Identifiable {
 
     public init(id: String, name: String, icon: ConsoleSiteIcon? = nil, level: String? = nil, cmsUrl: String) {
         self.id = id; self.name = name; self.icon = icon; self.level = level; self.cmsUrl = cmsUrl
-    }
-
-    /// 負責人、管理者才能新增店裡共用的裝置（和在後台產生配對碼的權限一樣）；其他人 403 forbidden
-    public var canAddSharedDevices: Bool {
-        switch level {
-        case "owner", "manager", "負責人", "管理者": true
-        default: false
-        }
     }
 }
 
@@ -87,34 +80,15 @@ public struct ConsoleSiteList: Codable, Sendable, Hashable {
 
 // MARK: - 用帳號配對
 
-/// 這台是誰的：個人的（綁著登入的人，不用 PIN）或店裡共用的（和配對碼配對的一樣，大家用 PIN 登入）
-public enum DevicePairMode: String, Codable, Sendable, Hashable, CaseIterable {
-    case personal
-    case shared
-}
-
-/// POST {console}/api/pos/personal-pair
+/// POST {console}/api/pos/personal-pair：這台綁著登入的人，崗位（收銀台、點餐、接待、廚房、出餐口）由他選
 public struct PersonalPairRequest: Codable, Sendable, Hashable {
     public var siteId: String
     public var device: DeviceInfo
-    /// 沒給＝personal
-    public var mode: DevicePairMode?
-    /// 店裡共用的：崗位、名稱（「櫃台 iPad」）
+    /// 沒給＝前場點餐（handheld）
     public var role: DeviceRole?
-    public var name: String?
 
-    public init(siteId: String, device: DeviceInfo, mode: DevicePairMode? = nil, role: DeviceRole? = nil, name: String? = nil) {
-        self.siteId = siteId; self.device = device; self.mode = mode; self.role = role; self.name = name
-    }
-
-    /// 我自己的（個人手機、個人 iPad）：只帶 siteId 與 device
-    public static func personal(siteId: String, device: DeviceInfo) -> PersonalPairRequest {
-        PersonalPairRequest(siteId: siteId, device: device)
-    }
-
-    /// 店裡共用的：崗位與名稱（只有負責人、管理者可以）
-    public static func shared(siteId: String, device: DeviceInfo, role: DeviceRole, name: String) -> PersonalPairRequest {
-        PersonalPairRequest(siteId: siteId, device: device, mode: .shared, role: role, name: name)
+    public init(siteId: String, device: DeviceInfo, role: DeviceRole? = nil) {
+        self.siteId = siteId; self.device = device; self.role = role
     }
 }
 
@@ -168,7 +142,7 @@ public struct PersonalPairResponse: Codable, Sendable, Hashable {
         staff = try c.decodeIfPresent(PersonalStaff.self, forKey: .staff)
     }
 
-    /// 當成一般的配對回應（存起來的方式和配對碼一模一樣）
+    /// 當成一般的配對回應（裝置 id、token、單號字母、崗位、店名）
     public var pair: PairResponse {
         PairResponse(deviceId: deviceId, token: token, deviceCode: deviceCode, role: role, storeName: storeName)
     }
@@ -222,7 +196,7 @@ public enum ConsoleAuthError: Error, Equatable, Sendable {
 /// console 的 OAuth（和 StudioX Console App 的 Auth.swift 同一套，client 換成門市 POS）
 public enum ConsoleOAuth {
     public static let clientId = "studiox-pos"
-    /// 登入視窗攔下來的網址（App 也用這個 scheme 收後台的配對 QR Code：studiox-pos://pair）
+    /// 登入視窗攔下來的網址
     public static let callbackScheme = "studiox-pos"
     public static let redirectURI = "studiox-pos://oauth"
     public static let scope = "pos:staff"
@@ -461,13 +435,12 @@ public struct ConsoleClient: Sendable {
         return r.sites
     }
 
-    /// POST /api/pos/personal-pair：個人的（綁著登入的人）
-    public func personalPair(siteId: String, device: DeviceInfo, accessToken: String) async throws -> PersonalPairResponse {
-        try await personalPair(.personal(siteId: siteId, device: device), accessToken: accessToken)
+    /// POST /api/pos/personal-pair：這台綁著登入的人（崗位沒給＝前場點餐）
+    public func personalPair(siteId: String, device: DeviceInfo, role: DeviceRole? = nil, accessToken: String) async throws -> PersonalPairResponse {
+        try await personalPair(PersonalPairRequest(siteId: siteId, device: device, role: role), accessToken: accessToken)
     }
 
-    /// POST /api/pos/personal-pair：個人的或店裡共用的（mode: shared 帶崗位、名稱）。
-    /// 403 staff_inactive：這個人在那家店的門市人員被停用；403 forbidden：不是負責人、管理者，不能新增共用的裝置
+    /// POST /api/pos/personal-pair。403 staff_inactive：這個人在那家店的門市人員被停用；409 register_limit：方案的收銀機台數滿了
     public func personalPair(_ request: PersonalPairRequest, accessToken: String) async throws -> PersonalPairResponse {
         try await POSClient.send(session: session, url: consoleURL.appendingPathComponent("api/pos/personal-pair"), method: "POST",
                                  token: accessToken, body: request)

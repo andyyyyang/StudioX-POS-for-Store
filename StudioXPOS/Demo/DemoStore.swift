@@ -5,7 +5,7 @@ import POSPrinting
 import POSSync
 import SwiftUI
 
-/// 示範的店：配對畫面「先看看示範」選一家（或啟動參數 `-demo`、`-demo apparel|salon|fitness|yellowgirl`）。
+/// 示範的店：登入畫面「先看看示範」選一家（或啟動參數 `-demo`、`-demo apparel|salon|fitness|yellowgirl`）。
 enum DemoKind: String, CaseIterable, Identifiable, Hashable {
     /// 餐廳咖啡「晨麥手作」：桌位、廚房出單、訂位候位
     case cafe
@@ -136,7 +136,7 @@ enum DemoKind: String, CaseIterable, Identifiable, Hashable {
 /// 美業、健身多幾位排進預約表的人（都是收銀權限）：Mia 陳（設計師，PIN 5678）；Kevin 吳（教練，PIN 5678）、Ivy 黃（教練，PIN 2468）。
 /// 人名、電話、統編、地址都是編的。
 struct DemoStore {
-    /// 這次開哪一家：配對畫面選的（POSModel.startDemo(kind:) 先設好），沒選就看啟動參數
+    /// 這次開哪一家：登入畫面選的（POSModel.startDemo(kind:) 先設好），沒選就看啟動參數
     static var kind: DemoKind = DemoKind.fromLaunchArguments() ?? .cafe
 
     let kind: DemoKind

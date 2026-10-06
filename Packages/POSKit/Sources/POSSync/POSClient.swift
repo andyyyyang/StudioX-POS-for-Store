@@ -4,13 +4,13 @@ import FoundationNetworking
 #endif
 import POSCore
 
-/// 後台 API 的錯誤（App 依這個決定要重試、回配對畫面、還是提示）
+/// 後台 API 的錯誤（App 依這個決定要重試、回登入畫面、還是提示）
 public enum APIError: Error, Equatable, Sendable {
     /// 沒網路、逾時：等一下再試
     case offline(String)
-    /// token 不對：回配對畫面
+    /// token 不對：回登入畫面
     case unauthorized
-    /// 後台移除了這台：清資料、回配對畫面
+    /// 後台移除了這台：清資料、回登入畫面
     case revoked
     /// 個人裝置綁的門市人員被停用（401 staff_inactive）：還沒送的帳要留著，不能清資料
     case staffInactive
@@ -125,16 +125,6 @@ public struct POSClient: POSAPI {
         self.baseURL = cmsURL.appendingPathComponent("api/pos/v1")
         self.token = token
         self.session = session
-    }
-
-    // MARK: 配對（還沒有 token）
-
-    public static func resolve(code: String, consoleURL: URL, session: URLSession = .shared) async throws -> ResolveResponse {
-        try await send(session: session, url: consoleURL.appendingPathComponent("api/pos/resolve"), method: "POST", token: nil, body: ResolveRequest(code: code))
-    }
-
-    public static func pair(cmsURL: URL, request: PairRequest, session: URLSession = .shared) async throws -> PairResponse {
-        try await send(session: session, url: cmsURL.appendingPathComponent("api/pos/v1/pair"), method: "POST", token: nil, body: request)
     }
 
     // MARK: POSAPI
@@ -291,7 +281,7 @@ public struct POSClient: POSAPI {
             switch (status, err?.error) {
             case (401, "revoked"): throw APIError.revoked
             case (401, "staff_inactive"): throw APIError.staffInactive
-            // 主管授權的 PIN 不對：不是這台的登入失效（不能回配對畫面）
+            // 主管授權的 PIN 不對：不是這台的登入失效（不能回登入畫面）
             case (401, APIError.wrongPinCode): throw APIError.http(status: 401, code: APIError.wrongPinCode, message: err?.message ?? APIError.wrongPinMessage)
             case (401, _): throw APIError.unauthorized
             case (403, "service_off"): throw APIError.serviceOff

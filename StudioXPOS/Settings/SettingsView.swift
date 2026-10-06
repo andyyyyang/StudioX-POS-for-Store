@@ -429,7 +429,7 @@ private struct SettingsDeviceSection: View {
             ValueRow(label: "店家", value: model.store.name)
             ValueRow(label: "後台", value: cmsText)
             if let p = model.pairing {
-                ValueRow(label: "配對時間", value: p.pairedAt.dayText)
+                ValueRow(label: "登入時間", value: p.pairedAt.dayText)
             }
             ValueRow(label: "App 版本", value: Bundle.main.appVersion)
             if model.isDemo {
@@ -693,7 +693,7 @@ private struct SettingsWorkstationSection: View {
                     .disabled(busy)
                 }
             }
-            Text("後台配對時設的是「\(model.device.role.label)」；在這裡改只影響這台，心跳會回報給後台。")
+            Text("登入時選的是「\(model.device.role.label)」；在這裡改只影響這台，心跳會回報給後台。")
                 .textRole(.xs)
                 .foregroundStyle(Theme.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2055,7 +2055,7 @@ private struct SettingsDataSection: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("示範的單、班、打卡都會清掉，回到配對畫面。")
+            Text("示範的單、班、打卡都會清掉，回到登入畫面。")
         }
         .confirmationDialog("登出\(model.deviceNoun)？", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("登出\(model.deviceNoun)", role: .destructive) {
@@ -2120,8 +2120,8 @@ private struct SettingsDataSection: View {
     }
 
     private var leaveNote: String? {
-        if model.isDemo { return "現在是虛構的「晨麥手作」，資料只在這次開著的時候；要結束示範、回到配對畫面，按右邊的「結束示範」。" }
-        if model.isPersonalDevice { return "\(model.deviceNoun)是 \(model.personalName) 的（個人）。不用了或要換店：按右邊的「登出\(model.deviceNoun)」，會清掉這台的單、班、設定與登入資訊，StudioX 帳號也會登出。" }
+        if model.isDemo { return "現在是虛構的「晨麥手作」，資料只在這次開著的時候；要結束示範、回到登入畫面，按右邊的「結束示範」。" }
+        if model.isPersonalDevice { return "\(model.deviceNoun)是 \(model.personalName) 的。換人、換店或不用了：按右邊的「登出\(model.deviceNoun)」，會清掉這台的單、班、設定與登入資訊，StudioX 帳號也會登出。" }
         if model.pairing != nil { return "這台不用了或要換店：按右邊的「解除配對」（要店長以上授權），會清掉這台的單、班、設定與登入資訊。" }
         return nil
     }
@@ -2164,7 +2164,7 @@ private struct SettingsDataSection: View {
         if model.isPersonalDevice {
             parts.append("\(model.deviceNoun)不再是你在這家店的裝置：本機的單、班、設定與登入資訊會清掉，StudioX 帳號也會登出。要再用，重新用 StudioX 帳號登入。")
         } else {
-            parts.append("這台不再接這家店：本機的單、班、設定與登入資訊會清掉，回到配對畫面。要再用，請在後台產生新的配對碼。")
+            parts.append("這台不再接這家店：本機的單、班、設定與登入資訊會清掉，回到登入畫面。要再用，請用 StudioX 帳號登入。")
         }
         return parts.joined(separator: "\n")
     }
@@ -2181,7 +2181,7 @@ private struct SettingsAdvancedSection: View {
         VStack(alignment: .leading, spacing: 24) {
             SettingsHeading(title: "進階", detail: "通常不用動。")
             VStack(alignment: .leading, spacing: 16) {
-                SettingsField(label: "StudioX Console 網址", hint: paired ? "已經配對了；要換請先解除配對" : "打配對碼時，先到這裡查是哪一家店") {
+                SettingsField(label: "StudioX Console 網址", hint: paired ? "已經登入了；要換請先登出" : "用 StudioX 帳號登入時連到這裡（通常不用改）") {
                     TextField("https://console.studiox.tw", text: $settings.consoleURLString)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)

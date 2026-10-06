@@ -26,7 +26,6 @@ struct StudioXPOSApp: App {
                 // 收銀台滿版：不要系統的時間列（時間在側欄、鎖定畫面）；iPadOS 的視窗模式下系統還是會顯示，畫面的底色照樣延伸到最上緣。
                 // iPhone（店員手上的點餐機）照常顯示時間列、電量
                 .statusBarHidden(!model.isPhone)
-                .onOpenURL { model.handle($0) }
         }
         .commands {
             // 外接鍵盤：⌘1–⌘9 照側欄的順序切換（只算這台看得到的頁）、⌘L 鎖定
@@ -53,30 +52,9 @@ extension POSModel {
         section = s
         touch()
     }
-
-    /// 後台「裝置」頁的 QR Code：studiox-pos://pair?cms=https://…&code=12345678
-    func handle(_ url: URL) {
-        guard url.scheme == "studiox-pos", url.host == "pair",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
-              let code = items.first(where: { $0.name == "code" })?.value else { return }
-        let cms = items.first(where: { $0.name == "cms" })?.value.flatMap(URL.init(string:))
-        guard phase == .pairing else {
-            show("這台已經配對過了；要換店家請先在設定裡解除配對", tone: .warning)
-            return
-        }
-        Task {
-            do {
-                try await pair(code: code, cmsURL: cms)
-            } catch let e as APIError {
-                alert = AlertInfo(title: "配對失敗", message: e.userMessage)
-            } catch {
-                alert = AlertInfo(title: "配對失敗", message: error.localizedDescription)
-            }
-        }
-    }
 }
 
-/// 開機 → 配對 → 鎖定（PIN）→ 收銀台
+/// 開機 → 用 StudioX 帳號登入 → 鎖定（Face ID；示範的店是 PIN）→ 收銀台
 struct RootView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
@@ -136,7 +114,7 @@ struct RootView: View {
         }
     }
 
-    /// 鎖定畫面：店裡共用的打 PIN；個人的裝置（用 StudioX 帳號登入）用 Face ID／手機密碼；
+    /// 鎖定畫面：用 StudioX 帳號登入的（每一台都是）用 Face ID／手機密碼；示範的店（和以前用配對碼配對、還沒登出的）打 PIN；
     /// 綁著的那位被停用了（401 staff_inactive）是「請找店長」＋重試（資料不清）
     @ViewBuilder
     private var lockScreen: some View {
