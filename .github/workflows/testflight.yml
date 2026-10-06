@@ -4,19 +4,8 @@
 # 還沒設定 Secrets 時整個流程會跳過（不會失敗）。
 name: TestFlight
 
+# 暫停自動出版：店家說要出版時，在 Actions →「TestFlight」→ Run workflow 手動跑（推上來只跑 iOS build 與測試）
 on:
-  push:
-    branches:
-      - main
-      - claude/pos-foundation
-    paths:
-      - "StudioXPOS/**"
-      - "StudioXPOS.xcodeproj/**"
-      - "StudioXPOS-Info.plist"
-      - "StudioXPOS.entitlements"
-      - "Packages/POSKit/Sources/**"
-      - ".github/workflows/testflight.yml"
-      - "ci/**"
   workflow_dispatch:
 
 # GitHub 給這個流程的 token 只能讀 repo（簽章、上傳用的是 App Store Connect 的金鑰，不需要 GitHub 的寫入權限）
