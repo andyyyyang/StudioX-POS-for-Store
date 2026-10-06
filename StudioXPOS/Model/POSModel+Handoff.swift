@@ -42,10 +42,13 @@ extension POSModel {
         show("\(orderTitle(t)) 送到櫃台\(cash ? "付現" : "結帳")：請客人到櫃台付 \(due.formatted)", tone: .info)
     }
 
-    /// 手機結帳：這張要印電子發票證明聯（紙本、統編），這支手機又沒有發票出單機＝不能在這裡收（刷卡、電子支付反灰，不跳警告）：
-    /// 輸入手機條碼、捐贈就能收；不然到櫃台付款
+    /// 不是收銀台的（手機、點餐 iPad、接待）：這張要印電子發票證明聯（紙本、統編），這台又印不了＝不能在這裡收
+    /// （刷卡、電子支付反灰，不跳警告）：輸入手機條碼、捐贈就能收；不然到櫃台付款。
+    /// 印證明聯要兩樣：財政部 QR Code 的金鑰（後台只給收銀台）和發票出單機
     func needsCounterForInvoice(_ t: Ticket) -> Bool {
-        guard isPhone, features.invoice, invoiceSettings.enabled, t.invoiceBuyer.printsProof, printers.targets(.invoice).isEmpty else { return false }
+        guard !role.hasDrawer, features.invoice, invoiceSettings.enabled, t.invoiceBuyer.printsProof else { return false }
+        let printsHere = !(invoiceSettings.qrKey ?? "").isEmpty && !printers.targets(.invoice).isEmpty
+        guard !printsHere else { return false }
         return InvoiceBuilder.coverage(for: t, prepaid: store.prepaidInvoicing).amount.cents > 0
     }
 
