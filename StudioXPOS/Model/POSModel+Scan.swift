@@ -275,7 +275,7 @@ extension POSModel {
     func describeTyped(_ digits: String) -> (title: String, hint: String) {
         switch typedDigits(digits) {
         case .quantity(let n):
-            return ("下一個品項 × \(n)", "點品項＝加 \(n) 份")
+            return ("下一個品項 × \(n)", "點品項＝加 \(n) 份，或按「\(typedConfirmTitle(digits))」")
         case .partialPhone(let d):
             return ("會員電話 \(Self.dashedPhone(d))", "打滿 10 碼、停一下就帶入會員")
         case .member(let phone):
@@ -286,6 +286,9 @@ extension POSModel {
             let name = m.variant.map { "\(m.item.name) \($0.label)" } ?? m.item.name
             return ("品號 \(digits) → \(name)", "停一下就加入")
         case .code, nil:
+            if case .amount(let price)? = TypedConfirm.classify(digits, catalog: catalog) {
+                return (price.formatted, "沒有這個品號：按「加 \(price.formatted)」加一筆「\(Self.amountLineName)」")
+            }
             return ("品號 \(digits)", "打完按「品號」；打錯按 C")
         }
     }

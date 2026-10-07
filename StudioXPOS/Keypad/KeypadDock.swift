@@ -24,7 +24,7 @@ import SwiftUI
 /// 不用打數字的選擇（.dockPanel）蓋住整欄；面板裡的選擇要打數字時面板淡出、上面留一條面板的標題，打完再淡回來。
 struct KeypadDock: View {
     @Environment(KeypadController.self) private var keypad
-    /// 待機時的兩個動作（點餐畫面：「品號」查品項；其他畫面沒有）
+    /// 待機打了數字時的大鍵（點餐畫面：品號加品項、沒有這個品號就是多少錢；其他畫面沒有）
     var idleActions: IdleActions? = nil
     /// 畫面交上來的：選起來的那一筆、蓋住整欄的面板（MainShell 收集）
     var content = DockContent()
@@ -38,7 +38,10 @@ struct KeypadDock: View {
     var describeIdle: ((String) -> (title: String, hint: String))? = nil
 
     struct IdleActions {
-        var lookup: (String) -> Void
+        /// 按下大鍵：打的數字交出去（POSModel.commitTyped）
+        var commit: (String) -> Void
+        /// 大鍵上的字（「加入 鴨胸」「加 NT$120」）
+        var title: (String) -> String
     }
 
     @State private var shake: CGFloat = 0
@@ -209,7 +212,7 @@ struct KeypadDock: View {
         if let r = keypad.request { return r.spec.subtitle }
         if let d = describeIdle, !keypad.idle.digits.isEmpty { return d(keypad.idle.digits).hint }
         guard idleActions != nil else { return "要輸入數字時會出現在這裡" }
-        if let m = keypad.multiplier { return "點品項＝加 \(m) 份；或按「品號」" }
+        if let m = keypad.multiplier { return "點品項＝加 \(m) 份；或按「\(idleActions?.title(keypad.idle.digits) ?? "品號")」" }
         return "按「品號」加入這個品號的品項"
     }
 
@@ -420,9 +423,12 @@ struct KeypadDock: View {
                     Button("清除") { keypad.clearIdle() }
                         .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
                     Button {
-                        if let code = keypad.takeCode() { idleActions.lookup(code) }
+                        if let code = keypad.takeCode() { idleActions.commit(code) }
                     } label: {
-                        Text("品號").frame(maxWidth: .infinity)
+                        Text(idleActions.title(keypad.idle.digits))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                            .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.brand(.primary, size: .lg, fullWidth: true))
                 }

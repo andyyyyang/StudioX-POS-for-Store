@@ -49,4 +49,33 @@ struct TypedDigitsTests {
         #expect(kind("04595257", checkout: false) == .code("04595257"))
         #expect(kind("12345678", checkout: true) == .code("12345678"))
     }
+
+    // MARK: 按「確定」
+
+    private func confirm(_ d: String) -> TypedConfirm? {
+        TypedConfirm.classify(d, catalog: catalog)
+    }
+
+    @Test func confirmWithoutCodeIsAmount() {
+        #expect(confirm("120") == .amount(Money(dollars: 120)))
+        #expect(confirm("5") == .amount(Money(dollars: 5)))
+        #expect(confirm("5555") == .amount(Money(dollars: 5555)))
+        #expect(confirm("999999") == .amount(Money(dollars: 999_999)))
+        #expect(confirm("") == nil)
+    }
+
+    @Test func confirmPrefersProducts() {
+        // 1001 也是更長的 10011 的開頭：按了確定就是拿鐵（打完了）
+        if case .product(let m) = confirm("1001") { #expect(m.item.id == "latte") } else { Issue.record("1001 是拿鐵") }
+        if case .product(let m) = confirm("2001") { #expect(m.item.id == "duck") } else { Issue.record("2001 是鴨胸") }
+        if case .product(let m) = confirm("0911111111") { #expect(m.item.id == "odd") } else { Issue.record("品號優先") }
+    }
+
+    @Test func confirmDoesNotTurnCodesIntoMoney() {
+        #expect(confirm("0912345678") == .member(phone: "0912345678"))
+        // 0 開頭、7 碼以上：打錯的品號或條碼，不當錢
+        #expect(confirm("0120") == .notFound("0120"))
+        #expect(confirm("1234567") == .notFound("1234567"))
+        #expect(confirm("4710088999999") == .notFound("4710088999999"))
+    }
 }

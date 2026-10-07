@@ -169,6 +169,48 @@ extension POSModel {
         add(m.item, variant: v, quantity: keypad.takeQuantity(), modifiers: [], note: "")
     }
 
+    /// 待機打了數字按「確定」（右側鍵盤的大鍵、外接鍵盤的 Enter）：對到品號 → 加品項；會員電話 → 掛會員；
+    /// 沒有這個品號 → 就是多少錢，加一筆「其他」（見 TypedConfirm）
+    func commitTyped(_ digits: String) {
+        switch TypedConfirm.classify(digits, catalog: catalog) {
+        case .product?:
+            lookup(code: digits)
+        case .member(let phone)?:
+            Task { _ = await handleScan(phone, context: .member) }
+        case .amount(let price)?:
+            addAmount(price)
+        case .notFound(let code)?:
+            show("找不到品號 \(code)", tone: .warning)
+        case nil:
+            break
+        }
+    }
+
+    /// 大鍵上的字：按下去會怎樣（「加入 鴨胸」「加 NT$120」）
+    func typedConfirmTitle(_ digits: String) -> String {
+        switch TypedConfirm.classify(digits, catalog: catalog) {
+        case .product(let m)?:
+            let name = m.variant.map { "\(m.item.name) \($0.label)" } ?? m.item.name
+            return "加入 \(name)"
+        case .member?:
+            return "查會員"
+        case .amount(let price)?:
+            return "加 \(price.formatted)"
+        case .notFound?, nil:
+            return "品號"
+        }
+    }
+
+    /// 鍵盤直接打的金額：一筆「其他」（菜單上沒有、臨時的價錢；應稅）
+    func addAmount(_ price: Money) {
+        guard let t = ensureTicket(), let me = currentStaff else { return }
+        let line = TicketLine(id: newID(), itemId: nil, name: Self.amountLineName, unitPrice: price, addedAt: Date(), addedBy: me.id)
+        if record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line]))) { addTick &+= 1 }
+    }
+
+    /// 鍵盤直接打金額加的那一筆叫什麼（單子、收據、發票上都是這個名字）
+    static let amountLineName = "其他"
+
     /// 自訂品項（菜單上沒有的：「開瓶費」「外送費」）
     func addCustom(name: String) async {
         guard let price = await keypad.askMoney(KeypadSpec(kind: .money, title: "金額", subtitle: name, confirmLabel: "加入", minValue: 1)),

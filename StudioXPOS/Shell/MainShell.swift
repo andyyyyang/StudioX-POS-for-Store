@@ -167,7 +167,7 @@ struct MainShell: View {
     /// 點餐畫面的鍵盤待機時可以打品號
     private var idleActions: KeypadDock.IdleActions? {
         guard model.section == .order, model.checkoutTicketId == nil else { return nil }
-        return KeypadDock.IdleActions(lookup: { model.lookup(code: $0) })
+        return KeypadDock.IdleActions(commit: { model.commitTyped($0) }, title: { model.typedConfirmTitle($0) })
     }
 
     private var showsTicket: Bool {
@@ -248,7 +248,12 @@ struct MainShell: View {
             if keypad.isAsking {
                 keypad.commit()
             } else if let typed = keypad.takeCode() {
-                // 待機：右側鍵盤打的數字。點餐頁以外，短的數字多半是不小心打的（品號在點餐頁打）
+                // 待機：右側鍵盤打的數字。點餐頁和右側鍵盤的大鍵一樣（品號、沒有這個品號就是多少錢）；
+                // 點餐頁以外，短的數字多半是不小心打的
+                if idleActions != nil {
+                    model.commitTyped(typed)
+                    return .handled
+                }
                 guard model.section == .order || model.checkoutTicket != nil || typed.count >= 4 else { return .handled }
                 Task { await model.handleScan(typed) }
             }
