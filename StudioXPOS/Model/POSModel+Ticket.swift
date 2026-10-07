@@ -190,6 +190,21 @@ extension POSModel {
         }
     }
 
+    /// 手機：叫出鍵盤打品號或金額（iPad 的右側鍵盤一直都在；手機要用的時候才叫，點餐頁下面那條旁邊的鍵）。
+    /// 按下大鍵和 iPad 一樣（commitTyped）；找不到品號、又不像金額的留在鍵盤上說
+    func askTyped() async {
+        touch()
+        let spec = KeypadSpec(kind: .code(minLength: 1, maxLength: 13), title: "品號・金額",
+                              subtitle: "打品號加品項；沒有這個品號就是多少錢，加一筆「\(Self.amountLineName)」", confirmLabel: "加入")
+        guard let e = await keypad.ask(spec, validate: { [weak self] e in
+            guard let self, case .notFound? = TypedConfirm.classify(e.digits, catalog: self.catalog) else { return nil }
+            return "找不到品號 \(e.digits)"
+        }, confirmTitle: { [weak self] e in
+            e.digits.isEmpty ? "加入" : (self?.typedConfirmTitle(e.digits) ?? "加入")
+        }) else { return }
+        commitTyped(e.digits)
+    }
+
     /// 現金模式：打的數字一律是金額 → 加一筆「其他」、整張單收現金結帳（單上已經點的品項一起）
     private func cashFromTyped(_ digits: String) {
         switch TypedConfirm.classify(digits, catalog: catalog, matchesProducts: false) {

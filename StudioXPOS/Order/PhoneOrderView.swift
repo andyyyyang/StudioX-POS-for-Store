@@ -308,7 +308,7 @@ struct PhoneOrderView: View {
 
     // MARK: 下面：單子
 
-    /// 下面：說話點餐的結果（一段一段）、單子那一條（點一下、往上滑打開；按住說話）。
+    /// 下面：說話點餐的結果（一段一段）、單子那一條（點一下、往上滑打開；按住說話）、旁邊的鍵盤鍵。
     /// 結帳、送單都在打開的單子裡（看過單子才結帳；這一頁沒有直接結帳的鍵）
     private var bottomStrip: some View {
         VStack(spacing: 6) {
@@ -316,9 +316,14 @@ struct PhoneOrderView: View {
             if model.selectedTicket == nil, let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
                 LastSaleStrip(sale: sale)
             }
-            if model.selectedTicket != nil || ui.voice.isSupported {
-                ticketBar(model.selectedTicket)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            HStack(spacing: 0) {
+                if model.selectedTicket != nil || ui.voice.isSupported {
+                    ticketBar(model.selectedTicket)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    Spacer(minLength: 0)
+                }
+                keypadButton
             }
         }
         .animation(Motion.spring, value: model.selectedTicketId)
@@ -348,6 +353,25 @@ struct PhoneOrderView: View {
                        listening: ui.voice.listening,
                        hold: ui.voice.isSupported ? { (down: Bool) in hold(down) } : nil,
                        open: { full in openTicket(full: full) })
+    }
+
+    /// 叫出鍵盤（iPad 的右側鍵盤一直都在；手機要的時候才叫）：打品號加品項，沒有這個品號就是多少錢、加一筆（POSModel.askTyped）
+    private var keypadButton: some View {
+        Button {
+            Task { await model.askTyped() }
+        } label: {
+            HeroIcon("calculator", size: 22)
+                .foregroundStyle(Theme.onInverse)
+                .frame(width: 58, height: 58)
+                .background(Theme.inverse, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
+                .contentShape(.rect)
+        }
+        .buttonStyle(PressScale(scale: 0.96))
+        .padding(.trailing, 12)
+        .padding(.top, 6)
+        .padding(.bottom, 4)
+        .accessibilityLabel("鍵盤")
+        .accessibilityHint("打品號加品項；沒有這個品號就是多少錢，加一筆「\(POSModel.amountLineName)」")
     }
 
     /// 按住說話：按下去開始聽、放開交給模型整理（上一段還在整理也可以再按）
