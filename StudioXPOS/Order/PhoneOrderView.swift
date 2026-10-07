@@ -318,7 +318,7 @@ struct PhoneOrderView: View {
                 LastSaleStrip(sale: sale)
             }
             if model.cashModeActive {
-                // 現金模式：鍵盤一直在下面（打金額 → 收現金）；單子從鍵盤上的「單子 3 項」打開
+                // 現金模式：鍵盤一直在下面（打金額 → 收現金；往下滑收起來、往上滑打開）；單子從鍵盤上的「單子 3 項」打開
                 PhoneCashPad(openTicket: { openTicket() })
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {

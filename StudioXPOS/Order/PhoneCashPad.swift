@@ -6,19 +6,29 @@ import SwiftUI
 ///   打金額 →「收現金 NT$120」：加一筆「其他」、整張單收現金結帳（POSModel.commitTyped → cashCheckout）
 ///   沒打數字、單子上有東西 →「收現金 NT$480」：收整張單
 ///   先掃載具：發票開到載具（說明那一行會寫）
-/// 上面的菜單照樣可以點：點了加到單子，按「收現金」一起收
+/// 上面的菜單照樣可以點：點了加到單子，按「收現金」一起收。
+/// 上面那一行往下滑＝收起來（只留打了多少與「收現金」，畫面讓給菜單）；往上滑、點一下＝打開。收著還是開著記在這支手機
 struct PhoneCashPad: View {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
     /// 「看單子」：打開單子的 sheet
     let openTicket: () -> Void
 
+    static let collapsedKey = "phoneCashPadCollapsed"
+    /// 數字鍵收起來了（bool(forKey:)：截圖的 -phoneCashPadCollapsed YES 也讀得到）
+    @State private var collapsed = UserDefaults.standard.bool(forKey: PhoneCashPad.collapsedKey)
+    /// 開著時往下拉了多少（整塊跟著手指往下）
+    @State private var dragY: CGFloat = 0
+
     var body: some View {
         // 正在問別的數字（會員電話…）時用的是升起來的那一個鍵盤，這裡當作沒打
         let digits = keypad.isAsking ? "" : keypad.idle.digits
         VStack(spacing: 10) {
-            display(digits)
-            keys
+            header(digits)
+            if !collapsed {
+                keys
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             HStack(spacing: 8) {
                 Button {
                     keypad.clearIdle()
@@ -44,14 +54,61 @@ struct PhoneCashPad: View {
             }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 12)
+        .padding(.top, 6)
         .padding(.bottom, 6)
         .background {
             UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
                 .fill(Theme.dock)
                 .ignoresSafeArea(edges: .bottom)
         }
+        .offset(y: collapsed ? 0 : max(dragY, 0))
         .sensoryFeedback(.selection, trigger: keypad.keyTick)
+        .sensoryFeedback(.impact(weight: .light), trigger: collapsed)
+        .onChange(of: collapsed) { _, c in
+            UserDefaults.standard.set(c, forKey: Self.collapsedKey)
+        }
+    }
+
+    // MARK: 收起來、打開
+
+    /// 拖曳的橫條＋打了多少：往下滑收起來、往上滑（或點一下）打開
+    private func header(_ digits: String) -> some View {
+        VStack(spacing: 6) {
+            Capsule()
+                .fill(Theme.faint)
+                .frame(width: 36, height: 5)
+            display(digits)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(.rect)
+        .onTapGesture {
+            if collapsed { setCollapsed(false) }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { v in
+                    if !collapsed { dragY = v.translation.height }
+                }
+                .onEnded { v in
+                    let dy = v.translation.height
+                    let fling = v.predictedEndTranslation.height
+                    withAnimation(Motion.spring) {
+                        dragY = 0
+                        if !collapsed, dy > 50 || fling > 160 {
+                            collapsed = true
+                        } else if collapsed, dy < -24 || fling < -120 {
+                            collapsed = false
+                        }
+                    }
+                }
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityAction(named: Text(collapsed ? "打開數字鍵" : "收起數字鍵")) { setCollapsed(!collapsed) }
+    }
+
+    private func setCollapsed(_ c: Bool) {
+        withAnimation(Motion.spring) { collapsed = c }
+        model.touch()
     }
 
     // MARK: 上面：打了多少、按下去會怎樣
@@ -101,8 +158,14 @@ struct PhoneCashPad: View {
 
     private func describe(_ digits: String) -> (String, String) {
         if !digits.isEmpty { return model.describeTyped(digits) }
+        let carrier = model.pendingCarrier.flatMap { $0.isFresh ? $0.carrier.id : nil }
+        if collapsed {
+            if let t = ticket { return (t.totals.balance.formatted, "按「收現金」結帳・往上滑打開數字鍵") }
+            if let c = carrier { return ("NT$0", "往上滑打開數字鍵打金額・發票開到載具 \(c)") }
+            return ("NT$0", "點上面的品項，或往上滑打開數字鍵打金額")
+        }
         if let t = ticket { return (t.totals.balance.formatted, "單上的品項：按「收現金」結帳；也可以再打金額一起收") }
-        if let p = model.pendingCarrier, p.isFresh { return ("NT$0", "打金額按「收現金」・發票開到載具 \(p.carrier.id)") }
+        if let c = carrier { return ("NT$0", "打金額按「收現金」・發票開到載具 \(c)") }
         return ("NT$0", "打金額，按「收現金」就結帳；先掃載具就開到載具")
     }
 

@@ -21,6 +21,7 @@ import UIKit
 ///                                        點餐頁還沒有單時先選一張有點東西的單，手機再把單子打開（截「掃到之後」的樣子）
 ///   -typeDigits <數字>                   登入、開頁之後在鍵盤上打這串數字（截「打了金額」的樣子：現金模式的「收現金 NT$120」）
 ///   -cashMode YES、-phoneTakesPayment YES   現金模式、手機也能收款（UserDefaults 的參數網域）
+///   -phoneCashPadCollapsed YES          手機現金模式的數字鍵收起來（往下滑之後的樣子）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
