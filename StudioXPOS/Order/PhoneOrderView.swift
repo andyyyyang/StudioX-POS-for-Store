@@ -36,6 +36,8 @@ struct PhoneOrderView: View {
     @State private var ticketDetent: PresentationDetent = .medium
     /// 叫號卡展開著（平常收成頁首的一顆鍵，畫面留給菜單）
     @AppStorage("phoneQueueCardOpen") private var queueOpen = false
+    /// 現金模式下面那張卡開著的高度（菜單捲到底讓出來）
+    @State private var cashPadHeight: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,7 +54,23 @@ struct PhoneOrderView: View {
         }
         // 卡片的字級（更多 → 這支手機）
         .environment(\.menuText, model.settings.menuText)
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomStrip }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if !model.cashModeActive { bottomStrip }
+        }
+        // 現金模式：下面一張可以上下拖的卡（打金額 → 收現金）；疊在菜單上、不佔版面，拖的時候菜單不用重排。
+        // 打開搜尋的鍵盤時留在原地（不跟著頂上來蓋住搜尋結果）
+        .overlay(alignment: .bottom) {
+            if model.cashModeActive {
+                PhoneCashPad(openTicket: { openTicket() }, height: $cashPadHeight)
+                    .ignoresSafeArea(.keyboard, edges: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .ticketSheet(ui: ui, model: model, detent: $ticketDetent)
+        // 把單子打開給人看（-scanDemo 截圖：掃到的折價券、會員在單子上）
+        .onChange(of: model.revealTicketRequest) { _, _ in
+            if model.selectedTicket != nil { openTicket() }
+        }
         // 現金模式：下面是常駐的鍵盤，「開單」這種浮著的大鍵不放（會蓋到鍵盤）
         .dockSelection(model.selectedTicket == nil && !model.cashModeActive ? openPage : nil)
         .dockPanel(isPresented: $opening, title: "開單", subtitle: openSubtitle) {
@@ -223,6 +241,7 @@ struct PhoneOrderView: View {
         if list.isEmpty {
             EmptyState(icon: "magnifying-glass", title: query.isEmpty ? "這一類還沒有品項" : "找不到「\(query)」",
                        message: query.isEmpty ? "到後台「門市 POS → 菜單」新增" : nil)
+                .padding(.bottom, bottomCover)
         } else {
             ScrollView {
                 // 左右滑時只有這一層跟著手指走（菜單其他地方不用重畫）
@@ -243,6 +262,8 @@ struct PhoneOrderView: View {
             }
             .scrollIndicators(.hidden)
             .scrollDismissesKeyboard(.immediately)
+            // 現金模式的卡疊在菜單上：捲到底最後一排在卡上面
+            .contentMargins(.bottom, bottomCover, for: .scrollContent)
             // 左右滑換分類（搜尋中不換；防誤觸見 CategorySwipe）
             .categorySwipe(model.catalog.categories, current: categoryId, enabled: query.isEmpty, shift: swipeShift) { id in
                 select(id)
@@ -309,48 +330,30 @@ struct PhoneOrderView: View {
 
     // MARK: 下面：單子
 
+    /// 疊在菜單上的高度（現金模式的卡；其他時候下面那條是 safeAreaInset，本來就讓出來了）
+    private var bottomCover: CGFloat {
+        model.cashModeActive ? cashPadHeight : 0
+    }
+
     /// 下面：說話點餐的結果（一段一段）、單子那一條（點一下、往上滑打開；按住說話）、旁邊的鍵盤鍵。
-    /// 結帳、送單都在打開的單子裡（看過單子才結帳；這一頁沒有直接結帳的鍵）
+    /// 結帳、送單都在打開的單子裡（看過單子才結帳；這一頁沒有直接結帳的鍵）。現金模式換成 PhoneCashPad（上一筆也在它上面）
     private var bottomStrip: some View {
         VStack(spacing: 6) {
             VoiceOrderPanel(voice: ui.voice)
             if model.selectedTicket == nil, let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
                 LastSaleStrip(sale: sale)
             }
-            if model.cashModeActive {
-                // 現金模式：鍵盤一直在下面（打金額 → 收現金；往下滑收起來、往上滑打開）；單子從鍵盤上的「單子 3 項」打開
-                PhoneCashPad(openTicket: { openTicket() })
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else {
-                HStack(spacing: 0) {
-                    if model.selectedTicket != nil || ui.voice.isSupported {
-                        ticketBar(model.selectedTicket)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else {
-                        Spacer(minLength: 0)
-                    }
-                    keypadButton
+            HStack(spacing: 0) {
+                if model.selectedTicket != nil || ui.voice.isSupported {
+                    ticketBar(model.selectedTicket)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                } else {
+                    Spacer(minLength: 0)
                 }
+                keypadButton
             }
         }
         .animation(Motion.spring, value: model.selectedTicketId)
-        // 單子：點一行選起來（鍵盤從這一張的下面升起來問它的數量，上面是那一行的動作：備註、折扣、刪除…）；左右滑加減、刪除。
-        // 鍵盤、面板不再疊一張 sheet（PhoneDockHost inSheet）；要更多地方時拉到全高
-        .sheet(isPresented: Binding(get: { ui.ticketOpen && model.selectedTicket != nil }, set: { ui.ticketOpen = $0 })) {
-            PhoneDockHost(isActive: true, inSheet: true, onNeedsRoom: { more in
-                if more { ticketDetent = .large }
-            }) {
-                TicketColumn()
-                    // 套折價券要換掉原本的折扣：在這張 sheet 的下面問（不疊第二張）
-                    .confirmDockPanel()
-            }
-            .presentationDetents([.medium, .large], selection: $ticketDetent)
-            .phoneSheetStyle(Theme.page)
-        }
-        // 把單子打開給人看（-scanDemo 截圖：掃到的折價券、會員在單子上）
-        .onChange(of: model.revealTicketRequest) { _, _ in
-            if model.selectedTicket != nil { openTicket() }
-        }
     }
 
     /// 「A2・3 項・NT$480」：點一下、往上滑打開單子；按住說要點什麼（還沒有單子時也在，說了就開一張）
@@ -632,5 +635,23 @@ private struct PhoneTicketBar: View {
         // 往上滑一段、或往上甩一下就打開；滑得長、甩得用力＝全高
         guard !held, title != nil, up > 36 || (flingUp > 120 && up > 12) else { return }
         open(up > 140 || flingUp > 420)
+    }
+}
+
+/// 單子：點一行選起來（鍵盤從這一張的下面升起來問它的數量，上面是那一行的動作：備註、折扣、刪除…）；左右滑加減、刪除。
+/// 鍵盤、面板不再疊一張 sheet（PhoneDockHost inSheet）；要更多地方時拉到全高
+private extension View {
+    func ticketSheet(ui: PhoneUI, model: POSModel, detent: Binding<PresentationDetent>) -> some View {
+        sheet(isPresented: Binding(get: { ui.ticketOpen && model.selectedTicket != nil }, set: { ui.ticketOpen = $0 })) {
+            PhoneDockHost(isActive: true, inSheet: true, onNeedsRoom: { more in
+                if more { detent.wrappedValue = .large }
+            }) {
+                TicketColumn()
+                    // 套折價券要換掉原本的折扣：在這張 sheet 的下面問（不疊第二張）
+                    .confirmDockPanel()
+            }
+            .presentationDetents([.medium, .large], selection: detent)
+            .phoneSheetStyle(Theme.page)
+        }
     }
 }
