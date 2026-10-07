@@ -181,7 +181,10 @@ final class POSModel {
         var message: String
     }
 
-    init() {}
+    init() {
+        // 現金模式打的數字是金額：點品項照樣一份，打的金額留著（不會打 120 再點鴨頭＝120 份）
+        keypad.digitsAreQuantity = { [weak self] in !(self?.cashModeActive ?? false) }
+    }
 
     // MARK: - 開機
 

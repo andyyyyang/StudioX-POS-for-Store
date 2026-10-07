@@ -189,14 +189,18 @@ final class KeypadController {
 
     // MARK: 待機
 
+    /// 待機打的數字可不可以當數量（現金模式打的是金額：POSModel 設）
+    @ObservationIgnored var digitsAreQuantity: () -> Bool = { true }
+
     /// 待機打的數量（沒打是 nil）。四碼以上是品號，不當數量
     var multiplier: Int? {
-        guard idle.digits.count <= 3, let v = idle.value, v > 0 else { return nil }
+        guard digitsAreQuantity(), idle.digits.count <= 3, let v = idle.value, v > 0 else { return nil }
         return v
     }
 
-    /// 點品項時拿走數量（沒打就是 1），鍵盤歸零
+    /// 點品項時拿走數量（沒打就是 1），鍵盤歸零；打的不是數量（現金模式的金額）就是 1、打的留著
     func takeQuantity() -> Int {
+        guard digitsAreQuantity() else { return 1 }
         let q = multiplier ?? 1
         idle.press(.clear)
         return q
