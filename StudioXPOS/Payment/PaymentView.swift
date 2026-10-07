@@ -129,6 +129,8 @@ struct PaymentView: View {
 
     /// 這台格子裡的付款方式。手機只收「卡緊收」（上面那張大卡）和 LINE Pay；其他（現金、刷卡、街口…）都到櫃台結帳
     private var gridTenders: [Tender] {
+        // 現金模式：全部只收現金（開不了發票等情況才會停在這個畫面）
+        if model.cashModeActive { return [] }
         if model.isPhone { return [.linePay] }
         return Self.otherTenders.filter { !(model.offersTapToPay && $0 == .tapToPay) }
     }
@@ -210,8 +212,8 @@ struct PaymentView: View {
                 .disabled(x.isPaidInFull || counter)
             }
 
-            // 儲值金在櫃台扣（手機只收卡緊收、LINE Pay）
-            if !model.isPhone {
+            // 儲值金在櫃台扣（手機只收卡緊收、LINE Pay）；現金模式只收現金
+            if !model.isPhone && !model.cashModeActive {
                 prepaidTile(t, x)
             }
 

@@ -46,6 +46,8 @@ public enum TypedDigits: Sendable, Hashable {
 ///   09 開頭 10 碼             會員電話
 ///   沒有這個品號、1–6 位數     就是多少錢：加一筆這個金額（「其他」）
 ///   其他（0 開頭、7 碼以上）   找不到品號（多半是打錯的條碼，不當錢）
+///
+/// 現金模式（matchesProducts: false）：打的數字一律是金額，不對品號（菜單剛好有 120 這個品號也是 NT$120）
 public enum TypedConfirm: Sendable, Hashable {
     case product(Catalog.Match)
     case member(phone: String)
@@ -55,9 +57,9 @@ public enum TypedConfirm: Sendable, Hashable {
     /// 最多幾位數當金額（再長的是條碼打錯，不是錢）
     public static let maxAmountDigits = 6
 
-    public static func classify(_ digits: String, catalog: Catalog) -> TypedConfirm? {
+    public static func classify(_ digits: String, catalog: Catalog, matchesProducts: Bool = true) -> TypedConfirm? {
         guard !digits.isEmpty, digits.allSatisfy(\.isNumber) else { return nil }
-        if let m = catalog.match(code: digits) { return .product(m) }
+        if matchesProducts, let m = catalog.match(code: digits) { return .product(m) }
         if digits.hasPrefix("09"), digits.count == 10 { return .member(phone: digits) }
         if !digits.hasPrefix("0"), digits.count <= maxAmountDigits, let n = Int(digits), n > 0 { return .amount(Money(dollars: n)) }
         return .notFound(digits)

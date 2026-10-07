@@ -800,6 +800,10 @@ struct TicketColumn: View {
     /// 結帳；不收錢的崗位（報到接待、前場的手機）：送到結帳櫃台（單子變成待結帳、櫃台跳出來），請客人過去結
     private func checkoutAction(_ t: Ticket) -> POSAction {
         let hasLines = !t.activeLines.isEmpty
+        if model.cashModeActive && t.exchange == nil {
+            // 現金模式：大鍵就是收現金（應收多少收多少、直接結帳；beginCheckout 接手）
+            return POSAction("收現金 \(t.totals.balance.formatted)", icon: "banknotes", enabled: hasLines) { model.beginCheckout(t) }
+        }
         if model.takesPayment {
             // 手機要和櫃台的 iPad 在同一個 Wi-Fi 才能結帳：連不到就反灰（不跳警告），鍵上寫原因
             let here = model.phoneOnStoreWiFi

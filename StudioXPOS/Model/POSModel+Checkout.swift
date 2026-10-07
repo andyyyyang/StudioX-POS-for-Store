@@ -23,6 +23,11 @@ extension POSModel {
             show("和櫃台的 iPad 連同一個 Wi-Fi 才能結帳", tone: .info)
             return
         }
+        // 現金模式：不進結帳畫面，應收多少收多少現金、直接結帳（換貨單照平常：要先抵掉退回的）
+        if cashModeActive && t.exchange == nil {
+            Task { await cashCheckout(t) }
+            return
+        }
         keypad.cancel()
         // 折價券：改了品項、小計低於最低消費的，結帳前拿掉（提示說一聲；單子上之前已經提醒過）
         dropCouponBelowMinimum(t)
@@ -38,6 +43,30 @@ extension POSModel {
                 Task { await complete(fresh) }
             }
         }
+    }
+
+    /// 現金模式的結帳：應收多少就收多少現金（不找零）→ 開發票（單子上有載具就開到載具）→ 結帳、印。
+    /// 不進結帳畫面（不會閃一下）。開不了發票：和平常一樣跳「開不了發票」（先結帳之後補開／取消）；
+    /// 取消的話錢已經記上了，單子的大鍵變成「收現金 NT$0」，再按一次就是重新開發票、結帳
+    func cashCheckout(_ given: Ticket) async {
+        guard let me = currentStaff, let t0 = state.tickets[given.id], t0.isOpen else { return }
+        guard !t0.activeLines.isEmpty else {
+            show("還沒有點東西", tone: .warning)
+            return
+        }
+        keypad.cancel()
+        dropCouponBelowMinimum(t0)
+        selectedTicketId = t0.id
+        takeNumberForCheckout(t0)
+        guard let t = state.tickets[t0.id] else { return }
+        let due = t.totals.balance
+        if due.cents > 0 {
+            let p = Payment.cash(id: newID(), tendered: due, due: due, at: Date(), by: me.id, shiftId: openShift?.id)
+            guard record(.paymentAdded(PaymentAdded(ticketId: t.id, payment: p))) else { return }
+            if settings.openDrawerOnCash { printers.openDrawer() }
+        }
+        lastChange = .zero
+        if let paid = state.tickets[t.id], paid.totals.isPaidInFull { await complete(paid) }
     }
 
     func cancelCheckout() {

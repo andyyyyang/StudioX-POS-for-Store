@@ -28,6 +28,11 @@ extension POSModel {
         role.takesPayment && (!isPhone || PhoneSettings.shared.takesPayment)
     }
 
+    /// 現金模式現在有沒有效：設定打開、而且這台是有錢櫃的收銀台 iPad（手機、點餐 iPad、接待照平常）
+    var cashModeActive: Bool {
+        settings.cashMode && takesPayment && role.hasDrawer && !isPhone
+    }
+
     /// 手機要和櫃台的 iPad（母裝置）在同一個 Wi-Fi 才能進結帳：區網連得到一台 iPad。
     /// 店家沒開區網同步（後台的 mesh）就不限；示範模式不限
     var phoneOnStoreWiFi: Bool {

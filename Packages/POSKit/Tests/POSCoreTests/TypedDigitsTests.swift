@@ -78,4 +78,11 @@ struct TypedDigitsTests {
         #expect(confirm("1234567") == .notFound("1234567"))
         #expect(confirm("4710088999999") == .notFound("4710088999999"))
     }
+
+    @Test func cashModeTreatsDigitsAsMoney() {
+        // 現金模式：2001 是 NT$2,001，不是鴨胸
+        #expect(TypedConfirm.classify("2001", catalog: catalog, matchesProducts: false) == .amount(Money(dollars: 2001)))
+        #expect(TypedConfirm.classify("0912345678", catalog: catalog, matchesProducts: false) == .member(phone: "0912345678"))
+        #expect(TypedConfirm.classify("0120", catalog: catalog, matchesProducts: false) == .notFound("0120"))
+    }
 }

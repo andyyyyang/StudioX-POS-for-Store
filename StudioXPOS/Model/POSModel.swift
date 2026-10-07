@@ -764,6 +764,8 @@ final class LocalSettings {
     var printKitchenForOthers: Bool { didSet { d.set(printKitchenForOthers, forKey: "printKitchenForOthers") } }
     var consoleURLString: String { didSet { d.set(consoleURLString, forKey: "consoleURL") } }
     var openDrawerOnCash: Bool { didSet { d.set(openDrawerOnCash, forKey: "openDrawerOnCash") } }
+    /// 現金模式：只收現金；在右側鍵盤打金額按「收現金」就結帳（不進結帳畫面、不找零），先掃載具就開到載具（POSModel.cashModeActive）
+    var cashMode: Bool { didSet { d.set(cashMode, forKey: "cashMode") } }
     /// 這台的營業模式（ServiceMode 的 rawValue；空的＝用後台的預設）
     var serviceMode: String { didSet { d.set(serviceMode, forKey: "serviceMode") } }
     /// 這台的崗位（DeviceRole 的 rawValue；空的＝用後台配對時給的）
@@ -793,6 +795,7 @@ final class LocalSettings {
         printKitchenForOthers = d.object(forKey: "printKitchenForOthers") as? Bool ?? true
         consoleURLString = d.string(forKey: "consoleURL") ?? "https://console.studiox.tw"
         openDrawerOnCash = d.object(forKey: "openDrawerOnCash") as? Bool ?? true
+        cashMode = d.object(forKey: "cashMode") as? Bool ?? false
         serviceMode = d.string(forKey: "serviceMode") ?? ""
         workstation = d.string(forKey: "workstation") ?? ""
         queueSpeaks = d.object(forKey: "queueSpeaks") as? Bool ?? false

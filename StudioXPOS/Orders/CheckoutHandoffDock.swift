@@ -42,7 +42,9 @@ private struct CheckoutHandoffDock: ViewModifier {
             // 送來「付現」的：大鍵直接收現金（打收了多少、找零自動算）；其他的進結帳畫面選付款方式
             primary: POSModel.wantsCash(t)
                 ? POSAction("收現金 \(t.totals.balance.formatted)", icon: "banknotes", enabled: model.takesPayment && model.role.hasDrawer) {
+                    // 現金模式：beginCheckout 就直接收現金結帳了，不再問收了多少
                     model.beginCheckout(t)
+                    guard !model.cashModeActive else { return }
                     Task {
                         if let fresh = model.state.tickets[t.id] { await model.takeCash(fresh) }
                     }

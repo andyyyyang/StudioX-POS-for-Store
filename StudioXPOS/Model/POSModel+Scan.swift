@@ -273,6 +273,19 @@ extension POSModel {
 
     /// 鍵盤上方的題目與說明：打的時候就看得出它會被當成什麼
     func describeTyped(_ digits: String) -> (title: String, hint: String) {
+        // 現金模式：打的就是金額（09 開頭照樣是會員電話）
+        if cashModeActive, case .amount(let price)? = TypedConfirm.classify(digits, catalog: catalog, matchesProducts: false) {
+            let withLines = selectedTicket.map { !$0.activeLines.isEmpty } ?? false
+            var carrier: String? = nil
+            if let p = pendingCarrier, p.isFresh, selectedTicket == nil {
+                carrier = p.carrier.id
+            } else if let t = selectedTicket, case .consumer(let c?) = t.invoiceBuyer {
+                carrier = c.id
+            }
+            var hint = withLines ? "按「收現金」連同單上的品項一起結帳" : "按「收現金」直接結帳"
+            if let carrier { hint += "・發票開到載具 \(carrier)" }
+            return (price.formatted, hint)
+        }
         switch typedDigits(digits) {
         case .quantity(let n):
             return ("下一個品項 × \(n)", "點品項＝加 \(n) 份，或按「\(typedConfirmTitle(digits))」")
@@ -296,6 +309,8 @@ extension POSModel {
     /// 打完停一下：會員電話 → 查、掛上；統編（結帳中）→ 掛上；剛好對到的品號 → 加入。其他的等使用者
     func actOnTyped(_ digits: String) async {
         guard let kind = typedDigits(digits), kind.actsOnPause else { return }
+        // 現金模式：打的是金額，剛好對到品號也不自動加
+        if cashModeActive, case .product = kind { return }
         keypad.clearIdle()
         switch kind {
         case .member(let phone):

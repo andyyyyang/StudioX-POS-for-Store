@@ -172,6 +172,10 @@ extension POSModel {
     /// 待機打了數字按「確定」（右側鍵盤的大鍵、外接鍵盤的 Enter）：對到品號 → 加品項；會員電話 → 掛會員；
     /// 沒有這個品號 → 就是多少錢，加一筆「其他」（見 TypedConfirm）
     func commitTyped(_ digits: String) {
+        if cashModeActive {
+            cashFromTyped(digits)
+            return
+        }
         switch TypedConfirm.classify(digits, catalog: catalog) {
         case .product?:
             lookup(code: digits)
@@ -186,8 +190,29 @@ extension POSModel {
         }
     }
 
-    /// 大鍵上的字：按下去會怎樣（「加入 鴨胸」「加 NT$120」）
+    /// 現金模式：打的數字一律是金額 → 加一筆「其他」、整張單收現金結帳（單上已經點的品項一起）
+    private func cashFromTyped(_ digits: String) {
+        switch TypedConfirm.classify(digits, catalog: catalog, matchesProducts: false) {
+        case .amount(let price)?:
+            guard let t = addAmount(price) else { return }
+            Task { await cashCheckout(t) }
+        case .member(let phone)?:
+            Task { _ = await handleScan(phone, context: .member) }
+        case .notFound(let code)?:
+            show("\(code) 不是金額：最多 \(TypedConfirm.maxAmountDigits) 位數、不能 0 開頭", tone: .warning)
+        case .product?, nil:
+            break
+        }
+    }
+
+    /// 大鍵上的字：按下去會怎樣（「加入 鴨胸」「加 NT$120」；現金模式「收現金 NT$120」）
     func typedConfirmTitle(_ digits: String) -> String {
+        if cashModeActive {
+            guard case .amount(let price)? = TypedConfirm.classify(digits, catalog: catalog, matchesProducts: false) else {
+                return digits.hasPrefix("09") ? "查會員" : "收現金"
+            }
+            return "收現金 \(((selectedTicket?.totals.balance ?? .zero) + price).formatted)"
+        }
         switch TypedConfirm.classify(digits, catalog: catalog) {
         case .product(let m)?:
             let name = m.variant.map { "\(m.item.name) \($0.label)" } ?? m.item.name
@@ -201,11 +226,14 @@ extension POSModel {
         }
     }
 
-    /// 鍵盤直接打的金額：一筆「其他」（菜單上沒有、臨時的價錢；應稅）
-    func addAmount(_ price: Money) {
-        guard let t = ensureTicket(), let me = currentStaff else { return }
+    /// 鍵盤直接打的金額：一筆「其他」（菜單上沒有、臨時的價錢；應稅）。回加到的那張單
+    @discardableResult
+    func addAmount(_ price: Money) -> Ticket? {
+        guard let t = ensureTicket(), let me = currentStaff else { return nil }
         let line = TicketLine(id: newID(), itemId: nil, name: Self.amountLineName, unitPrice: price, addedAt: Date(), addedBy: me.id)
-        if record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line]))) { addTick &+= 1 }
+        guard record(.linesAdded(LinesAdded(ticketId: t.id, lines: [line]))) else { return nil }
+        addTick &+= 1
+        return state.tickets[t.id]
     }
 
     /// 鍵盤直接打金額加的那一筆叫什麼（單子、收據、發票上都是這個名字）

@@ -598,7 +598,32 @@ private struct SettingsModeSection: View {
             Text("現在：\(model.mode.label)。後台可以關掉某些模式，關掉的就不會出現在這裡。")
                 .textRole(.xs)
                 .foregroundStyle(Theme.muted)
+            cashModePanel
         }
+    }
+
+    /// 現金模式（這台自己的）：只收現金、打金額就結帳。只有收銀台（有錢櫃、會收錢的 iPad）才有
+    @ViewBuilder
+    private var cashModePanel: some View {
+        @Bindable var settings = model.settings
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle(isOn: $settings.cashMode) {
+                SettingsToggleLabel(title: "現金模式",
+                                    detail: "全部只收現金：在右邊的鍵盤打金額、按「收現金」就結帳，不用選付款方式、不找零。先掃載具，發票就開到載具；點了品項的單也是一按就收現金結帳。")
+            }
+            .disabled(!(model.takesPayment && model.role.hasDrawer))
+            if !(model.takesPayment && model.role.hasDrawer) {
+                Text("這台是「\(model.role.label)」，沒有錢櫃、不收現金，現金模式只在收銀台有用。")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+            } else if settings.cashMode {
+                Text("打的數字一律是金額（品號請用條碼機掃）；09 開頭 10 碼照樣是會員電話。換貨單照平常進結帳畫面。")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .panel(padding: 22)
     }
 
     /// 這台自己選的（後台還開著那個模式才算）；nil＝跟後台一樣
