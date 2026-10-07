@@ -66,6 +66,13 @@ struct PrinterConfig: Codable, Identifiable, Hashable {
     var stations: [String] = []
     /// 錢櫃接在這台
     var hasDrawer = false
+    /// 錢櫃怎麼開（指令、接腳、通電多久；DrawerKick）。nil＝預設的 ESC p 2 號腳 50 ms（以前存的設定沒有這一欄）
+    var drawerKick: DrawerKick?
+
+    var drawer: DrawerKick {
+        get { drawerKick ?? .standard }
+        set { drawerKick = newValue }
+    }
 }
 
 /// 印出來的東西（沒有出單機時在設定頁「最近列印」看得到；示範模式也是）
@@ -202,14 +209,20 @@ final class PrinterHub {
         }
     }
 
+    /// 開錢櫃：每一台「錢櫃接在這台」的出單機，照它的錢櫃設定送（DrawerKick：ESC p／DLE DC4／Star、接腳、通電多久）
     func openDrawer() {
-        let list = printers.filter(\.hasDrawer)
-        for p in list {
-            var e = ESCPOS()
-            e.openDrawer()
-            send(e.bytes, to: p, title: "開錢櫃", receipt: nil)
-        }
+        for p in printers.filter(\.hasDrawer) { kickDrawer(p) }
     }
+
+    /// 開這一台出單機上的錢櫃（設定頁的「試開錢櫃」也用這個）
+    func kickDrawer(_ p: PrinterConfig, title: String = "開錢櫃") {
+        var e = ESCPOS()
+        e.kick(p.drawer)
+        send(e.bytes, to: p, title: title, receipt: nil)
+    }
+
+    /// 有沒有設定錢櫃（收現金要開錢櫃，但沒有一台接錢櫃：設定頁提醒）
+    var hasDrawer: Bool { printers.contains(where: \.hasDrawer) }
 
     func test(_ p: PrinterConfig, store: StoreProfile) {
         var r = Receipt()

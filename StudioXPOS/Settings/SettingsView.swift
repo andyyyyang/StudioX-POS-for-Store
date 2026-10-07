@@ -1386,11 +1386,102 @@ private struct SettingsPrinterEditor: View {
 
     // MARK: 列印方式（PrintStyleSettings.swift）、錢櫃
 
+    /// 錢櫃：市面上的錢櫃都是插在出單機背面的 DK 埠，差在指令、接腳、通電多久（DrawerKick）
     private var drawerPanel: some View {
-        Toggle(isOn: $config.hasDrawer) {
-            SettingsToggleLabel(title: "錢櫃接在這台", detail: "收現金、開班、存入取出、只開錢櫃時打開")
+        VStack(alignment: .leading, spacing: 16) {
+            Toggle(isOn: $config.hasDrawer) {
+                SettingsToggleLabel(title: "錢櫃接在這台", detail: "收現金、開班、存入取出、只開錢櫃時打開")
+            }
+            if config.hasDrawer {
+                Rule(color: Theme.hair)
+                Text("錢櫃的線（RJ11／RJ12）插在出單機背面寫 DK、DRAWER 或畫著錢櫃的孔。錢櫃自己有網路控制盒的：新增一台出單機填它的 IP、上面「這台印什麼」都不勾、打開這個。")
+                    .textRole(.xs)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                drawerChoice("指令", options: DrawerKick.Command.allCases, selected: config.drawer.command, title: commandTitle, detail: commandDetail) {
+                    config.drawer.command = $0
+                }
+                drawerChoice("接腳", options: DrawerKick.Pin.allCases, selected: config.drawer.pin, title: pinTitle, detail: pinDetail) {
+                    config.drawer.pin = $0
+                }
+                if config.drawer.command != .star {
+                    drawerChoice("通電多久", options: DrawerKick.pulseChoices, selected: config.drawer.pulseMs, title: { "\($0) ms" }, detail: pulseDetail) {
+                        config.drawer.pulseMs = $0
+                    }
+                }
+                HStack(spacing: 12) {
+                    Button("試開錢櫃") { testDrawer() }
+                        .buttonStyle(.brand(.ghost, size: .md))
+                        .disabled(!canConnect)
+                    Text("開不了：先試「兩個都送」；Epson 可以試「即時指令」；開一半卡住的調長一點。錢櫃和出單機的電壓要一樣（大部分是 24V）。")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
         .panel(padding: 22)
+    }
+
+    private func drawerChoice<T: Hashable>(_ label: String, options: [T], selected: T, title: @escaping (T) -> String,
+                                           detail: @escaping (T) -> String?, pick: @escaping (T) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(label)
+                .font(.brand(13.5, .semibold))
+                .foregroundStyle(Theme.ink2)
+            FlowLayout(spacing: 8, rowSpacing: 8) {
+                ForEach(options, id: \.self) { o in
+                    OptionChip(title: title(o), detail: detail(o), selected: o == selected) { pick(o) }
+                }
+            }
+        }
+    }
+
+    private func commandTitle(_ c: DrawerKick.Command) -> String {
+        switch c {
+        case .escpos: "一般（ESC/POS）"
+        case .realtime: "即時指令"
+        case .star: "Star"
+        }
+    }
+
+    private func commandDetail(_ c: DrawerKick.Command) -> String? {
+        switch c {
+        case .escpos: "Epson、XPrinter、佳博、HPRT…大部分出單機"
+        case .realtime: "Epson TM：印到一半、缺紙也開得了"
+        case .star: "StarPRNT 模式（mPOP 這類）"
+        }
+    }
+
+    private func pinTitle(_ p: DrawerKick.Pin) -> String {
+        switch p {
+        case .pin2: "2 號腳"
+        case .pin5: "5 號腳"
+        case .both: "兩個都送"
+        }
+    }
+
+    private func pinDetail(_ p: DrawerKick.Pin) -> String? {
+        switch p {
+        case .pin2: "大部分錢櫃"
+        case .pin5: "第二個錢櫃"
+        case .both: "不知道接哪一腳"
+        }
+    }
+
+    private func pulseDetail(_ ms: Int) -> String? {
+        switch ms {
+        case 50: "預設"
+        case 100: "彈簧比較緊"
+        default: "還是開不了時"
+        }
+    }
+
+    private func testDrawer() {
+        var p = config
+        p.host = trimmedHost
+        printers.kickDrawer(p, title: "試開錢櫃")
+        model.show("已送出開錢櫃", tone: .neutral)
     }
 
     // MARK: 存
@@ -1636,6 +1727,12 @@ private struct SettingsReceiptsSection: View {
                 Rule(color: Theme.hair)
                 Toggle(isOn: $settings.openDrawerOnCash) {
                     SettingsToggleLabel(title: "收現金時開錢櫃", detail: "收現金、現金退款時自動打開")
+                }
+                if settings.openDrawerOnCash && !model.printers.hasDrawer {
+                    Text("還沒有出單機設定「錢櫃接在這台」：到「出單機」點接著錢櫃的那一台打開，才開得了錢櫃。")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.warningFG)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             .panel(padding: 22)
