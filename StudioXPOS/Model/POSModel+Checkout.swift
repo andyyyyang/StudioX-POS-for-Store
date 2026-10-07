@@ -54,6 +54,15 @@ extension POSModel {
             show("還沒有點東西", tone: .warning)
             return
         }
+        // 手機：和櫃台的 iPad 同一個 Wi-Fi 才能結帳；要印證明聯又沒有發票出單機（或金鑰）：先掃載具，不然到櫃台結
+        guard phoneOnStoreWiFi else {
+            show("和櫃台的 iPad 連同一個 Wi-Fi 才能結帳", tone: .info)
+            return
+        }
+        guard !needsCounterForInvoice(t0) else {
+            show("要印發票證明聯，這支手機印不了：先掃載具（或捐贈），不然這張請到櫃台結帳", tone: .warning)
+            return
+        }
         keypad.cancel()
         dropCouponBelowMinimum(t0)
         selectedTicketId = t0.id

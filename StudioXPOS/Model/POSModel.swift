@@ -795,7 +795,8 @@ final class LocalSettings {
         printKitchenForOthers = d.object(forKey: "printKitchenForOthers") as? Bool ?? true
         consoleURLString = d.string(forKey: "consoleURL") ?? "https://console.studiox.tw"
         openDrawerOnCash = d.object(forKey: "openDrawerOnCash") as? Bool ?? true
-        cashMode = d.object(forKey: "cashMode") as? Bool ?? false
+        // bool(forKey:)：啟動參數（-cashMode YES，截圖用）是字串也認得
+        cashMode = d.object(forKey: "cashMode") != nil && d.bool(forKey: "cashMode")
         serviceMode = d.string(forKey: "serviceMode") ?? ""
         workstation = d.string(forKey: "workstation") ?? ""
         queueSpeaks = d.object(forKey: "queueSpeaks") as? Bool ?? false

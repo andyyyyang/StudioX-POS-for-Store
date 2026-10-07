@@ -160,6 +160,23 @@ struct PhoneMoreView: View {
                         .foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if PhoneSettings.shared.takesPayment {
+                    @Bindable var settings = model.settings
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle(isOn: $settings.cashMode) {
+                            Text("現金模式")
+                                .font(.brand(15.5, .medium))
+                                .foregroundStyle(Theme.ink)
+                        }
+                        .tint(Theme.accent)
+                        Text(settings.cashMode
+                             ? "全部只收現金：點餐頁下面一直有鍵盤，打金額按「收現金」就結帳（錢收在自己的錢箱）。先掃載具，發票就開到載具；要印證明聯的請到櫃台。"
+                             : "打開：點餐頁下面一直有鍵盤，打金額按「收現金」就結帳，不用選付款方式。")
+                            .textRole(.xs)
+                            .foregroundStyle(Theme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Rule(color: Theme.hair)
             }
             if model.store.serviceModes.count > 1 && !model.role.isKitchen {

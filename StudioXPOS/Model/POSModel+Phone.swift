@@ -28,9 +28,10 @@ extension POSModel {
         role.takesPayment && (!isPhone || PhoneSettings.shared.takesPayment)
     }
 
-    /// 現金模式現在有沒有效：設定打開、而且這台是有錢櫃的收銀台 iPad（手機、點餐 iPad、接待照平常）
+    /// 現金模式現在有沒有效：設定打開、而且這台會收錢——有錢櫃的收銀台 iPad，或打開「這支手機也能收款」的手機
+    /// （手機沒有電子錢櫃：錢收在自己的錢箱；點餐頁下面常駐鍵盤 PhoneCashPad）。點餐 iPad、接待照平常
     var cashModeActive: Bool {
-        settings.cashMode && takesPayment && role.hasDrawer && !isPhone
+        settings.cashMode && takesPayment && (isPhone || role.hasDrawer)
     }
 
     /// 手機要和櫃台的 iPad（母裝置）在同一個 Wi-Fi 才能進結帳：區網連得到一台 iPad。
@@ -96,6 +97,7 @@ final class PhoneSettings {
     var takesPayment: Bool { didSet { d.set(takesPayment, forKey: "phoneTakesPayment") } }
 
     private init() {
-        takesPayment = d.object(forKey: "phoneTakesPayment") as? Bool ?? false
+        // bool(forKey:)：啟動參數（-phoneTakesPayment YES，截圖用）是字串也認得
+        takesPayment = d.object(forKey: "phoneTakesPayment") != nil && d.bool(forKey: "phoneTakesPayment")
     }
 }

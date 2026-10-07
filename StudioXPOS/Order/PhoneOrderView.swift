@@ -53,7 +53,8 @@ struct PhoneOrderView: View {
         // 卡片的字級（更多 → 這支手機）
         .environment(\.menuText, model.settings.menuText)
         .safeAreaInset(edge: .bottom, spacing: 0) { bottomStrip }
-        .dockSelection(model.selectedTicket == nil ? openPage : nil)
+        // 現金模式：下面是常駐的鍵盤，「開單」這種浮著的大鍵不放（會蓋到鍵盤）
+        .dockSelection(model.selectedTicket == nil && !model.cashModeActive ? openPage : nil)
         .dockPanel(isPresented: $opening, title: "開單", subtitle: openSubtitle) {
             openChoices
         }
@@ -316,14 +317,20 @@ struct PhoneOrderView: View {
             if model.selectedTicket == nil, let sale = model.lastSale, Date().timeIntervalSince(sale.closedAt) < 120 {
                 LastSaleStrip(sale: sale)
             }
-            HStack(spacing: 0) {
-                if model.selectedTicket != nil || ui.voice.isSupported {
-                    ticketBar(model.selectedTicket)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else {
-                    Spacer(minLength: 0)
+            if model.cashModeActive {
+                // 現金模式：鍵盤一直在下面（打金額 → 收現金）；單子從鍵盤上的「單子 3 項」打開
+                PhoneCashPad(openTicket: { openTicket() })
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                HStack(spacing: 0) {
+                    if model.selectedTicket != nil || ui.voice.isSupported {
+                        ticketBar(model.selectedTicket)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                    keypadButton
                 }
-                keypadButton
             }
         }
         .animation(Motion.spring, value: model.selectedTicketId)

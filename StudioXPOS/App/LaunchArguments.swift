@@ -19,6 +19,8 @@ import UIKit
 ///   -lockNow                             登入、開頁之後馬上鎖定（截鎖定畫面；配 -personal 是 Face ID 的那一種）
 ///   -scanDemo <碼>                       登入、開頁之後掃一次這個碼（POSModel.handleScan：WELCOME100、0912345678、/ABC+123…）；
 ///                                        點餐頁還沒有單時先選一張有點東西的單，手機再把單子打開（截「掃到之後」的樣子）
+///   -typeDigits <數字>                   登入、開頁之後在鍵盤上打這串數字（截「打了金額」的樣子：現金模式的「收現金 NT$120」）
+///   -cashMode YES、-phoneTakesPayment YES   現金模式、手機也能收款（UserDefaults 的參數網域）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -31,6 +33,8 @@ enum LaunchArguments {
 
     /// -scanDemo 只掃一次（鎖定後再登入不會再掃）
     static var scanDemoDone = false
+    /// -typeDigits 只打一次
+    static var typeDemoDone = false
 
     /// 截圖用：頁面出現時先選起第一筆（只在 Debug）。各頁在 .onAppear／.task 裡看這個
     static var preselect: Bool {
@@ -60,6 +64,14 @@ extension POSModel {
         if phase == .ready, !LaunchArguments.scanDemoDone, let code = LaunchArguments.value("-scanDemo") {
             LaunchArguments.scanDemoDone = true
             Task { await runScanDemo(code) }
+        }
+        // 鍵盤打一串數字的截圖（現金模式的「收現金 NT$120」）
+        if phase == .ready, !LaunchArguments.typeDemoDone, let digits = LaunchArguments.value("-typeDigits") {
+            LaunchArguments.typeDemoDone = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.2))
+                keypad.type(digits)
+            }
         }
         if phase == .ready, LaunchArguments.has("-lockNow") { lock() }
         #endif
