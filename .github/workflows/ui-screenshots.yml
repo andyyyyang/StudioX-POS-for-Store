@@ -346,7 +346,8 @@ jobs:
             cp prints/*.log docs/print-samples/ 2>/dev/null || true
           fi
           # 接在分支最新的那一筆後面、只提交截圖與列印圖（不用 rebase：圖檔衝突解不開；分支上新的程式也不會被蓋掉）
-          for i in 1 2 3; do
+          pushed=
+          for i in 1 2 3 4 5 6; do
             git fetch -q origin "$GITHUB_REF_NAME"
             git reset -q "origin/$GITHUB_REF_NAME"
             # 只加這一次真的重拍的（[phone-only] 時不會把舊的 iPad 截圖蓋回去）
@@ -355,6 +356,9 @@ jobs:
             ls prints/*/*.png >/dev/null 2>&1 && git add -A docs/print-samples
             if git diff --cached --quiet; then echo "沒有變更"; exit 0; fi
             git commit -q -m "UI 截圖（自動）[skip ci]"
-            git push origin "HEAD:$GITHUB_REF_NAME" && break
-            sleep 5
+            if git push origin "HEAD:$GITHUB_REF_NAME"; then pushed=1; break; fi
+            # GitHub 偶爾連回好幾次 500（Internal Server Error）：一次比一次等久（共約 5 分鐘）
+            sleep $((i * 15))
           done
+          # 推不回去不能當成功（以前三次都失敗也是綠的，截圖就這樣不見了）
+          [ -n "$pushed" ] || { echo "::error::截圖推不回分支；這次的截圖在 artifact「screenshots」"; exit 1; }
