@@ -249,6 +249,8 @@ jobs:
             "phone/09-cash-typed|-demo yellowgirl -autologin 1234 -section order -phoneTakesPayment YES -cashMode YES -typeDigits 120|14"
             # 往下滑把數字鍵收起來：只留打了多少與「收現金」，菜單看得多
             "phone/10-cash-collapsed|-demo yellowgirl -autologin 1234 -section order -phoneTakesPayment YES -cashMode YES -phoneCashPadCollapsed YES|14"
+            # 單上已經有品項又打了 120：大字是單上的＋120，下面「單子 N 項＋NT$120」
+            "phone/11-cash-ticket|-demo yellowgirl -autologin 1234 -section order -phoneTakesPayment YES -cashMode YES -preselect -typeDigits 120|14"
             # 用 StudioX 帳號登入的個人手機：鎖定畫面是 Face ID／手機密碼（不是 PIN、不能換人）
             "phone/07-personal-lock|-demo cafe -autologin 1234 -personal -lockNow"
             # 配對畫面（沒有示範）：最上面是「用 StudioX 帳號登入」，配對碼在下面

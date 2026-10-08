@@ -498,7 +498,8 @@ struct PhoneOrderView: View {
                 model.selectedTicketId = t.id
             }
         }
-        guard model.selectedTicket != nil else { return }
+        // 現金模式：單子留在下面那張卡上（「單子 3 項」），不打開
+        guard model.selectedTicket != nil, !model.cashModeActive else { return }
         try? await Task.sleep(for: .milliseconds(600))
         openTicket()
     }

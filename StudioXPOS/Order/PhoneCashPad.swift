@@ -10,8 +10,8 @@ import UIKit
 /// 上面的菜單照樣可以點：點了加到單子，按「收現金」一起收。
 ///
 /// 拖起來和系統的 sheet 一樣：卡跟著手指走、拉過頭有阻尼，放開照速度彈到兩個高度裡近的那一個——
-///   開著：打了多少、「收現金」、數字鍵
-///   收起來：只留打了多少與「收現金」（數字鍵滑到下面，畫面讓給菜單）
+///   開著：要收多少＋「收現金」一行、數字鍵
+///   收起來：只剩那一行（數字鍵滑到下面，畫面讓給菜單）；點橫條也會收起來／打開
 /// 只動位置不動版面（菜單不用每一格重排），收著還是開著記在這支手機。
 /// 不用系統的 sheet：它會蓋住下面的分頁，單子、加料、掃碼、印交易明細這些也都得改從它上面出
 struct PhoneCashPad: View {
@@ -95,7 +95,13 @@ struct PhoneCashPad: View {
     }
 }
 
-/// 卡本身：上面一條橫條、打了多少、「收現金」，下面數字鍵（收起來時移到畫面外，按不到、VoiceOver 也跳過）
+/// 卡本身：上面一條橫條，一行「要收多少」＋「收現金」，下面數字鍵
+/// （收起來時數字鍵移到畫面外，按不到、VoiceOver 也跳過；只剩那一行）
+///
+///   ───
+///   NT$600                [ 收現金 ]
+///   (單子 3 項＋NT$120 ⌃)
+///   [1] [2] [3] … [00] [0] [⌫]   ⌫ 按住＝全部清除
 private struct PhoneCashCard: View, Equatable {
     @Environment(POSModel.self) private var model
     @Environment(KeypadController.self) private var keypad
@@ -117,132 +123,157 @@ private struct PhoneCashCard: View, Equatable {
         let shape = UnevenRoundedRectangle(topLeadingRadius: 22, topTrailingRadius: 22, style: .continuous)
         VStack(spacing: Self.spacing) {
             header(digits)
-            confirmRow(digits)
             keys
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }, action: { travel = $0 + Self.spacing })
                 .allowsHitTesting(!collapsed)
                 .accessibilityHidden(collapsed)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 6)
+        .padding(.top, 2)
         .padding(.bottom, Self.spacing)
         .background {
-            // 往下多畫一截：往上拉過頭時底下不會露出縫
+            // 往下多畫一截：往上拉過頭時底下不會露出縫；深色時靠一條細線和菜單分開
             shape
                 .fill(Theme.dock)
+                .overlay { shape.stroke(Theme.line, lineWidth: 1) }
                 .shadow(color: .black.opacity(0.18), radius: 16, y: -2)
                 .padding(.bottom, -240)
         }
         .sensoryFeedback(.selection, trigger: keypad.keyTick)
     }
 
-    // MARK: 上面：橫條、打了多少
+    // MARK: 上面：橫條、要收多少、收現金
 
-    /// 收起來時點一下＝打開
     private func header(_ digits: String) -> some View {
-        VStack(spacing: 6) {
-            Capsule()
-                .fill(Theme.faint)
-                .frame(width: 36, height: 5)
-            display(digits)
+        VStack(spacing: 4) {
+            grabber
+            HStack(alignment: .center, spacing: 12) {
+                summary(digits)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    // 收起來時點這裡＝打開（和往上滑一樣）
+                    .contentShape(.rect)
+                    .onTapGesture {
+                        if collapsed { setCollapsed(false) }
+                    }
+                confirmButton(digits)
+            }
         }
-        .frame(maxWidth: .infinity)
-        .contentShape(.rect)
-        .onTapGesture {
-            if collapsed { setCollapsed(false) }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityAction(named: Text(collapsed ? "打開數字鍵" : "收起數字鍵")) { setCollapsed(!collapsed) }
+    }
+
+    /// 拖曳的橫條：點一下也會收起來／打開（和系統 sheet 的橫條一樣）
+    private var grabber: some View {
+        Capsule()
+            .fill(Theme.faint)
+            .frame(width: 36, height: 5)
+            .frame(maxWidth: .infinity, minHeight: 16)
+            .contentShape(.rect)
+            .onTapGesture { setCollapsed(!collapsed) }
+            .accessibilityElement()
+            .accessibilityLabel(collapsed ? "打開數字鍵" : "收起數字鍵")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { setCollapsed(!collapsed) }
     }
 
     private var ticket: Ticket? {
         model.selectedTicket.flatMap { $0.activeLines.isEmpty ? nil : $0 }
     }
 
-    private func display(_ digits: String) -> some View {
+    /// 打的是金額（現金模式打的數字一律是金額；09 開頭 10 碼照樣是會員）
+    private func typedAmount(_ digits: String) -> Money? {
+        guard !digits.isEmpty, case .amount(let price)? = TypedConfirm.classify(digits, catalog: model.catalog, matchesProducts: false) else { return nil }
+        return price
+    }
+
+    /// 左邊：大字是按下去會收多少（單上的＋打的），下面一行是單子（點開）或說明。高度固定：有沒有單子卡都不會跳
+    private func summary(_ digits: String) -> some View {
         let (title, hint) = describe(digits)
-        return HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.brand(30, .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(digits.isEmpty ? Theme.ink2 : Theme.ink)
-                    .contentTransition(.numericText())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.5)
-                Text(hint)
-                    .font(.brand(12.5, .regular))
-                    .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            Spacer(minLength: 8)
-            if let t = ticket {
-                Button(action: openTicket) {
-                    HStack(spacing: 4) {
-                        Text("單子 \(t.itemCount) 項")
-                        Image(systemName: "chevron.up").font(.system(size: 12, weight: .semibold))
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.brand(30, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(digits.isEmpty && ticket == nil ? Theme.ink2 : Theme.ink)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+                .frame(height: 36, alignment: .leading)
+            Group {
+                if let t = ticket {
+                    Button(action: openTicket) {
+                        HStack(spacing: 4) {
+                            Text(ticketChip(t, digits))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Image(systemName: "chevron.up").font(.system(size: 11, weight: .semibold))
+                        }
+                        .font(.brand(13, .medium))
+                        .foregroundStyle(Theme.ink)
+                        .padding(.horizontal, 10)
+                        .frame(height: 26)
+                        .background(Theme.surface, in: .capsule)
+                        .overlay { Capsule().strokeBorder(Theme.line) }
                     }
-                    .font(.brand(14, .medium))
-                    .foregroundStyle(Theme.ink)
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
-                    .background(Theme.surface, in: .capsule)
-                    .overlay { Capsule().strokeBorder(Theme.line) }
+                    .buttonStyle(PressScale(scale: 0.96))
+                    .accessibilityLabel("看單子，\(t.itemCount) 項")
+                } else {
+                    Text(hint)
+                        .font(.brand(12.5, .regular))
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
-                .buttonStyle(PressScale(scale: 0.96))
-                .accessibilityLabel("看單子，\(t.itemCount) 項")
             }
+            .frame(height: 26, alignment: .leading)
         }
-        .padding(.horizontal, 4)
         .animation(Motion.fast, value: digits)
     }
 
+    /// 大字與說明：大字一律是按「收現金」會收的（單上有東西就是單上的＋打的）
     private func describe(_ digits: String) -> (String, String) {
+        let balance = ticket?.totals.balance ?? .zero
+        if let price = typedAmount(digits) {
+            return ((balance + price).formatted, model.describeTyped(digits).hint)
+        }
         if !digits.isEmpty { return model.describeTyped(digits) }
+        if let t = ticket { return (t.totals.balance.formatted, "") }
         let carrier = model.pendingCarrier.flatMap { $0.isFresh ? $0.carrier.id : nil }
         if collapsed {
-            if let t = ticket { return (t.totals.balance.formatted, "按「收現金」結帳・往上滑打開數字鍵") }
-            if let c = carrier { return ("NT$0", "往上滑打開數字鍵打金額・發票開到載具 \(c)") }
-            return ("NT$0", "點上面的品項，或往上滑打開數字鍵打金額")
+            if let c = carrier { return ("NT$0", "往上滑打金額・發票開到載具 \(c)") }
+            return ("NT$0", "往上滑打金額，或點上面的品項")
         }
-        if let t = ticket { return (t.totals.balance.formatted, "單上的品項：按「收現金」結帳；也可以再打金額一起收") }
-        if let c = carrier { return ("NT$0", "打金額按「收現金」・發票開到載具 \(c)") }
-        return ("NT$0", "打金額，按「收現金」就結帳；先掃載具就開到載具")
+        if let c = carrier { return ("NT$0", "打金額收現金・發票開到載具 \(c)") }
+        return ("NT$0", "打金額收現金；先掃載具就開到載具")
     }
 
-    // MARK: 大鍵（在數字鍵上面：收起來也按得到）
-
-    private func confirmRow(_ digits: String) -> some View {
-        HStack(spacing: 8) {
-            Button {
-                keypad.clearIdle()
-            } label: {
-                Text("C")
-                    .font(.brand(20, .medium))
-                    .foregroundStyle(Theme.muted)
-                    .frame(width: 64, height: BrandButtonStyle.Size.lg.height)
-            }
-            .buttonStyle(KeyStyle())
-            .disabled(digits.isEmpty)
-            .accessibilityLabel("清除")
-            Button {
-                confirm(digits)
-            } label: {
-                Text(confirmTitle(digits))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.brand(.accent, size: .lg, fullWidth: true))
-            .disabled(!canConfirm(digits))
-        }
+    /// 「單子 3 項」；又打了金額：「單子 3 項＋NT$120」
+    private func ticketChip(_ t: Ticket, _ digits: String) -> String {
+        if let price = typedAmount(digits) { return "單子 \(t.itemCount) 項＋\(price.formatted)" }
+        return "單子 \(t.itemCount) 項"
     }
 
+    // MARK: 收現金（在金額旁邊：收起來也按得到）
+
+    private func confirmButton(_ digits: String) -> some View {
+        let enabled = canConfirm(digits)
+        return Button {
+            confirm(digits)
+        } label: {
+            Text(confirmTitle(digits))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+        }
+        // 還不能按：細框（不是半透明的橘，看起來像壞掉）
+        .buttonStyle(.brand(enabled ? .accent : .ghost, size: .lg, fullWidth: true))
+        .frame(width: 148)
+        .disabled(!enabled)
+        .accessibilityLabel(enabled ? "\(confirmTitle(digits))，\(describe(digits).0)" : confirmTitle(digits))
+    }
+
+    /// 金額已經寫在左邊大字：鍵上只寫做什麼（09 開頭的會員電話是「查會員」）
     private func confirmTitle(_ digits: String) -> String {
-        if !digits.isEmpty { return model.typedConfirmTitle(digits) }
-        if let t = ticket { return "收現金 \(t.totals.balance.formatted)" }
-        return "收現金"
+        guard !digits.isEmpty else { return "收現金" }
+        let title = model.typedConfirmTitle(digits)
+        return title.hasPrefix("收現金") ? "收現金" : title
     }
 
     private func canConfirm(_ digits: String) -> Bool {
@@ -277,8 +308,9 @@ private struct PhoneCashCard: View, Equatable {
         }
     }
 
+    @ViewBuilder
     private func key(_ k: KeypadKey) -> some View {
-        Button {
+        let button = Button {
             keypad.press(k)
         } label: {
             Group {
@@ -293,6 +325,14 @@ private struct PhoneCashCard: View, Equatable {
         }
         .buttonStyle(KeyStyle())
         .accessibilityLabel(label(k))
+        if k == .backspace {
+            // 按住＝全部清除（不另外放 C：收現金的鍵才放得寬）
+            button
+                .simultaneousGesture(LongPressGesture(minimumDuration: 0.45).onEnded { _ in keypad.clearIdle() })
+                .accessibilityAction(named: Text("全部清除")) { keypad.clearIdle() }
+        } else {
+            button
+        }
     }
 
     private func label(_ k: KeypadKey) -> String {
@@ -300,7 +340,7 @@ private struct PhoneCashCard: View, Equatable {
         case .digit(let n): "\(n)"
         case .doubleZero: "兩個零"
         case .clear: "清除"
-        case .backspace: "刪除"
+        case .backspace: "刪除，按住全部清除"
         }
     }
 }
