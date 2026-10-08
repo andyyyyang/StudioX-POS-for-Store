@@ -23,6 +23,7 @@ import UIKit
 ///   -cashMode YES、-phoneTakesPayment YES   現金模式、手機也能收款（UserDefaults 的參數網域）
 ///   -phoneCashPadCollapsed YES          手機現金模式的數字鍵收起來（往下滑之後的樣子）
 ///   -checkInTab classes                  報到頁直接看課表（健身）
+///   -checkout                            登入、開頁之後選一張有點東西的單、打開結帳畫面（截付款的樣子）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -37,6 +38,8 @@ enum LaunchArguments {
     static var scanDemoDone = false
     /// -typeDigits 只打一次
     static var typeDemoDone = false
+    /// -checkout 只開一次
+    static var checkoutDemoDone = false
 
     /// 截圖用：頁面出現時先選起第一筆（只在 Debug）。各頁在 .onAppear／.task 裡看這個
     static var preselect: Bool {
@@ -73,6 +76,17 @@ extension POSModel {
             Task {
                 try? await Task.sleep(for: .seconds(1.2))
                 keypad.type(digits)
+            }
+        }
+        // 結帳畫面的截圖：小計最大、還沒送去結帳的那張單
+        if phase == .ready, !LaunchArguments.checkoutDemoDone, LaunchArguments.has("-checkout") {
+            LaunchArguments.checkoutDemoDone = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.2))
+                let open = state.openTickets.filter { !$0.activeLines.isEmpty }
+                guard let t = open.max(by: { $0.totals.subtotal < $1.totals.subtotal }) else { return }
+                selectedTicketId = t.id
+                beginCheckout(t)
             }
         }
         if phase == .ready, LaunchArguments.has("-lockNow") { lock() }
