@@ -210,7 +210,8 @@ struct MembersView: View {
         MembersMemory.remember(f, store: memoryKey)
         if f != nil {
             releaseKeypad()
-        } else if model.checkoutTicketId == nil, !keypad.isAsking {
+        } else if model.checkoutTicketId == nil, !keypad.isAsking, !model.isPhone {
+            // 手機的鍵盤是蓋住名單的 sheet：關掉一位不自動叫出來（要查按下面的「查會員」）
             armToken += 1
         }
     }
@@ -241,7 +242,8 @@ struct MembersView: View {
     /// 右側鍵盤等電話（沒選人的時候）：打完就打開那一位，右欄換成他的動作。
     /// 按 × 或去做別的就停；右欄的「查會員」、或取消選取，再叫出來
     private func searchLoop() async {
-        guard focus == nil, !Task.isCancelled else { return }
+        // 手機：打開會員頁先看名單（今天預約、來過、最近查過），按「查會員」才叫出鍵盤
+        guard focus == nil, !Task.isCancelled, !(model.isPhone && armToken == 0) else { return }
         guard let entry = await keypad.ask(POSModel.memberSearchSpec) else { return }
         select(MembersFocus(phone: entry.digits, ref: nil))
     }

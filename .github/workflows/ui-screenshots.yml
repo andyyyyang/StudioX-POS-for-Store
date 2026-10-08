@@ -227,7 +227,7 @@ jobs:
       # 店員手上的點餐機：iPhone 直的（同一個模擬器版本的 App：裝置家族有 iPhone）。上面選、下面做；結帳在結帳櫃台
       - name: 截圖（iPhone）
         if: env.IPHONE != ''
-        timeout-minutes: 15
+        timeout-minutes: 35
         continue-on-error: true
         run: |
           app="build/Build/Products/Debug-iphonesimulator/StudioXPOS.app"
