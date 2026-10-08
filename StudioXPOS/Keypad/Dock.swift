@@ -300,7 +300,8 @@ struct DockActionKeys: View {
         let ordered = actions.filter { !$0.isDestructive } + actions.filter(\.isDestructive)
         if !ordered.isEmpty {
             let rows = stride(from: 0, to: ordered.count, by: 2).map { Array(ordered[$0 ..< min($0 + 2, ordered.count)]) }
-            // 兩欄一樣寬；落單的那一顆照樣半欄寬，旁邊空著
+            // 兩欄一樣寬；三顆以上時落單的那一顆照樣半欄寬，旁邊空著。整頁只有一顆就佔滿整排（直的 iPad 右欄窄，
+            // 半欄放不下「現場客（直接開單）」會斷成兩行）
             // （以前用 Grid＋不佔大小的空格：整頁只有一顆動作鍵時那一欄縮成只剩圖示，例如設定的「重新抓設定」）
             VStack(spacing: 8) {
                 ForEach(rows.indices, id: \.self) { r in
@@ -308,7 +309,7 @@ struct DockActionKeys: View {
                         ForEach(rows[r].indices, id: \.self) { i in
                             key(rows[r][i])
                         }
-                        if rows[r].count == 1 {
+                        if rows[r].count == 1 && ordered.count > 1 {
                             Color.clear
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 1)

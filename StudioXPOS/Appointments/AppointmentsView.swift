@@ -38,6 +38,8 @@ struct AppointmentsView: View {
     @State private var form: ApptFormRequest?
     @State private var confirming: ApptStatusRequest?
     @State private var cardSize = CGSize(width: 300, height: 360)
+    /// 表左右捲到哪（欄多、直的 iPad 放不下時）：旁邊的卡片放在看得到的那一邊
+    @State private var hScroll: CGFloat = 0
     /// 點了空格：先標出來（右欄大鍵「新增預約」才開面板，避免點掉卡片時誤開）
     @State private var pending: ApptSlot?
     /// 正在拖的預約
@@ -460,8 +462,10 @@ struct AppointmentsView: View {
         let range = hours(list)
         let colW = max(170, (size.width - Self.gutter) / CGFloat(max(cols.count, 1)))
         let contentW = Self.gutter + colW * CGFloat(cols.count)
-        let geometry = ApptGeometry(columns: cols, colW: colW, range: range, contentWidth: contentW)
-        return ApptHScroll(enabled: contentW > size.width + 1) {
+        let scrolls = contentW > size.width + 1
+        let geometry = ApptGeometry(columns: cols, colW: colW, range: range, contentWidth: contentW,
+                                    visibleMinX: scrolls ? hScroll : 0, visibleWidth: size.width)
+        return ApptHScroll(enabled: scrolls, offset: $hScroll) {
             VStack(spacing: 0) {
                 staffHeader(geometry, list: list)
                     .frame(width: contentW, height: Self.headerHeight)
@@ -1118,13 +1122,16 @@ struct AppointmentsView: View {
         let w = cardSize.width
         let h = cardSize.height
         let gap: CGFloat = 12
+        // 看得到的那一段（表比畫面寬、左右捲過的時候不是整張）：右邊放得下放右邊，不然左邊，都不行就蓋在上面
+        let lo = max(Self.gutter, g.visibleMinX)
+        let hi = min(g.contentWidth, g.visibleMinX + g.visibleWidth)
         let x: CGFloat
-        if p.rect.maxX + gap + w <= g.contentWidth {
+        if p.rect.maxX + gap + w <= hi {
             x = p.rect.maxX + gap + w / 2
-        } else if p.rect.minX - gap - w >= Self.gutter {
+        } else if p.rect.minX - gap - w >= lo {
             x = p.rect.minX - gap - w / 2
         } else {
-            x = min(max(p.rect.midX, Self.gutter + w / 2), max(g.contentWidth - w / 2, Self.gutter + w / 2))
+            x = min(max(p.rect.midX, lo + w / 2), max(hi - w / 2, lo + w / 2))
         }
         let top = min(max(p.rect.minY, 6), max(height - h - 6, 6))
         let stylist = model.staffMember(p.reservation.staffId)
@@ -1307,6 +1314,9 @@ private struct ApptGeometry {
     let colW: CGFloat
     let range: ApptHours
     let contentWidth: CGFloat
+    /// 畫面上看得到的那一段（表的座標）
+    let visibleMinX: CGFloat
+    let visibleWidth: CGFloat
 }
 
 private struct ApptPlaced: Identifiable {
@@ -1424,10 +1434,13 @@ private enum ApptText {
 /// 太寬才橫向捲（捲軸放在外面會吃掉裡面直向的捲動，所以不需要時不包）
 private struct ApptHScroll<Content: View>: View {
     let enabled: Bool
+    /// 捲到哪：停下來才更新（邊捲邊更新的話整張表每一格都跟著重畫）
+    @Binding var offset: CGFloat
     let content: Content
 
-    init(enabled: Bool, @ViewBuilder content: () -> Content) {
+    init(enabled: Bool, offset: Binding<CGFloat>, @ViewBuilder content: () -> Content) {
         self.enabled = enabled
+        self._offset = offset
         self.content = content()
     }
 
@@ -1435,6 +1448,9 @@ private struct ApptHScroll<Content: View>: View {
         if enabled {
             ScrollView(.horizontal) { content }
                 .scrollIndicators(.visible)
+                .onScrollPhaseChange { _, phase, context in
+                    if phase == .idle { offset = context.geometry.contentOffset.x }
+                }
         } else {
             content
         }

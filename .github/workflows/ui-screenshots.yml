@@ -162,8 +162,13 @@ jobs:
           open -a Simulator --args -CurrentDeviceUDID "$dev" || true
           sleep 20
           # 轉成功就記下來：截圖是照直的畫面存的，縮圖時要轉回來
-          if limit 20 osascript -e 'tell application "Simulator" to activate' -e 'delay 1' \
-            -e 'tell application "System Events" to key code 123 using {command down}'; then touch shots/.rotated; else echo "   轉不了，照直的截"; fi
+          # 模擬器開機很慢（資料遷移跑了五分鐘）的時候 Simulator 視窗還沒好、第一次轉不了：隔 15 秒再試，最多四次
+          for i in 1 2 3 4; do
+            if limit 20 osascript -e 'tell application "Simulator" to activate' -e 'delay 1' \
+              -e 'tell application "System Events" to key code 123 using {command down}'; then touch shots/.rotated; break; fi
+            echo "   第 $i 次轉不了"; sleep 15
+          done
+          [ -f shots/.rotated ] || echo "   轉不了，照直的截"
           sleep 4
           shoot() {  # 一張：名稱|啟動參數|等幾秒 → shots/<資料夾>/<名稱>.png
             local dir="$1" scene="$2"
@@ -173,7 +178,12 @@ jobs:
             # 每張都重新安裝：示範模式的資料、這台的設定都從乾淨的開始
             limit 30 xcrun simctl uninstall "$dev" "$bundle" 2>/dev/null || true
             limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
-            limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || echo "   啟動逾時"
+            # 開機後第一次啟動偶爾卡住（截到的是主畫面）：逾時就關掉再開一次
+            limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || {
+              echo "   啟動逾時：再開一次"
+              limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
+              limit 60 xcrun simctl launch "$dev" "$bundle" $args >/dev/null || echo "   又逾時"
+            }
             sleep "${wait:-7}"
             limit 30 xcrun simctl io "$dev" screenshot "shots/$dir$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
           }
