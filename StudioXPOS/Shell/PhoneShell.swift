@@ -80,10 +80,10 @@ struct PhoneShell: View {
 
     @ViewBuilder
     private var page: some View {
-        if let t = model.checkoutTicket, t.isOpen, [.order, .floor, .orders].contains(model.section) {
-            // 這支手機也能收款：結帳畫面（刷卡、電子支付）。從左邊邊往右滑＝回到點餐（已經收的款照樣在單子上）
+        if let t = model.checkoutTicket, t.isOpen, Self.checkoutSections.contains(model.section) {
+            // 這支手機也能收款：結帳畫面（刷卡、電子支付）。從左邊邊往右滑＝回到原本那一頁（已經收的款照樣在單子上）
             PaymentView(ticketId: t.id)
-                .swipeBack(model.section == .orders ? "訂單" : (model.section == .floor ? "桌位" : "點餐")) {
+                .swipeBack(model.section.label) {
                     model.cancelCheckout()
                 }
         } else {
@@ -92,10 +92,14 @@ struct PhoneShell: View {
             case .floor: PhoneFloorList()
             case .orders: PhoneOrdersList()
             case .kitchen: KitchenView()
-            case .queue: QueueView()
-            case .members:
-                PhoneSubpage(back: "更多", onBack: { model.go(.settings) }) {
-                    MembersView()
+            case .queue, .appointments, .checkIn, .reservations, .members:
+                // 在下面那一排的直接是一頁；收在「更多」裡的上面多一個「‹ 更多」
+                if model.phoneTabs.contains(model.section) {
+                    sectionPage(model.section)
+                } else {
+                    PhoneSubpage(back: "更多", onBack: { model.go(.settings) }) {
+                        sectionPage(model.section)
+                    }
                 }
             default:
                 if ui.printersOpen {
@@ -115,7 +119,22 @@ struct PhoneShell: View {
         }
     }
 
-    /// 手機沒有的頁（預約表、報到、訂位、報表…）：回到這台的首頁
+    /// 從這幾頁按「結帳」（這支手機也能收款）：結帳畫面蓋住這一頁
+    private static let checkoutSections: Set<AppSection> = [.order, .floor, .orders, .appointments, .checkIn, .reservations, .members]
+
+    /// 叫號、預約、報到、訂位、會員：和 iPad 同一份畫面，手機的排法在各自裡面（model.isPhone）
+    @ViewBuilder
+    private func sectionPage(_ s: AppSection) -> some View {
+        switch s {
+        case .queue: QueueView()
+        case .appointments: AppointmentsView()
+        case .checkIn: CheckInView()
+        case .reservations: ReservationsView()
+        default: MembersView()
+        }
+    }
+
+    /// 手機沒有的頁（報表、交班…）：回到這台的首頁
     private func normalizeSection() {
         let s = model.section
         guard !model.phoneTabs.contains(s), !model.phoneMoreSections.contains(s) else { return }
@@ -573,6 +592,9 @@ private struct PhoneTabBar: View {
         case .orders: model.awaitingCheckoutCount
         case .kitchen: model.state.openTickets.reduce(0) { $0 + $1.lines.filter { $0.isActive && ($0.kitchen == .sent || $0.kitchen == .preparing) }.count }
         case .queue: model.queue.state?.waiting.count ?? 0
+        // 和 iPad 的側欄一樣：已到店、等著開始的預約；現場候位
+        case .appointments: model.reservations.filter { $0.kind == .appointment && $0.status == .arrived }.count
+        case .reservations: model.reservations.filter { $0.kind == .waitlist && $0.status.isActive }.count
         default: 0
         }
     }

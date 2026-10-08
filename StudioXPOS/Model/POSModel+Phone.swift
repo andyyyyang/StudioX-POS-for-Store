@@ -68,15 +68,31 @@ extension POSModel {
 
     // MARK: 手機下面那一排
 
-    /// 手機的分頁（照這台看得到的頁）：點餐、桌位、訂單、叫號；後廚、出餐口的手機是廚房、訂單。最後一格固定是「更多」。
-    /// 叫號照 visibleSections：前場點餐（.handheld）的崗位要看得到 .queue，手機才有這一格
-    var phoneTabs: [AppSection] {
-        [.order, .floor, .kitchen, .orders, .queue].filter { visibleSections.contains($0) }
+    /// 手機下面一排最多幾格（再加固定的「更多」）
+    static let phoneTabLimit = 4
+
+    /// 手機做生意的頁，照常用的排（照 visibleSections：前場點餐 .handheld 的崗位看得到的才有）
+    private var phonePages: [AppSection] {
+        [.order, .floor, .checkIn, .appointments, .kitchen, .orders, .queue, .reservations].filter { visibleSections.contains($0) }
     }
 
-    /// 收在「更多」裡的頁（會員、這支手機的設定）
+    /// 手機的分頁，最多四格（最後一格固定是「更多」），放不下的收進「更多」：
+    ///   餐廳：點餐、桌位、訂單、叫號（訂位在更多）　美業：點餐、預約、訂單　健身：點餐、報到、預約、訂單
+    ///   夜市外帶：點餐、訂單、叫號　後廚、出餐口：廚房、訂單（叫號）
+    /// 這台的首頁（美業的預約、健身的報到…）一定在這一排
+    var phoneTabs: [AppSection] {
+        let pages = phonePages
+        var tabs = Array(pages.prefix(Self.phoneTabLimit))
+        if pages.contains(home), !tabs.contains(home), let last = tabs.indices.last {
+            tabs[last] = home
+        }
+        return tabs
+    }
+
+    /// 收在「更多」裡的頁：下面放不下的（餐廳的訂位）、會員、這支手機的設定
     var phoneMoreSections: [AppSection] {
-        [.members, .settings].filter { visibleSections.contains($0) }
+        let tabs = phoneTabs
+        return phonePages.filter { !tabs.contains($0) } + [.members, .settings].filter { visibleSections.contains($0) }
     }
 
     /// 手機登入後先看哪一頁：照崗位與營業模式（和 iPad 一樣），手機沒有的頁（預約、報到…）就看點餐

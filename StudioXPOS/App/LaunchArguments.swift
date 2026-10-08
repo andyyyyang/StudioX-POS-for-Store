@@ -22,6 +22,7 @@ import UIKit
 ///   -typeDigits <數字>                   登入、開頁之後在鍵盤上打這串數字（截「打了金額」的樣子：現金模式的「收現金 NT$120」）
 ///   -cashMode YES、-phoneTakesPayment YES   現金模式、手機也能收款（UserDefaults 的參數網域）
 ///   -phoneCashPadCollapsed YES          手機現金模式的數字鍵收起來（往下滑之後的樣子）
+///   -checkInTab classes                  報到頁直接看課表（健身）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments

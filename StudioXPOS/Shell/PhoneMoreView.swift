@@ -34,8 +34,16 @@ struct PhoneMoreView: View {
             VStack(alignment: .leading, spacing: 20) {
                 PageTitle(title: "This *phone*", subtitle: "更多")
                 whoPanel
-                if model.phoneMoreSections.contains(.members) {
-                    membersRow
+                // 下面那一排放不下的頁（餐廳的訂位）、會員
+                let pages = model.phoneMoreSections.filter { $0 != .settings }
+                if !pages.isEmpty {
+                    VStack(spacing: 0) {
+                        ForEach(Array(pages.enumerated()), id: \.element) { i, s in
+                            if i > 0 { Rule().padding(.leading, 50) }
+                            sectionRow(s)
+                        }
+                    }
+                    .panel(padding: 0)
                 }
                 phonePanel
                 Text("StudioX POS \(Bundle.main.appVersion)")
@@ -110,24 +118,35 @@ struct PhoneMoreView: View {
         .panel(padding: 18)
     }
 
-    // MARK: 會員
+    // MARK: 收在這裡的頁
 
-    private var membersRow: some View {
-        Button {
-            model.go(.members)
+    private func sectionRow(_ s: AppSection) -> some View {
+        let (title, detail) = Self.rowText(s)
+        let badge = s == .reservations ? model.reservations.filter { $0.kind == .waitlist && $0.status.isActive }.count : 0
+        return Button {
+            model.go(s)
         } label: {
             HStack(spacing: 12) {
-                HeroIcon("user-group", size: 20)
+                HeroIcon(s.icon, size: 20)
                     .foregroundStyle(Theme.ink2)
+                    .frame(width: 20)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("查會員")
+                    Text(title)
                         .font(.brand(16, .medium))
                         .foregroundStyle(Theme.ink)
-                    Text("打電話查儲值金、課程卡、上次來做了什麼")
+                    Text(detail)
                         .textRole(.xs)
                         .foregroundStyle(Theme.muted)
                 }
                 Spacer(minLength: 8)
+                if badge > 0 {
+                    Text("候位 \(badge)")
+                        .font(.brand(12, .semibold))
+                        .foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(Theme.accent, in: .capsule)
+                }
                 HeroIcon("chevron-right", size: 14)
                     .foregroundStyle(Theme.muted)
             }
@@ -136,7 +155,19 @@ struct PhoneMoreView: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .panel(padding: 0)
+        .accessibilityLabel(badge > 0 ? "\(title)，候位 \(badge) 組" : title)
+    }
+
+    private static func rowText(_ s: AppSection) -> (String, String) {
+        switch s {
+        case .members: ("查會員", "打電話查儲值金、課程卡、上次來做了什麼")
+        case .reservations: ("訂位與候位", "今天的訂位、現場抽號碼候位、入座")
+        case .appointments: ("預約表", "今天的預約、報到、開單")
+        case .checkIn: ("報到", "會員入場、課表與簽到")
+        case .queue: ("叫號", "叫下一號、現場候位")
+        case .orders: ("訂單", "進行中、待結帳的單")
+        default: (s.label, "")
+        }
     }
 
     // MARK: 這支手機

@@ -251,6 +251,20 @@ jobs:
             "phone/10-cash-collapsed|-demo yellowgirl -autologin 1234 -section order -phoneTakesPayment YES -cashMode YES -phoneCashPadCollapsed YES|14"
             # 單上已經有品項又打了 120：大字是單上的＋120，下面「單子 N 項＋NT$120」
             "phone/11-cash-ticket|-demo yellowgirl -autologin 1234 -section order -phoneTakesPayment YES -cashMode YES -preselect -typeDigits 120|14"
+            # 各種店的手機（前場的店員拿著走）：服飾、美業、健身、餐廳的訂位、更多
+            "phone/12-more|$P -section settings|8"
+            "phone/20-apparel-order|-demo apparel -autologin 1234 -section order|16"
+            "phone/21-apparel-ticket|-demo apparel -autologin 1234 -section order -preselect|10"
+            "phone/30-salon-appointments|-demo salon -autologin 1234 -section appointments|14"
+            "phone/31-salon-appointment-selected|-demo salon -autologin 1234 -section appointments -preselect|14"
+            "phone/32-salon-order|-demo salon -autologin 1234 -section order|14"
+            "phone/33-salon-members|-demo salon -autologin 1234 -section members|10"
+            "phone/40-fitness-checkin|-demo fitness -autologin 1234 -section checkIn|12"
+            "phone/41-fitness-checkin-member|-demo fitness -autologin 1234 -section checkIn -preselect|12"
+            "phone/42-fitness-classes|-demo fitness -autologin 1234 -section checkIn -checkInTab classes -preselect|12"
+            "phone/43-fitness-order|-demo fitness -autologin 1234 -section order|14"
+            "phone/50-cafe-reservations|$P -section reservations|10"
+            "phone/51-cafe-reservation-selected|$P -section reservations -preselect|10"
             # 用 StudioX 帳號登入的個人手機：鎖定畫面是 Face ID／手機密碼（不是 PIN、不能換人）
             "phone/07-personal-lock|-demo cafe -autologin 1234 -personal -lockNow"
             # 配對畫面（沒有示範）：最上面是「用 StudioX 帳號登入」，配對碼在下面

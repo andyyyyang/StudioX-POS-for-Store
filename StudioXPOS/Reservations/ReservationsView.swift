@@ -20,9 +20,14 @@ import SwiftUI
 /// 沒選東西時右欄是這一頁的動作：新增訂位、新增候位、重新整理。
 /// 資料在後台（網站、電話訂的也在這裡）：進來先抓一次、之後每分鐘更新。
 /// 新增、編輯是從右邊滑出來的表單（人數、電話用右側鍵盤打；儲存是右欄的大鍵）。
+///
+/// 手機（model.isPhone）：上面「訂位 3｜候位 2」切換，一次看一邊；動作是下面那張卡（同一份），
+/// 沒選東西時下面的大鍵是「新增訂位」或「新增候位」（看在哪一邊），表單蓋滿整頁
 struct ReservationsView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 手機：看訂位還是候位
+    @State private var phoneTab: ResvPhoneTab = .bookings
 
     @State private var form: ResvFormRequest?
     @State private var seating: Reservation?
@@ -34,15 +39,23 @@ struct ReservationsView: View {
     @State private var loading = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: model.isPhone ? 12 : 20) {
             header
+            if model.isPhone { phoneSwitch }
             // 每 30 秒重畫：快到了、晚了、等了幾分鐘
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                columns(now: ctx.date)
+                if model.isPhone {
+                    switch phoneTab {
+                    case .bookings: bookings(now: ctx.date)
+                    case .waitlist: waitlist(now: ctx.date)
+                    }
+                } else {
+                    columns(now: ctx.date)
+                }
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 22)
+        .padding(.horizontal, model.isPhone ? 16 : 28)
+        .padding(.top, model.isPhone ? 8 : 22)
         // 選起來的那一筆剛入座：事情做完了，動作列跟著收起來（點已入座的那筆不算）
         .onChange(of: ResvSelectionKey(id: selectedId, status: selected?.status)) { old, new in
             if old.id == new.id && old.status != .seated && new.status == .seated { select(nil) }
@@ -94,6 +107,10 @@ struct ReservationsView: View {
         await reload()
         // 截圖：先選下一筆訂位
         if LaunchArguments.preselect { selectedId = (todaysBookings.first { $0.status.isActive && $0.startsAt > Date().addingTimeInterval(-30 * 60) } ?? todaysBookings.first)?.id }
+        // 手機：今天沒有訂位、有人在候位就先看候位
+        if model.isPhone, todaysBookings.allSatisfy({ !$0.status.isActive }), model.reservations.contains(where: { $0.kind == .waitlist && $0.status.isActive }) {
+            phoneTab = .waitlist
+        }
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(60))
             await reload()
@@ -179,11 +196,34 @@ struct ReservationsView: View {
     }
 
     private var pageDock: DockSelection {
-        DockSelection.page("reservations", actions: [
-            POSAction("新增訂位", icon: "calendar-days") { openForm(.reservation) },
-            POSAction("新增候位", icon: "user-group") { openForm(.waitlist) },
-            POSAction(loading ? "更新中…" : "重新整理", icon: "arrow-path", enabled: !loading) { Task { await reload() } },
-        ])
+        let book = POSAction("新增訂位", icon: "calendar-days") { openForm(.reservation) }
+        let queue = POSAction("新增候位", icon: "user-group") { openForm(.waitlist) }
+        let refresh = POSAction(loading ? "更新中…" : "重新整理", icon: "arrow-path", enabled: !loading) { Task { await reload() } }
+        // 手機：下面浮著的大鍵是看的那一邊要新增的，其他收進「⋯」
+        if model.isPhone {
+            return phoneTab == .bookings
+                ? DockSelection.page("reservations", primary: book, accent: false, actions: [queue, refresh])
+                : DockSelection.page("reservations", primary: queue, accent: false, actions: [book, refresh])
+        }
+        return DockSelection.page("reservations", actions: [book, queue, refresh])
+    }
+
+    // MARK: - 手機：訂位｜候位
+
+    private var phoneSwitch: some View {
+        let bookings = todaysBookings.filter { $0.status.isActive }.count
+        let waiting = model.reservations.filter { $0.kind == .waitlist && $0.status.isActive }.count
+        return Picker("看哪一邊", selection: Binding(get: { phoneTab }, set: { tab in
+            model.touch()
+            withAnimation(anim) {
+                phoneTab = tab
+                selectedId = nil
+            }
+        })) {
+            Text("訂位 \(bookings)").tag(ResvPhoneTab.bookings)
+            Text("候位 \(waiting)").tag(ResvPhoneTab.waitlist)
+        }
+        .pickerStyle(.segmented)
     }
 
     /// 大鍵「入座」（打開選桌面板）；其他動作鍵：已到、通知／叫號了、編輯、未到、取消（危險的排最後、要確認）
@@ -329,7 +369,7 @@ struct ReservationsView: View {
                 EmptyState(
                     icon: "calendar-days",
                     title: all.isEmpty ? "今天還沒有訂位" : "訂位都處理完了",
-                    message: all.isEmpty ? "網站、電話的訂位會自動出現在這裡；也可以按右邊的「新增訂位」。" : "已入座、取消、未到的按「顯示已結束」看。"
+                    message: all.isEmpty ? "網站、電話的訂位會自動出現在這裡；也可以按\(model.isPhone ? "下面" : "右邊")的「新增訂位」。" : "已入座、取消、未到的按「顯示已結束」看。"
                 )
             } else {
                 ScrollView {
@@ -348,10 +388,10 @@ struct ReservationsView: View {
     private func hourBlock(_ g: ResvHourGroup, now: Date) -> some View {
         let current = now >= g.id && now < g.id.addingTimeInterval(3600)
         let seats = g.items.filter { $0.status.isActive }.reduce(0) { sum, r in sum + r.partySize }
-        return HStack(alignment: .top, spacing: 16) {
+        return HStack(alignment: .top, spacing: model.isPhone ? 10 : 16) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(g.id.clockText)
-                    .font(.brand(22, .medium))
+                    .font(.brand(model.isPhone ? 18 : 22, .medium))
                     .monospacedDigit()
                     .foregroundStyle(current ? Theme.ink : Theme.muted)
                 Text("\(seats) 位")
@@ -359,7 +399,7 @@ struct ReservationsView: View {
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
             }
-            .frame(width: 62, alignment: .leading)
+            .frame(width: model.isPhone ? 50 : 62, alignment: .leading)
             VStack(spacing: 10) {
                 ForEach(g.items) { r in
                     ResvBookingRow(
@@ -389,7 +429,7 @@ struct ReservationsView: View {
                 Spacer(minLength: 0)
             }
             if waiting.isEmpty && done.isEmpty {
-                EmptyState(icon: "user-group", title: "沒有人在候位", message: "客人到了沒位子，按右邊的「新增候位」抽號碼。")
+                EmptyState(icon: "user-group", title: "沒有人在候位", message: "客人到了沒位子，按\(model.isPhone ? "下面" : "右邊")的「新增候位」抽號碼。")
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -440,13 +480,18 @@ struct ReservationsView: View {
         if let f = form {
             ResvFormPanel(request: f, onClose: { closePanels() })
                 .id(f.id)
-                .modifier(ResvPanelChrome())
+                .modifier(ResvPanelChrome(fullWidth: model.isPhone))
                 .transition(.move(edge: .trailing))
         }
     }
 }
 
 // MARK: - 資料
+
+/// 手機一次看一邊
+private enum ResvPhoneTab: Hashable {
+    case bookings, waitlist
+}
 
 private struct ResvFormRequest: Identifiable {
     let id = UUID()
@@ -524,6 +569,7 @@ private struct ResvCardChrome: ViewModifier {
 
 /// 一筆訂位：整張可以點（選起來），卡片上沒有按鈕
 private struct ResvBookingRow: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(POSModel.self) private var model
     let reservation: Reservation
     let now: Date
@@ -558,7 +604,7 @@ private struct ResvBookingRow: View {
         .buttonStyle(.press)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint("點一下選起來，動作在右邊")
+        .accessibilityHint("點一下選起來，動作在\(sizeClass == .compact ? "下面" : "右邊")")
     }
 
     /// 前後 15～30 分鐘內要到的
@@ -623,6 +669,7 @@ private struct ResvBookingRow: View {
 
 /// 一組候位：整張可以點（選起來），動作在右欄
 private struct ResvWaitCard: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let reservation: Reservation
     let now: Date
     let selected: Bool
@@ -676,7 +723,7 @@ private struct ResvWaitCard: View {
             .buttonStyle(.press)
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityHint("點一下選起來，動作在右邊")
+            .accessibilityHint("點一下選起來，動作在\(sizeClass == .compact ? "下面" : "右邊")")
         }
         .padding(14)
         .modifier(ResvCardChrome(selected: selected, highlight: false))
@@ -769,10 +816,13 @@ private struct ResvSourceTag: View {
 
 /// 右邊滑出來的面板：貼著右側鍵盤（人數、電話打在旁邊的鍵盤上）
 private struct ResvPanelChrome: ViewModifier {
+    /// 手機：蓋滿整頁
+    var fullWidth = false
+
     func body(content: Content) -> some View {
         content
-            .frame(width: 440)
-            .frame(maxHeight: .infinity)
+            .frame(width: fullWidth ? nil : 440)
+            .frame(maxWidth: fullWidth ? .infinity : nil, maxHeight: .infinity)
             .background(Theme.dock)
             .overlay(alignment: .leading) { Rule(vertical: true) }
             .shadow(color: .black.opacity(0.18), radius: 24, x: -8)
@@ -1048,7 +1098,7 @@ private struct ResvFormPanel: View {
                         .foregroundStyle(tables.isEmpty ? Theme.muted : Theme.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
-                    Text(pickingTables ? "在右邊選" : "選桌子")
+                    Text(pickingTables ? (model.isPhone ? "在下面選" : "在右邊選") : "選桌子")
                         .font(.brand(13, .medium))
                         .foregroundStyle(pickingTables ? Theme.accentText : Theme.ink2)
                     HeroIcon("chevron-right", size: 13)
@@ -1213,6 +1263,7 @@ private struct ResvFormRow<Content: View>: View {
 
 /// 要用右側鍵盤打的欄位（人數、電話）：點了右邊鍵盤換成這一題，這一格框成橘色
 private struct ResvKeypadField: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let label: String
     let value: String
     let placeholder: Bool
@@ -1249,7 +1300,7 @@ private struct ResvKeypadField: View {
         }
         .buttonStyle(PressScale(scale: 0.98))
         .accessibilityLabel("\(label)：\(value)")
-        .accessibilityHint("用右邊的數字鍵盤輸入")
+        .accessibilityHint("用\(sizeClass == .compact ? "下面" : "右邊")的數字鍵盤輸入")
     }
 }
 

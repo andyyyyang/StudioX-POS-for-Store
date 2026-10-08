@@ -22,9 +22,14 @@ import SwiftUI
 /// - 點空格＝標出那一格，右欄大鍵「新增預約」；長按空格＝直接新預約。沒選東西時右欄是「新增預約」「現場客」。
 /// - 新預約的表單從右邊滑出來：電話、時間長度用右側鍵盤打；選服務、選設計師、選時間是蓋住右欄的面板（一步一步）。
 /// - 長按預約再拖＝改時間、換人（放開時對齊格子）。
+///
+/// 手機（model.isPhone）：一欄的清單（照時間排，今天有一條「現在」），上面一排膠囊篩設計師；
+/// 選起來的動作、新增預約、表單的面板都和 iPad 同一份（下面那張卡、升起來的鍵盤）。開單、看單直接到點餐頁打開單子
 struct AppointmentsView: View {
     @Environment(POSModel.self) private var model
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 手機才有：開了單（開始服務、看單）到點餐頁打開單子
+    @Environment(PhoneUI.self) private var phoneUI: PhoneUI?
 
     /// 看哪一天（台北時間的 00:00）
     @State private var day = Calendar.taipei.startOfDay(for: Date())
@@ -45,6 +50,8 @@ struct AppointmentsView: View {
     @State private var lastLongPress = Date.distantPast
     /// 正在開單的預約（大鍵顯示「開單中…」）
     @State private var startingId: String?
+    /// 手機：只看哪一位（欄的 id；nil＝全部）
+    @State private var staffFilter: String?
 
     /// 一分鐘幾點高（一小時 108 點：15 分鐘一格 27 點，手指點得到）
     fileprivate static let ppm: CGFloat = 1.8
@@ -54,18 +61,13 @@ struct AppointmentsView: View {
     private static let space = "apptGrid"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            summary
-            if model.bookableStaff.isEmpty && model.appointments(onDay: dayKey).isEmpty {
-                ApptNoStaff(title: model.mode.staffTitle)
+        Group {
+            if model.isPhone {
+                phoneLayout
             } else {
-                board
+                padLayout
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 22)
-        .padding(.bottom, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay {
             if form != nil {
@@ -97,6 +99,21 @@ struct AppointmentsView: View {
         } message: { req in
             Text(moveMessage(req))
         }
+    }
+
+    private var padLayout: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            summary
+            if model.bookableStaff.isEmpty && model.appointments(onDay: dayKey).isEmpty {
+                ApptNoStaff(title: model.mode.staffTitle)
+            } else {
+                board
+            }
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 16)
     }
 
     // MARK: - 資料
@@ -194,7 +211,7 @@ struct AppointmentsView: View {
                         .foregroundStyle(Theme.muted)
                         .lineLimit(1)
                 }
-                .frame(minWidth: 112, minHeight: 40)
+                .frame(minWidth: model.isPhone ? 76 : 112, minHeight: 40)
                 .contentShape(.rect)
             }
             .buttonStyle(.press)
@@ -245,6 +262,172 @@ struct AppointmentsView: View {
                 .buttonStyle(.brand(.quiet, size: .sm))
             }
         }
+    }
+
+    // MARK: - 手機：一欄的清單
+
+    private var phoneLayout: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .bottom, spacing: 8) {
+                PageTitle(title: "Day *book*", subtitle: "預約・\(model.mode.staffTitle)")
+                Spacer(minLength: 4)
+                daySwitcher
+            }
+            .padding(.horizontal, 16)
+            phoneFilters
+            if model.bookableStaff.isEmpty && model.appointments(onDay: dayKey).isEmpty {
+                ApptNoStaff(title: model.mode.staffTitle)
+                    .padding(.horizontal, 16)
+            } else {
+                phoneAgenda
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    /// 這一天要列的（篩了設計師）
+    private var phoneList: [Reservation] {
+        dayAppointments
+            .filter { staffFilter == nil || columnId(for: $0) == staffFilter }
+            .sorted { $0.startsAt < $1.startsAt }
+    }
+
+    /// 全部／每一位（數字是還有效的預約）；取消、未到收起來時最後一顆是「顯示取消、未到」
+    private var phoneFilters: some View {
+        let all = model.appointments(onDay: dayKey)
+        let live = all.filter { $0.status != .cancelled && $0.status != .noShow }
+        let hidden = all.count - live.count
+        return ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                filterChip(nil, label: "全部", count: live.count, swatch: nil)
+                ForEach(columns) { col in
+                    let n = live.filter { columnId(for: $0) == col.id }.count
+                    // 「不指定」沒有預約就不放
+                    if col.staff != nil || n > 0 {
+                        filterChip(col.id, label: col.staff?.name ?? "不指定", count: n, swatch: col.staff?.swatch)
+                    }
+                }
+                if hidden > 0 || showInactive {
+                    Button(showInactive ? "隱藏取消、未到" : "取消、未到 \(hidden)") {
+                        withAnimation(anim) { showInactive.toggle() }
+                    }
+                    .buttonStyle(.brand(.quiet, size: .sm))
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private func filterChip(_ id: String?, label: String, count: Int, swatch: Swatch?) -> some View {
+        let on = staffFilter == id
+        return Button {
+            model.touch()
+            withAnimation(spring) {
+                staffFilter = id
+                selectedId = nil
+            }
+        } label: {
+            HStack(spacing: 7) {
+                if let swatch {
+                    Circle().fill(Theme.swatch(swatch)).frame(width: 9, height: 9)
+                }
+                Text(label)
+                    .font(.brand(14.5, on ? .semibold : .medium))
+                    .lineLimit(1)
+                Text("\(count)")
+                    .font(.brand(13, .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(on ? Theme.page.opacity(0.7) : Theme.muted)
+            }
+            .foregroundStyle(on ? Theme.page : Theme.ink)
+            .padding(.horizontal, 13)
+            .frame(height: 36)
+            .background(on ? Theme.ink : Theme.surface, in: .capsule)
+            .overlay { Capsule().strokeBorder(on ? Color.clear : Theme.line) }
+            .contentShape(.capsule)
+        }
+        .buttonStyle(PressTint(radius: 18))
+        .accessibilityLabel("\(label)，\(count) 筆預約")
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    /// 照時間排；今天在「現在」那裡畫一條紅線（之前的是做過、正在做的）。打開時捲到現在
+    private var phoneAgenda: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { ctx in
+            let list = phoneList
+            let nowIndex = isToday ? (list.firstIndex { $0.startsAt > ctx.date } ?? list.count) : nil
+            if list.isEmpty {
+                ApptQuietDay(colors: model.bookableStaff.prefix(3).map { Theme.swatch($0.swatch) }, isToday: isToday)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
+                    .transition(.opacity)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(Array(list.enumerated()), id: \.element.id) { i, r in
+                                if i == nowIndex { phoneNowLine(ctx.date) }
+                                phoneRow(r, now: ctx.date)
+                                    .id(r.id)
+                            }
+                            if nowIndex == list.count { phoneNowLine(ctx.date) }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 24)
+                    }
+                    .scrollIndicators(.hidden)
+                    .onAppear { scrollToNow(proxy, list: list) }
+                    .onChange(of: dayKey) { _, _ in scrollToNow(proxy, list: phoneList) }
+                    .onChange(of: selectedId) { _, id in
+                        guard let id else { return }
+                        withAnimation(spring) { proxy.scrollTo(id, anchor: .center) }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 今天：捲到正在做的或下一筆（前面留一筆做過的）；別天：最上面
+    private func scrollToNow(_ proxy: ScrollViewProxy, list: [Reservation]) {
+        guard isToday, let i = list.firstIndex(where: { $0.endsAt > Date() && $0.status != .cancelled && $0.status != .noShow }) else { return }
+        proxy.scrollTo(list[max(i - 1, 0)].id, anchor: .top)
+    }
+
+    private func phoneNowLine(_ now: Date) -> some View {
+        HStack(spacing: 8) {
+            Text(now.clockText)
+                .font(.brand(11.5, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(Theme.onAccent)
+                .padding(.horizontal, 7)
+                .frame(height: 20)
+                .background(Theme.dangerFG, in: .capsule)
+            Rectangle()
+                .fill(Theme.dangerFG.opacity(0.7))
+                .frame(height: 1)
+        }
+        .padding(.vertical, 2)
+        .accessibilityLabel("現在 \(now.clockText)")
+    }
+
+    private func phoneRow(_ r: Reservation, now: Date) -> some View {
+        let look = look(for: r)
+        return Button {
+            tapBlock(r)
+        } label: {
+            ApptAgendaRow(
+                reservation: r,
+                look: look,
+                stylist: model.staffMember(r.staffId),
+                staffName: model.staffName(r.staffId),
+                late: lateMinutes(r, now: now),
+                progress: progress(r, now: now),
+                selected: selectedId == r.id
+            )
+        }
+        .buttonStyle(PressScale(scale: 0.98))
     }
 
     // MARK: - 預約表
@@ -835,7 +1018,7 @@ struct AppointmentsView: View {
         var primary: POSAction?
         var actions: [POSAction] = []
         if let t = ticket {
-            let view = POSAction("看單 \(t.number)", icon: "squares-2x2") { model.selectedTicketId = t.id }
+            let view = POSAction("看單 \(t.number)", icon: "squares-2x2") { showTicket(t) }
             if model.takesPayment {
                 primary = POSAction("結帳", icon: "credit-card") { model.beginCheckout(t) }
                 actions.append(view)
@@ -899,9 +1082,19 @@ struct AppointmentsView: View {
     private func startService(_ r: Reservation) {
         startingId = r.id
         Task {
-            await model.startService(r)
+            let t = await model.startService(r)
             startingId = nil
+            // 手機：開了單就到點餐頁打開單子（加商品、結帳）；iPad 的單子欄就在右邊
+            if model.isPhone, let t { showTicket(t) }
         }
+    }
+
+    /// 看這張單：iPad 選起來（單子欄出現）；手機到點餐頁把單子打開
+    private func showTicket(_ t: Ticket) {
+        model.selectedTicketId = t.id
+        guard model.isPhone else { return }
+        phoneUI?.openTicketOnArrival = true
+        model.go(.order)
     }
 
     private func lookUpMember(_ r: Reservation) {
@@ -979,13 +1172,116 @@ struct AppointmentsView: View {
                 form?.minutes = minutes
             }, onClose: { closeForm() })
             .id(f.id)
-            .frame(width: 480)
-            .frame(maxHeight: .infinity)
+            // 手機：蓋滿整頁（從右邊滑進來，和推進下一頁一樣）
+            .frame(width: model.isPhone ? nil : 480)
+            .frame(maxWidth: model.isPhone ? .infinity : nil, maxHeight: .infinity)
             .background(Theme.dock)
             .overlay(alignment: .leading) { Rule(vertical: true) }
             .shadow(color: .black.opacity(0.18), radius: 24, x: -8)
             .transition(.move(edge: .trailing))
         }
+    }
+}
+
+/// 鍵盤、面板在哪：iPad 在右邊；手機（窄）從下面升起來
+private enum ApptWhere {
+    static func dock(_ sizeClass: UserInterfaceSizeClass?) -> String { sizeClass == .compact ? "下面" : "右邊" }
+}
+
+// MARK: - 手機的一列
+
+/// 手機清單的一筆：左邊狀態色、時間與狀態、名字、服務；服務中有進度，晚到寫晚幾分，有備註寫備註
+///
+///   ▌10:00–11:30                 已到店
+///   ▌林小涵   晚 12 分             (L)
+///   ▌剪髮・染髮・1 小時 30 分
+private struct ApptAgendaRow: View {
+    let reservation: Reservation
+    let look: ApptLook
+    let stylist: StaffMember?
+    let staffName: String
+    let late: Int?
+    let progress: Double?
+    let selected: Bool
+
+    private var faded: Bool { look == .done || look == .cancelled || look == .missed }
+
+    private var tone: Tone {
+        switch look {
+        case .booked: .info
+        case .arrived: .gold
+        case .serving: .active
+        case .done, .cancelled: .neutral
+        case .missed: .danger
+        }
+    }
+
+    var body: some View {
+        let r = reservation
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(look.edge)
+                .frame(width: 5)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(ApptText.timeRange(r))
+                        .font(.brand(14.5, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink2)
+                    if let late {
+                        Text("晚 \(late) 分")
+                            .font(.brand(12, .semibold))
+                            .foregroundStyle(Theme.warningFG)
+                    }
+                    Spacer(minLength: 6)
+                    StatusBadge(look.label, tone: tone)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(r.name.isEmpty ? "未留名字" : r.name)
+                        .font(.brand(19, .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    HStack(spacing: 6) {
+                        Text(staffName)
+                            .font(.brand(12.5, .medium))
+                            .foregroundStyle(Theme.muted)
+                            .lineLimit(1)
+                        if let stylist {
+                            StaffAvatar(name: stylist.name, swatch: stylist.swatch, size: 24)
+                        }
+                    }
+                }
+                Text("\(ApptText.services(r))・\(ApptText.duration(r.durationMinutes))")
+                    .font(.brand(13.5, .regular))
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(2)
+                if let progress {
+                    ApptProgress(value: progress)
+                        .clipShape(.capsule)
+                        .padding(.top, 2)
+                }
+                if !r.note.isEmpty {
+                    Text("※ \(r.note)")
+                        .font(.brand(13, .medium))
+                        .foregroundStyle(Theme.warningFG)
+                        .lineLimit(2)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.surface)
+        .clipShape(.rect(cornerRadius: Metric.radiusLg, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                .strokeBorder(selected ? Theme.accent : Theme.line, lineWidth: selected ? 1.5 : 1)
+        }
+        .opacity(faded && !selected ? 0.6 : 1)
+        .contentShape(.rect(cornerRadius: Metric.radiusLg))
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -2235,7 +2531,7 @@ private struct ApptFormPanel: View {
                     .underline()
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(p.name) 時間 \(p.minutes) 分鐘，點一下用右邊鍵盤改")
+            .accessibilityLabel("\(p.name) 時間 \(p.minutes) 分鐘，點一下用\(model.isPhone ? "下面" : "右邊")的鍵盤改")
         }
         .padding(.horizontal, 12)
         .frame(height: 36)
@@ -2490,6 +2786,7 @@ private struct ApptFormPanel: View {
 
 /// 要在右欄挑的欄位（服務、設計師、時間）：點了右欄換成那一步的選項，這一格框成橘色
 private struct ApptChoiceField: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let value: String
     var detail: String? = nil
     let placeholder: Bool
@@ -2511,7 +2808,7 @@ private struct ApptChoiceField: View {
                     }
                 }
                 Spacer(minLength: 8)
-                Text(active ? "在右邊選" : "選")
+                Text(active ? "在\(ApptWhere.dock(sizeClass))選" : "選")
                     .font(.brand(13, .medium))
                     .foregroundStyle(active ? Theme.accentText : Theme.muted)
                 HeroIcon("chevron-right", size: 13)
@@ -2528,7 +2825,7 @@ private struct ApptChoiceField: View {
             .contentShape(.rect)
         }
         .buttonStyle(PressScale(scale: 0.98))
-        .accessibilityHint("在右邊選")
+        .accessibilityHint("在\(ApptWhere.dock(sizeClass))選")
     }
 }
 
@@ -2554,6 +2851,7 @@ private struct ApptField<Content: View>: View {
 
 /// 用右側鍵盤打的欄位：點了右邊鍵盤換成這一題，這一格框成橘色
 private struct ApptKeypadField: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let label: String
     let value: String
     let placeholder: Bool
@@ -2590,7 +2888,7 @@ private struct ApptKeypadField: View {
         }
         .buttonStyle(PressScale(scale: 0.98))
         .accessibilityLabel("\(label)：\(value)")
-        .accessibilityHint("用右邊的數字鍵盤輸入")
+        .accessibilityHint("用\(ApptWhere.dock(sizeClass))的數字鍵盤輸入")
     }
 }
 

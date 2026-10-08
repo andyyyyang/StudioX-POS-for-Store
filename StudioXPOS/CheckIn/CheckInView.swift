@@ -29,31 +29,46 @@ struct CheckInView: View {
 
     /// 換頁（去結帳、會員頁）再回來，剛剛查到的人還在
     private var desk: CheckInDesk { CheckInDesk.shared }
+    /// 手機：用相機掃會員條碼
+    @State private var scanning = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: model.isPhone ? 12 : 18) {
             header
             switch desk.tab {
             case .entry:
-                HStack(alignment: .top, spacing: 24) {
-                    entry
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    CheckInFeed(onVoided: { restartListening() })
-                        .frame(width: 300)
+                if model.isPhone {
+                    phoneEntry
+                } else {
+                    HStack(alignment: .top, spacing: 24) {
+                        entry
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        CheckInFeed(onVoided: { restartListening() })
+                            .frame(width: 300)
+                    }
                 }
             case .classes:
                 CheckInClasses()
             }
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 22)
-        .padding(.bottom, 16)
+        .padding(.horizontal, model.isPhone ? 16 : 28)
+        .padding(.top, model.isPhone ? 8 : 22)
+        .padding(.bottom, model.isPhone ? 12 : 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .sheet(isPresented: $scanning) {
+            CodeScannerSheet(title: "掃會員條碼", subtitle: "會員卡、App 上的條碼或 QR Code（就是手機號碼）", types: ScanKind.member) { code in
+                scanned(code)
+            }
+        }
         .dockSelection(desk.tab == .entry ? messageDock : nil)
         .task(id: listenKey) { await listen() }
         .onAppear {
             desk.forgetIfStale()
             if !model.mode.usesClasses { desk.tab = .entry }
+            #if DEBUG
+            // 截圖：直接看課表
+            if LaunchArguments.value("-checkInTab") == "classes", model.mode.usesClasses { desk.tab = .classes }
+            #endif
             // 截圖：先帶出一位能入場的會員
             if LaunchArguments.preselect, desk.tab == .entry, desk.result == nil, let m = model.members.values.sorted(by: { $0.id < $1.id }).first(where: { model.checkInPlan(for: $0).pass != nil }) { desk.result = .member(id: m.id, offline: false) }
         }
@@ -64,16 +79,31 @@ struct CheckInView: View {
 
     // MARK: - 上面
 
+    @ViewBuilder
     private var header: some View {
-        HStack(alignment: .bottom, spacing: 16) {
-            PageTitle(title: desk.tab == .entry ? "Check *in*" : "Today's *classes*", subtitle: "報到・\(Date().dayTitle)")
-            Spacer(minLength: 12)
-            if model.mode.usesClasses {
-                HStack(spacing: 6) {
-                    tabButton("報到", icon: "qr-code", .entry)
-                    tabButton("課表", icon: "calendar-days", .classes)
+        let title = PageTitle(title: desk.tab == .entry ? "Check *in*" : "Today's *classes*", subtitle: "報到・\(Date().dayTitle)")
+        if model.isPhone {
+            // 手機：報到／課表放在標題下面一整排
+            VStack(alignment: .leading, spacing: 10) {
+                title
+                if model.mode.usesClasses {
+                    HStack(spacing: 6) {
+                        tabButton("報到", icon: "qr-code", .entry)
+                        tabButton("課表", icon: "calendar-days", .classes)
+                    }
                 }
-                .frame(width: 240)
+            }
+        } else {
+            HStack(alignment: .bottom, spacing: 16) {
+                title
+                Spacer(minLength: 12)
+                if model.mode.usesClasses {
+                    HStack(spacing: 6) {
+                        tabButton("報到", icon: "qr-code", .entry)
+                        tabButton("課表", icon: "calendar-days", .classes)
+                    }
+                    .frame(width: 240)
+                }
             }
         }
     }
@@ -101,7 +131,8 @@ struct CheckInView: View {
     /// 報到頁開著就一直問「會員」：查完一位馬上問下一位（掃描器掃進來直接查）。
     /// 被別的題目插隊（主管 PIN）就等它問完再接著問；換頁、換到課表就停
     private func listen() async {
-        guard desk.tab == .entry else { return }
+        // 手機不一直問：鍵盤是蓋住畫面的 sheet，往下滑關掉又馬上跳出來會很煩。要查按「打電話號碼」「掃會員條碼」
+        guard desk.tab == .entry, !model.isPhone else { return }
         while !Task.isCancelled {
             // 右欄正在顯示某一位（或選了一筆報到）：先不問下一位，右欄才看得到他的動作；入場、按 × 之後再問
             if desk.result != nil || desk.searching || desk.feedId != nil {
@@ -118,6 +149,25 @@ struct CheckInView: View {
                 try? await Task.sleep(for: .milliseconds(300))
             }
         }
+    }
+
+    /// 手機：問一次會員號碼（打完就查；往下滑關掉就算了）
+    private func askMember() {
+        model.touch()
+        Task {
+            if let entry = await model.keypad.ask(KeypadSpec.memberCode) {
+                await lookUp(entry.digits)
+            }
+        }
+    }
+
+    /// 手機：相機掃到會員卡（條碼就是手機號碼）就查
+    private func scanned(_ code: String) -> ScanOutcome {
+        guard let phone = ScanCode.memberPhone(in: code) else {
+            return .failed(.member, "這不是會員條碼：會員卡的條碼是手機號碼（掃到 \(POSModel.excerpt(code))）")
+        }
+        Task { await lookUp(phone) }
+        return .done(.member, "會員 \(MemberRef(phone: phone).maskedPhone)", tally: nil)
     }
 
     private func stopListening() {
@@ -153,6 +203,24 @@ struct CheckInView: View {
     }
 
     // MARK: - 報到
+
+    /// 手機：查到的人一整頁；等人的時候上面是查詢（掃碼、打電話）、下面是今天報到的動態
+    @ViewBuilder
+    private var phoneEntry: some View {
+        if desk.searching || desk.result != nil {
+            entry
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            VStack(spacing: 12) {
+                CheckInPhonePrompt(recent: recentNames, onScan: {
+                    model.touch()
+                    scanning = true
+                }, onType: { askMember() })
+                CheckInFeed(onVoided: {}, compact: true)
+            }
+            .transition(.opacity)
+        }
+    }
 
     @ViewBuilder
     private var entry: some View {
@@ -350,6 +418,88 @@ private enum CheckInText {
 
 // MARK: - 等人、查詢中
 
+/// 手機等人：小一點的呼吸圓＋「Welcome in」，兩個大鍵（掃會員條碼、打電話號碼），剛剛進來的幾位
+private struct CheckInPhonePrompt: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let recent: [String]
+    let onScan: () -> Void
+    let onType: () -> Void
+
+    @State private var breathe = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 16) {
+                ZStack {
+                    ForEach(0..<2, id: \.self) { i in
+                        Circle()
+                            .strokeBorder(Theme.accent.opacity(0.22 - Double(i) * 0.08), lineWidth: 1.5)
+                            .frame(width: 64 + CGFloat(i) * 22, height: 64 + CGFloat(i) * 22)
+                            .scaleEffect(breathe ? 1.04 : 0.96)
+                            .animation(reduceMotion ? nil : Animation.easeInOut(duration: 2.4).repeatForever(autoreverses: true).delay(Double(i) * 0.3), value: breathe)
+                    }
+                    Circle()
+                        .fill(Theme.accentSoft)
+                        .frame(width: 56, height: 56)
+                    HeroIcon("qr-code", size: 26)
+                        .foregroundStyle(Theme.accent)
+                }
+                .frame(width: 90, height: 90)
+                VStack(alignment: .leading, spacing: 4) {
+                    Headline("Welcome *in*", role: .h3)
+                    Text("請客人報手機號碼，或掃會員卡")
+                        .textRole(.small)
+                        .foregroundStyle(Theme.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !recent.isEmpty {
+                        HStack(spacing: -7) {
+                            ForEach(Array(recent.enumerated()), id: \.offset) { _, n in
+                                CheckInAvatar(name: n, size: 26)
+                                    .overlay { Circle().strokeBorder(Theme.surface, lineWidth: 2) }
+                            }
+                            Text("剛剛進來")
+                                .textRole(.xs)
+                                .foregroundStyle(Theme.muted)
+                                .padding(.leading, 13)
+                        }
+                        .padding(.top, 2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                Button(action: onScan) {
+                    Label {
+                        Text("掃會員條碼")
+                    } icon: {
+                        HeroIcon("qr-code", size: 17)
+                    }
+                    .labelStyle(BrandLabelStyle())
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.accent, size: .lg, fullWidth: true))
+                Button(action: onType) {
+                    Label {
+                        Text("打電話號碼")
+                    } icon: {
+                        HeroIcon("calculator", size: 17)
+                    }
+                    .labelStyle(BrandLabelStyle())
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.brand(.ghost, size: .lg, fullWidth: true))
+            }
+        }
+        .padding(16)
+        .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg))
+        .overlay {
+            RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
+                .strokeBorder(Theme.line, lineWidth: 1)
+        }
+        .onAppear { breathe = true }
+    }
+}
+
 /// 等人：一圈一圈慢慢呼吸的圓、大字、剛剛進來的幾位
 private struct CheckInPrompt: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -432,6 +582,7 @@ private struct CheckInSearching: View {
 
 /// 查不到、離線、出錯：一句話（動作在右欄）
 private struct CheckInMessage: View {
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let icon: String
     let title: String
     let detail: String
@@ -453,7 +604,7 @@ private struct CheckInMessage: View {
                 .textRole(.body)
                 .foregroundStyle(Theme.ink2)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("動作在右邊")
+            Text(sizeClass == .compact ? "動作在下面" : "動作在右邊")
                 .textRole(.small)
                 .foregroundStyle(Theme.muted)
                 .padding(.top, 6)
@@ -461,7 +612,7 @@ private struct CheckInMessage: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: 520)
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 56)
+        .padding(.vertical, sizeClass == .compact ? 32 : 56)
     }
 }
 
@@ -508,7 +659,7 @@ private struct CheckInMemberPanel: View {
                 }
             }
         }
-        .padding(26)
+        .padding(model.isPhone ? 16 : 26)
         .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg))
         .overlay {
             RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
@@ -537,12 +688,13 @@ private struct CheckInMemberPanel: View {
 
     private func identity(plan: CheckInPlan, pass: MemberPass?, now: Date) -> some View {
         let ring = CheckInRingInfo(pass: pass, problem: plan.problem, now: now)
-        return HStack(alignment: .center, spacing: 26) {
-            CheckInRingAvatar(member: member, ring: ring)
+        let phone = model.isPhone
+        return HStack(alignment: .center, spacing: phone ? 14 : 26) {
+            CheckInRingAvatar(member: member, ring: ring, size: phone ? 96 : 152)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text(member.name ?? "（沒有名字）")
-                        .font(.brand(38, .semibold))
+                        .font(.brand(phone ? 26 : 38, .semibold))
                         .foregroundStyle(Theme.ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
@@ -550,7 +702,8 @@ private struct CheckInMemberPanel: View {
                         StatusBadge(tier, tone: .gold)
                     }
                 }
-                HStack(spacing: 12) {
+                // 手機窄：放不下就換行
+                FlowLayout(spacing: 10, rowSpacing: 6) {
                     Text(member.ref.maskedPhone)
                         .font(.brand(15, .medium))
                         .monospacedDigit()
@@ -599,7 +752,7 @@ private struct CheckInMemberPanel: View {
                 CheckInVerdict(ok: false, title: problemTitle(plan.problem), detail: problemDetail(plan.problem))
             }
             if plan.choices.count > 1 {
-                Text("還有 \(plan.choices.count - 1) 張卡可以用：右邊「改用別張卡」")
+                Text("還有 \(plan.choices.count - 1) 張卡可以用：\(model.isPhone ? "下面" : "右邊")「改用別張卡」")
                     .textRole(.xs)
                     .foregroundStyle(Theme.muted)
             }
@@ -797,6 +950,8 @@ private struct CheckInRingAvatar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let member: Member
     let ring: CheckInRingInfo
+    /// 外圈的大小（iPad 152、手機小一點）
+    var size: CGFloat = 152
 
     @State private var shown = false
 
@@ -804,16 +959,16 @@ private struct CheckInRingAvatar: View {
         VStack(spacing: 10) {
             ZStack {
                 Circle()
-                    .stroke(Theme.press, lineWidth: 8)
+                    .stroke(Theme.press, lineWidth: size > 120 ? 8 : 6)
                 Circle()
                     .trim(from: 0, to: shown || reduceMotion ? max(ring.progress, 0.001) : 0)
-                    .stroke(ring.color, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                    .stroke(ring.color, style: StrokeStyle(lineWidth: size > 120 ? 8 : 6, lineCap: .round))
                     .rotationEffect(.degrees(-90))
-                CheckInPhoto(urlString: member.photoURL, name: member.name ?? "會", size: 128)
+                CheckInPhoto(urlString: member.photoURL, name: member.name ?? "會", size: size - (size > 120 ? 24 : 18))
             }
-            .frame(width: 152, height: 152)
+            .frame(width: size, height: size)
             Text(ring.caption)
-                .font(.brand(15, .semibold))
+                .font(.brand(size > 120 ? 15 : 13, .semibold))
                 .monospacedDigit()
                 .foregroundStyle(ring.color)
                 .padding(.horizontal, 12)
@@ -1084,10 +1239,25 @@ private struct CheckInFeed: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 取消報到要主管 PIN（會用到右側鍵盤）：好了以後重新開始問會員號碼
     let onVoided: () -> Void
+    /// 手機：人次和每小時的長條放同一行，清單多留一點地方
+    var compact = false
 
     @State private var confirming: CheckIn?
 
     private var desk: CheckInDesk { CheckInDesk.shared }
+
+    private func count(_ n: Int, size: CGFloat) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("\(n)")
+                .font(.brand(size, .medium))
+                .monospacedDigit()
+                .foregroundStyle(Theme.ink)
+                .contentTransition(.numericText(value: Double(n)))
+            Text("人次")
+                .textRole(.small)
+                .foregroundStyle(Theme.muted)
+        }
+    }
 
     var body: some View {
         let list = model.state.checkIns(businessDate: model.businessDate, cutoffHour: model.store.businessDayCutoffHour)
@@ -1096,17 +1266,15 @@ private struct CheckInFeed: View {
                 LiveDot()
                 Eyebrow("今天報到")
             }
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(list.count)")
-                    .font(.brand(56, .medium))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.ink)
-                    .contentTransition(.numericText(value: Double(list.count)))
-                Text("人次")
-                    .textRole(.small)
-                    .foregroundStyle(Theme.muted)
+            if compact {
+                HStack(alignment: .bottom, spacing: 16) {
+                    count(list.count, size: 40)
+                    CheckInHourBars(times: list.map { $0.at })
+                }
+            } else {
+                count(list.count, size: 56)
+                CheckInHourBars(times: list.map { $0.at })
             }
-            CheckInHourBars(times: list.map { $0.at })
             Rule()
             if list.isEmpty {
                 VStack(spacing: 10) {
@@ -1142,7 +1310,7 @@ private struct CheckInFeed: View {
                 .animation(reduceMotion ? nil : Motion.spring, value: list.first?.id)
             }
         }
-        .padding(18)
+        .padding(compact ? 14 : 18)
         .frame(maxHeight: .infinity, alignment: .top)
         .background(Theme.surface.opacity(0.6), in: .rect(cornerRadius: Metric.radiusLg))
         .overlay {
@@ -1203,7 +1371,7 @@ private struct CheckInFeed: View {
         .buttonStyle(.press)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint("點一下選起來，右邊可以取消報到")
+        .accessibilityHint("點一下選起來，\(model.isPhone ? "下面" : "右邊")可以取消報到")
     }
 
     private func rowBody(_ c: CheckIn, selected: Bool) -> some View {
@@ -1530,7 +1698,7 @@ private struct CheckInRoster: View {
                     Text("還沒有人報名")
                         .textRole(.h4)
                         .foregroundStyle(Theme.ink2)
-                    Text("右邊「報名」用電話幫客人報名；沒報名的按「現場單堂」。")
+                    Text("\(model.isPhone ? "下面" : "右邊")「報名」用電話幫客人報名；沒報名的按「現場單堂」。")
                         .textRole(.small)
                         .foregroundStyle(Theme.muted)
                 }
@@ -1715,7 +1883,7 @@ private struct CheckInRoster: View {
         }
         .buttonStyle(PressScale(scale: 0.95))
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint("點一下選起來，右邊簽到")
+        .accessibilityHint("點一下選起來，\(model.isPhone ? "下面" : "右邊")簽到")
     }
 
     private func chipDetail(_ r: Reservation, account: MemberAccount?, pass: MemberPass?) -> String {
