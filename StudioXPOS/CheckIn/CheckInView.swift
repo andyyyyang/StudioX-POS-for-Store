@@ -69,13 +69,31 @@ struct CheckInView: View {
             // 截圖：直接看課表
             if LaunchArguments.value("-checkInTab") == "classes", model.mode.usesClasses { desk.tab = .classes }
             #endif
-            // 截圖：先帶出一位能入場的會員
-            if LaunchArguments.preselect, desk.tab == .entry, desk.result == nil, let m = model.members.values.sorted(by: { $0.id < $1.id }).first(where: { model.checkInPlan(for: $0).pass != nil }) { desk.result = .member(id: m.id, offline: false) }
         }
+        // 截圖：先帶出一位能入場的會員（示範店的會員載入得比畫面晚：等一下再找）
+        .task { await preselectForScreenshot() }
         .onDisappear { stopListening() }
     }
 
     private var anim: Animation? { reduceMotion ? nil : Motion.ease }
+
+    private func preselectForScreenshot() async {
+        guard LaunchArguments.preselect else { return }
+        for _ in 0..<20 {
+            guard desk.tab == .entry, desk.result == nil, !desk.searching else { return }
+            if let m = model.members.values.sorted(by: { $0.id < $1.id }).first(where: { model.checkInPlan(for: $0).pass != nil }) {
+                desk.result = .member(id: m.id, offline: false)
+                return
+            }
+            // 這台還沒查過任何人（會員在後台）：查今天報到過的那一位
+            let today = model.state.checkIns(businessDate: model.businessDate, cutoffHour: model.store.businessDayCutoffHour)
+            if let phone = today.lazy.map(\.member.phone).first(where: { !$0.isEmpty }) {
+                await lookUp(phone)
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+    }
 
     // MARK: - 上面
 
