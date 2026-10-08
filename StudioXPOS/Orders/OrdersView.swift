@@ -806,7 +806,11 @@ private struct OrdersTicketCard: View {
             metaText("\(ticket.itemCount) 項")
             Spacer(minLength: 0)
             if model.features.kitchen && !ticket.activeLines.isEmpty {
-                OrdersKitchenDots(lines: ticket.activeLines)
+                // 欄窄（直的 iPad）放不下就不畫出餐的點，時間、人數、項數不換行
+                ViewThatFits(in: .horizontal) {
+                    OrdersKitchenDots(lines: ticket.activeLines)
+                    Color.clear.frame(width: 0, height: 0)
+                }
             }
         }
     }
@@ -816,6 +820,8 @@ private struct OrdersTicketCard: View {
             .font(.brand(13, .medium))
             .monospacedDigit()
             .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .fixedSize()
     }
 
     private func minutes(at date: Date) -> Int {
@@ -855,13 +861,16 @@ private struct OrdersElapsed: View {
             HeroIcon("clock", size: 13)
             Text(text)
                 .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
         }
         .font(.brand(13, .medium))
         .foregroundStyle(color)
     }
 
     private var text: String {
-        minutes < 60 ? "\(minutes) 分" : "\(minutes / 60) 時 \(minutes % 60) 分"
+        // 超過一小時寫短一點（「1時34分」）：欄窄的時候也不會斷成兩行
+        minutes < 60 ? "\(minutes) 分" : "\(minutes / 60)時\(minutes % 60)分"
     }
 
     private var color: Color {

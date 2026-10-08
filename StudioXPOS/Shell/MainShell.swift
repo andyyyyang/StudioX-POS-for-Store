@@ -81,7 +81,8 @@ struct MainShell: View {
                     .buttonStyle(.brand(.primary, size: .lg))
                     .shadow(color: .black.opacity(0.18), radius: 14, y: 4)
                     .padding(.trailing, Metric.dockNarrow + 20)
-                    .padding(.bottom, 20)
+                    // 結帳畫面最下面有「尚欠／選付款方式…」那一條：鈕放在它上面，不蓋住字
+                    .padding(.bottom, model.checkoutTicket != nil ? 84 : 20)
                 }
             }
             // 直的 iPad：單子從右邊滑出來、停在右側鍵盤的左邊（不用 sheet：sheet 會蓋住鍵盤，單子裡的數量、改價就打不了）
