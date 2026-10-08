@@ -469,6 +469,9 @@ struct PaymentView: View {
             case .donation: "捐贈"
             }
         }
+
+        /// 放不下全名時（右邊有單子欄的 iPad）：「手機…」看不懂，改寫「載具」
+        var shortLabel: String { self == .carrier ? "載具" : label }
     }
 
     private func kind(of b: InvoiceBuyer) -> BuyerKind {
@@ -520,11 +523,12 @@ struct PaymentView: View {
                 Button {
                     choose(kind, for: t)
                 } label: {
-                    Text(kind.label)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .padding(.horizontal, 6)
-                        .frame(maxWidth: .infinity, minHeight: 38)
+                    ViewThatFits(in: .horizontal) {
+                        Text(kind.label).lineLimit(1)
+                        Text(kind.shortLabel).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity, minHeight: 38)
                 }
                 .buttonStyle(InvoiceSegmentStyle(selected: k == kind))
                 .accessibilityAddTraits(k == kind ? .isSelected : [])
