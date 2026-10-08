@@ -438,8 +438,13 @@ private struct DashCompareNote: View {
 // MARK: - 上面四格大數字
 
 private struct DashHeadline: View {
+    @Environment(POSModel.self) private var model
     let summary: SalesSummary
     let compare: DashComparison?
+
+    /// 算「位」的店（內用、有人數）：來客數、每位；服飾、零售：件數、每件；美業、健身：項目、每項
+    private var countsGuests: Bool { model.mode.usesTables || summary.guests > 0 }
+    private var unit: String { model.mode.wantsCustomer ? "項" : "件" }
 
     var body: some View {
         // 夠寬一排四格；不夠（直的 iPad）排成兩排，數字才不會被截成「NT$8,6…」
@@ -480,17 +485,35 @@ private struct DashHeadline: View {
     }
 
     private var averageTile: some View {
-        DashTile(title: "客單價", icon: "tag", note: "每位 \(summary.averagePerGuest.formatted)", delta: delta(\.averageTicket.cents)) {
+        let note = countsGuests
+            ? "每位 \(summary.averagePerGuest.formatted)"
+            : "每\(unit) \(summary.units > 0 ? Money(cents: summary.total.cents / summary.units).formatted : Money.zero.formatted)"
+        return DashTile(title: "客單價", icon: "tag", note: note, delta: delta(\.averageTicket.cents)) {
             MoneyText(money: summary.averageTicket, role: .stat)
         }
     }
 
+    @ViewBuilder
     private var guestsTile: some View {
-        DashTile(title: "來客數", icon: "users", note: guestsNote, delta: delta(\.guests)) {
-            Text(String(summary.guests))
-                .textRole(.stat)
-                .foregroundStyle(Theme.ink)
+        if countsGuests {
+            DashTile(title: "來客數", icon: "users", note: guestsNote, delta: delta(\.guests)) {
+                Text(String(summary.guests))
+                    .textRole(.stat)
+                    .foregroundStyle(Theme.ink)
+            }
+        } else {
+            DashTile(title: model.mode.wantsCustomer ? "項目數" : "件數", icon: "shopping-bag", note: unitsNote, delta: delta(\.units)) {
+                Text(String(summary.units))
+                    .textRole(.stat)
+                    .foregroundStyle(Theme.ink)
+            }
         }
+    }
+
+    private var unitsNote: String {
+        if let compare { return "昨天同時段 \(compare.sameTime.units) \(unit)" }
+        guard summary.tickets > 0 else { return "賣出的品項\(unit)數" }
+        return String(format: "每單 %.1f \(unit)", Double(summary.units) / Double(summary.tickets))
     }
 
     private func delta(_ key: KeyPath<SalesSummary, Int>) -> Double? {
@@ -1331,4 +1354,9 @@ extension SalesSummary {
                       color: t.tender.isInternal ? Theme.ink.opacity(0.3) : Theme.chart[i % Theme.chart.count], isInternal: t.tender.isInternal)
         }
     }
+}
+
+private extension SalesSummary {
+    /// 賣出幾件（各分類的數量加起來）：服飾、零售看這個，不看來客數
+    var units: Int { byCategory.reduce(0) { $0 + $1.quantity } }
 }

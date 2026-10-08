@@ -830,19 +830,20 @@ struct TicketColumn: View {
             out.append(POSAction(s.map { "銷售：\($0.name)" } ?? "指定\(model.mode.staffTitle)", icon: "user") { panel = .salesperson })
         }
         out.append(POSAction(discountActionTitle(t), icon: "tag") { panel = .ticketDiscount })
-        out.append(POSAction("整張單的備註…", icon: "pencil-square") {
+        // 右欄兩欄的鍵一行放五個字左右（11 吋 iPad）：字短一點，不會斷在詞中間
+        out.append(POSAction("整單備註…", icon: "pencil-square") {
             noteText = t.note
             ticketNote = true
         })
         out.append(POSAction("更多…", icon: "ellipsis-horizontal") { panel = .ticketMore })
-        out.append(POSAction("作廢整張單…", icon: "trash", destructive: true) { voidingTicket = true })
+        out.append(POSAction("作廢整單…", icon: "trash", destructive: true) { voidingTicket = true })
         return out
     }
 
-    /// 「折扣・折價券…」「折扣（9 折）…」「折扣（折價券）…」
+    /// 「折扣…」「折扣 9 折…」「折價券…」（短：右欄的鍵一行放得下）
     private func discountActionTitle(_ t: Ticket) -> String {
-        guard let d = t.discount else { return "折扣・折價券…" }
-        return d.isCoupon ? "折扣（折價券）…" : "折扣（\(d.label)）…"
+        guard let d = t.discount else { return "折扣…" }
+        return d.isCoupon ? "折價券…" : "折扣 \(d.label)…"
     }
 
     // MARK: - 右欄：選起來的一行

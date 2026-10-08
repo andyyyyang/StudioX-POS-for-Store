@@ -23,20 +23,23 @@ struct PairingView: View {
     private var compact: Bool { sizeClass == .compact }
 
     var body: some View {
-        ScrollView {
-            Group {
-                // iPad：登入後在同一頁選店、選崗位；手機（寬度 compact）放在 sheet
-                if !compact && (account.step == .choosing || account.step == .pairing) {
-                    AccountSetupPanel(flow: account, model: model)
-                } else {
-                    intro
+        GeometryReader { geo in
+            ScrollView {
+                Group {
+                    // iPad：登入後在同一頁選店、選崗位；手機（寬度 compact）放在 sheet
+                    if !compact && (account.step == .choosing || account.step == .pairing) {
+                        AccountSetupPanel(flow: account, model: model)
+                    } else {
+                        intro
+                    }
                 }
+                .padding(.horizontal, compact ? 24 : 64)
+                .padding(.vertical, compact ? 32 : 72)
+                // iPad：上下置中（不然擠在左上角、下面大半頁空著）；比畫面高就照樣捲
+                .frame(maxWidth: .infinity, minHeight: compact ? nil : geo.size.height, alignment: .leading)
             }
-            .padding(.horizontal, compact ? 24 : 64)
-            .padding(.vertical, compact ? 32 : 72)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
         .background(Theme.page.ignoresSafeArea())
         .sheet(isPresented: $account.sheetShown, onDismiss: { account.sheetDismissed() }) {
             AccountSetupSheet(flow: account, model: model)

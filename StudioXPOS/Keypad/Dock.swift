@@ -300,14 +300,19 @@ struct DockActionKeys: View {
         let ordered = actions.filter { !$0.isDestructive } + actions.filter(\.isDestructive)
         if !ordered.isEmpty {
             let rows = stride(from: 0, to: ordered.count, by: 2).map { Array(ordered[$0 ..< min($0 + 2, ordered.count)]) }
-            Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            // 兩欄一樣寬；落單的那一顆照樣半欄寬，旁邊空著
+            // （以前用 Grid＋不佔大小的空格：整頁只有一顆動作鍵時那一欄縮成只剩圖示，例如設定的「重新抓設定」）
+            VStack(spacing: 8) {
                 ForEach(rows.indices, id: \.self) { r in
-                    GridRow {
+                    HStack(spacing: 8) {
                         ForEach(rows[r].indices, id: \.self) { i in
                             key(rows[r][i])
                         }
                         if rows[r].count == 1 {
-                            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+                            Color.clear
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 1)
+                                .accessibilityHidden(true)
                         }
                     }
                 }

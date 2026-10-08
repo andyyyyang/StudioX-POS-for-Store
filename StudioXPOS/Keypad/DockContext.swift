@@ -373,8 +373,10 @@ private struct DockKitchenPulse: View {
     @Environment(POSModel.self) private var model
 
     var body: some View {
-        let lines = model.state.openTickets.flatMap { t in t.lines.filter { $0.isActive && ($0.kitchen == .sent || $0.kitchen == .preparing) } }
-        let ready = model.state.openTickets.flatMap { t in t.lines.filter { $0.isActive && $0.kitchen == .ready } }
+        // 跟廚房看板同一批單：外帶先結帳的也還在等出餐
+        let tickets = model.kitchenTickets()
+        let lines = tickets.flatMap { t in t.lines.filter { $0.isActive && ($0.kitchen == .sent || $0.kitchen == .preparing) } }
+        let ready = tickets.flatMap { t in t.lines.filter { $0.isActive && $0.kitchen == .ready } }
         let oldest = lines.compactMap(\.sentAt).min()
         DockSection(title: "出餐") {
             Grid(horizontalSpacing: 12, verticalSpacing: 12) {
@@ -468,7 +470,7 @@ private struct DockReservationsPulse: View {
             .prefix(3)
         VStack(alignment: .leading, spacing: 22) {
             DockSection(title: "現場候位") {
-                DockStat(value: "\(waiting.count) 組", label: "最久等了 \(waiting.map { minutesSince($0.createdAt) }.max() ?? 0) 分")
+                DockStat(value: "\(waiting.count) 組", label: "最久等了 \(waiting.map { minutesSince($0.startsAt) }.max() ?? 0) 分")
             }
             if !next.isEmpty {
                 DockSection(title: "接下來的訂位") {

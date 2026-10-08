@@ -363,17 +363,7 @@ struct KitchenView: View {
         return stations.contains(station)
     }
 
-    /// 還沒結帳的單；外帶先結帳後出餐很常見，所以 30 分鐘內結帳的也算
-    private func relevantTickets(now: Date) -> [Ticket] {
-        let cutoff = now.addingTimeInterval(-30 * 60)
-        return model.state.tickets.values.filter { t in
-            switch t.status {
-            case .open: return true
-            case .closed: return (t.closedAt ?? .distantPast) > cutoff
-            case .voided: return false
-            }
-        }
-    }
+    private func relevantTickets(now: Date) -> [Ticket] { model.kitchenTickets(now: now) }
 
     private func makeCards(_ tickets: [Ticket], hasStations: Bool) -> [KitchenCardModel] {
         var out: [KitchenCardModel] = []
@@ -763,15 +753,20 @@ private struct KitchenTicketCard: View {
         Button {
             advance(line)
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text("\(line.quantity)")
-                    .font(.brand(30, .semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.ink)
-                    .frame(minWidth: 34, alignment: .trailing)
-                lineText(line)
-                Spacer(minLength: 8)
-                KitchenStatusPill(status: line.kitchen)
+            // 第一行：份數、品名、狀態；加料、備註、出單站在下一行，用整張卡的寬度（不會被狀態擠到斷在詞中間：「半糖・少／冰」）
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    Text("\(line.quantity)")
+                        .font(.brand(30, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.ink)
+                        .frame(minWidth: 34, alignment: .trailing)
+                    nameRow(line)
+                    Spacer(minLength: 8)
+                    KitchenStatusPill(status: line.kitchen)
+                }
+                details(line)
+                    .padding(.leading, 34 + 14)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -784,39 +779,46 @@ private struct KitchenTicketCard: View {
         .accessibilityHint("點一下換下一個狀態")
     }
 
-    private func lineText(_ line: TicketLine) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(line.name)
-                    .font(.brand(21, .medium))
-                    .foregroundStyle(Theme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                if line.course > 0 {
-                    Text("第 \(line.course) 道")
-                        .font(.brand(12, .semibold))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.infoFG)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .overlay { RoundedRectangle(cornerRadius: Metric.chip).strokeBorder(Theme.infoFG.opacity(0.5), lineWidth: 1) }
+    private func nameRow(_ line: TicketLine) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(line.name)
+                .font(.brand(21, .medium))
+                .foregroundStyle(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            if line.course > 0 {
+                Text("第 \(line.course) 道")
+                    .font(.brand(12, .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Theme.infoFG)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .overlay { RoundedRectangle(cornerRadius: Metric.chip).strokeBorder(Theme.infoFG.opacity(0.5), lineWidth: 1) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func details(_ line: TicketLine) -> some View {
+        let info = meta(line)
+        if !line.modifierText.isEmpty || !line.note.isEmpty || info != nil {
+            VStack(alignment: .leading, spacing: 4) {
+                if !line.modifierText.isEmpty {
+                    Text(line.modifierText)
+                        .font(.brand(16, .regular))
+                        .foregroundStyle(Theme.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            if !line.modifierText.isEmpty {
-                Text(line.modifierText)
-                    .font(.brand(16, .regular))
-                    .foregroundStyle(Theme.ink2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !line.note.isEmpty {
-                Text("※ \(line.note)")
-                    .font(.brand(16, .semibold))
-                    .foregroundStyle(Theme.warningFG)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let meta = meta(line) {
-                Text(meta)
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.muted)
+                if !line.note.isEmpty {
+                    Text("※ \(line.note)")
+                        .font(.brand(16, .semibold))
+                        .foregroundStyle(Theme.warningFG)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let info {
+                    Text(info)
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.muted)
+                }
             }
         }
     }
@@ -981,5 +983,19 @@ private struct KitchenExpoCard: View {
         .background(Theme.surface, in: shape)
         .overlay { shape.strokeBorder(selected ? Theme.accent : Theme.successFG, lineWidth: selected ? 3 : 2) }
         .contentShape(shape)
+    }
+}
+
+extension POSModel {
+    /// 廚房看得到的單：還沒結帳的；外帶先結帳後出餐很常見，所以 30 分鐘內結帳的也算（右邊的出餐數字也照這個算）
+    func kitchenTickets(now: Date = Date()) -> [Ticket] {
+        let cutoff = now.addingTimeInterval(-30 * 60)
+        return state.tickets.values.filter { t in
+            switch t.status {
+            case .open: return true
+            case .closed: return (t.closedAt ?? .distantPast) > cutoff
+            case .voided: return false
+            }
+        }
     }
 }

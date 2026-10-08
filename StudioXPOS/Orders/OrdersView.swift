@@ -107,7 +107,7 @@ struct OrdersView: View {
             model.show("已送出 \(t.title(floor: model.floor)) 的結帳單")
         })
         actions.append(POSAction("作廢整張單", icon: "trash", destructive: true) { voidingTicketId = t.id })
-        let lane = OrdersLane.of(t, kitchen: model.features.kitchen)
+        let lane = OrdersLane.of(t, kitchen: boardKitchen)
         var detail = [t.number]
         if t.guests > 0 { detail.append("\(t.guests) 位") }
         detail.append("\(t.itemCount) 項")
@@ -117,7 +117,7 @@ struct OrdersView: View {
             kind: t.exchange != nil ? "換貨單" : "單子",
             title: t.title(floor: model.floor),
             detail: detail.joined(separator: "・"),
-            badge: DockBadge(lane.title, tone: lane.tone),
+            badge: DockBadge(lane.title(kitchen: boardKitchen, tables: boardTables), tone: lane.tone),
             primary: checkout ?? orderAction,
             accent: checkout != nil,
             actions: actions,
@@ -310,22 +310,34 @@ struct OrdersView: View {
 
     // MARK: 進行中：看板
 
+    /// 看板分不分「出餐中」：有開廚房、這個營業模式會送廚房（服飾、美業、健身沒有）
+    private var boardKitchen: Bool { model.features.kitchen && model.mode.usesKitchen }
+    /// 有桌位（內用）：出餐後是「用餐中」；全外帶是「出餐好了」
+    private var boardTables: Bool { model.visibleSections.contains(.floor) }
+
     @ViewBuilder
     private var board: some View {
         let openTickets = model.state.openTickets
         if openTickets.isEmpty {
             EmptyState(icon: "queue-list", title: "沒有進行中的單", message: "從「點餐」或「桌位」開單，就會出現在這裡")
         } else {
-            let kitchen = model.features.kitchen
+            let kitchen = boardKitchen
             VStack(spacing: 0) {
                 GeometryReader { geo in
-                    // 一欄至少 264 寬；工作區夠寬就四欄排滿，不夠就左右滑
-                    let width = max(264, (geo.size.width - 56 - 48) / 4)
+                    // 四欄排在工作區裡（11 吋 iPad 也看得到「待結帳」那一欄）：沒有單的那一欄窄一點（只有標題與虛線框），
+                    // 有單的平分剩下的；一欄至少 188，再放不下才左右滑
+                    let lanes = OrdersLane.lanes(kitchen: kitchen)
+                    let groups = lanes.map { lane in openTickets.filter { OrdersLane.of($0, kitchen: kitchen) == lane } }
+                    let empties = CGFloat(groups.filter(\.isEmpty).count)
+                    let filled = CGFloat(lanes.count) - empties
+                    let avail = geo.size.width - 56 - 16 * CGFloat(lanes.count - 1)
+                    let emptyWidth: CGFloat = filled > 0 ? 148 : avail / CGFloat(lanes.count)
+                    let width = filled > 0 ? max(188, (avail - empties * emptyWidth) / filled) : emptyWidth
                     ScrollView(.horizontal) {
                         HStack(alignment: .top, spacing: 16) {
-                            ForEach(OrdersLane.allCases) { lane in
-                                OrdersLaneColumn(lane: lane, tickets: openTickets.filter { OrdersLane.of($0, kitchen: kitchen) == lane })
-                                    .frame(width: width)
+                            ForEach(Array(lanes.enumerated()), id: \.element) { i, lane in
+                                OrdersLaneColumn(lane: lane, tickets: groups[i], kitchen: kitchen, tables: boardTables)
+                                    .frame(width: groups[i].isEmpty ? emptyWidth : width)
                             }
                         }
                         .padding(.horizontal, 28)
@@ -635,20 +647,25 @@ private enum OrdersLane: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    var title: String {
+    /// 這家店的看板有哪幾欄：會送廚房的店四欄；沒有廚房的店（服飾、美業、健身…）只有「進行中」「待結帳」
+    static func lanes(kitchen: Bool) -> [OrdersLane] {
+        kitchen ? allCases : [.ordering, .billing]
+    }
+
+    func title(kitchen: Bool, tables: Bool) -> String {
         switch self {
-        case .ordering: "點餐中"
+        case .ordering: kitchen ? "點餐中" : "進行中"
         case .cooking: "出餐中"
-        case .dining: "用餐中"
+        case .dining: tables ? "用餐中" : "出餐好了"
         case .billing: "待結帳"
         }
     }
 
-    var emptyText: String {
+    func emptyText(kitchen: Bool, tables: Bool) -> String {
         switch self {
-        case .ordering: "沒有在點餐的"
+        case .ordering: kitchen ? "沒有在點餐的" : "沒有進行中的單"
         case .cooking: "廚房沒有在做的"
-        case .dining: "沒有用餐中的"
+        case .dining: tables ? "沒有用餐中的" : "沒有等取餐的"
         case .billing: "沒有等結帳的"
         }
     }
@@ -666,8 +683,8 @@ private enum OrdersLane: String, CaseIterable, Identifiable {
         if t.billPrintedAt != nil { return .billing }
         let lines = t.activeLines
         if lines.isEmpty { return .ordering }
-        // 沒開廚房功能：品項不會有「已送單」，點了就算用餐中
-        guard kitchen else { return .dining }
+        // 沒有廚房的店：還沒印結帳單的都是「進行中」
+        guard kitchen else { return .ordering }
         if lines.contains(where: { $0.kitchen == .new }) { return .ordering }
         if lines.contains(where: { $0.kitchen != .served }) { return .cooking }
         return .dining
@@ -677,6 +694,8 @@ private enum OrdersLane: String, CaseIterable, Identifiable {
 private struct OrdersLaneColumn: View {
     let lane: OrdersLane
     let tickets: [Ticket]
+    let kitchen: Bool
+    let tables: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -687,7 +706,7 @@ private struct OrdersLaneColumn: View {
                     .strokeBorder(Theme.line, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                     .frame(height: 88)
                     .overlay {
-                        Text(lane.emptyText)
+                        Text(lane.emptyText(kitchen: kitchen, tables: tables))
                             .textRole(.small)
                             .foregroundStyle(Theme.faint)
                     }
@@ -711,7 +730,7 @@ private struct OrdersLaneColumn: View {
             Circle()
                 .fill(lane.tone.dot)
                 .frame(width: 7, height: 7)
-            Text(lane.title)
+            Text(lane.title(kitchen: kitchen, tables: tables))
                 .font(.brand(15, .semibold))
                 .foregroundStyle(Theme.ink)
             Text(String(tickets.count))
@@ -777,7 +796,7 @@ private struct OrdersTicketCard: View {
     }
 
     private var metaRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             TimelineView(.everyMinute) { context in
                 OrdersElapsed(minutes: minutes(at: context.date), limit: timeLimit)
             }
@@ -785,7 +804,7 @@ private struct OrdersTicketCard: View {
                 metaText("\(ticket.guests) 位")
             }
             metaText("\(ticket.itemCount) 項")
-            Spacer(minLength: 4)
+            Spacer(minLength: 0)
             if model.features.kitchen && !ticket.activeLines.isEmpty {
                 OrdersKitchenDots(lines: ticket.activeLines)
             }

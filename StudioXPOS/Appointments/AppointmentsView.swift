@@ -550,7 +550,7 @@ struct AppointmentsView: View {
             columnTints(g, height: height)
             ApptGridLines(columns: g.columns.count, colW: g.colW, gutter: Self.gutter, hours: g.range.end - g.range.start,
                           slot: slot, ppm: Self.ppm)
-            hourLabels(g.range)
+            hourLabels(g.range, now: isToday ? now : nil)
             tapLayer(g, height: height)
             pendingGhost(g)
             draftGhost(g)
@@ -584,13 +584,17 @@ struct AppointmentsView: View {
         .allowsHitTesting(false)
     }
 
-    private func hourLabels(_ range: ApptHours) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+    /// 整點的時間；「現在」的紅色時間蓋在同一個位置時（整點前後十來分鐘）那一個整點不寫，不會疊在一起
+    private func hourLabels(_ range: ApptHours, now: Date?) -> some View {
+        let nowMinute = now.map { minuteOfDay($0) }
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(range.start..<range.end, id: \.self) { h in
+                let hidden = nowMinute.map { abs($0 - (h * 60 + 7)) < 13 } ?? false
                 Text(String(format: "%02d:00", h % 24))
                     .font(.brand(12.5, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
+                    .opacity(hidden ? 0 : 1)
                     .padding(.leading, 12)
                     .padding(.top, 5)
                     .frame(width: Self.gutter, height: 60 * Self.ppm, alignment: .topLeading)
@@ -1602,12 +1606,15 @@ private struct ApptUtilisation: View {
                         .frame(width: max(geo.size.width * ratio, ratio > 0 ? 6 : 0))
                 }
             }
-            .frame(width: 64, height: 6)
+            // 欄窄的時候縮條、不縮字（不然變成「1 位・…」）
+            .frame(minWidth: 24, maxWidth: 64)
+            .frame(height: 6)
             Text("\(count) 位・\(percent)%")
                 .font(.brand(11.5, .medium))
                 .monospacedDigit()
                 .foregroundStyle(ratio >= 0.85 ? Theme.accentText : Theme.muted)
                 .lineLimit(1)
+                .fixedSize()
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(count) 個預約，排滿 \(percent)%")

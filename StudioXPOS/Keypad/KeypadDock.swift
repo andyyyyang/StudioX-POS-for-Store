@@ -404,8 +404,9 @@ struct KeypadDock: View {
                     .minimumScaleFactor(0.8)
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.brand(r.keepsSelection && r.entry.isPristine ? .primary : .accent, size: .lg, fullWidth: true, arrow: true))
-            .opacity(r.entry.canCommit ? 1 : 0.55)
+            // 還不能按（電話沒打完…）：細框，不用半透明的橘（看起來像壞掉）
+            .buttonStyle(.brand(!r.entry.canCommit ? .ghost : (r.keepsSelection && r.entry.isPristine ? .primary : .accent),
+                                size: .lg, fullWidth: true, arrow: true))
             .keyboardShortcut(.defaultAction)
         } else if let s = itemSelection {
             // 選起來的一筆：打了數字也還是它的主要動作（規格卡打的數字＝數量）；沒有主要動作（單子的一行）就空著
@@ -451,7 +452,8 @@ struct KeypadDock: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.brand(p.isDestructive ? .danger : (accent ? .accent : .primary), size: .lg, fullWidth: true, arrow: true))
+        // 不能按的大鍵（還沒點錢的「交班並列印」、示範店的「立即同步」）：細框＋淡，不是半透明的實心
+        .buttonStyle(.brand(!p.isEnabled ? .ghost : (p.isDestructive ? .danger : (accent ? .accent : .primary)), size: .lg, fullWidth: true, arrow: true))
         .disabled(!p.isEnabled)
         .id(id)
     }
