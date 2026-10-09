@@ -727,10 +727,7 @@ private struct KitchenTicketCard: View {
                 }
                 // 外送平台的單：哪個平台、幾點要好／外送員到了沒（打包時對短碼）
                 if let d = card.ticket.delivery {
-                    HStack(spacing: 8) {
-                        DeliveryTag(delivery: d, size: 13)
-                        DeliveryClock(delivery: d, size: 13)
-                    }
+                    DeliveryHeadline(delivery: d, tagSize: 13, clockSize: 13)
                 }
             }
             Spacer(minLength: 6)

@@ -33,7 +33,31 @@ struct DeliveryTag: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(delivery.platform.tint.opacity(0.13), in: .rect(cornerRadius: Metric.chip))
+        // 平台名稱不能被切成「foodpa…」：放不下時整行往下換（DeliveryHeadline）
+        .fixedSize()
         .accessibilityLabel("\(delivery.platform.label) 訂單 \(delivery.code)")
+    }
+}
+
+/// 平台＋時間：放得下就一行（時間靠右），窄的卡片（廚房、手機）時間換到下一行，兩個都不切字
+struct DeliveryHeadline: View {
+    let delivery: DeliveryOrder
+    var showsCode = false
+    var tagSize: CGFloat = 12.5
+    var clockSize: CGFloat = 13
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                DeliveryTag(delivery: delivery, showsCode: showsCode, size: tagSize)
+                Spacer(minLength: 4)
+                DeliveryClock(delivery: delivery, size: clockSize).fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                DeliveryTag(delivery: delivery, showsCode: showsCode, size: tagSize)
+                DeliveryClock(delivery: delivery, size: clockSize)
+            }
+        }
     }
 }
 
@@ -82,23 +106,23 @@ struct DeliveryClock: View {
 struct DeliveryOrderCard: View {
     let ticket: Ticket
     let selected: Bool
+    /// 訂單看板那一排是固定寬度；手機的清單撐滿（nil）
+    var width: CGFloat? = 236
 
     var body: some View {
         if let d = ticket.delivery {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    DeliveryTag(delivery: d)
-                    Spacer(minLength: 4)
-                    DeliveryClock(delivery: d)
-                }
+                DeliveryHeadline(delivery: d)
                 Text(d.customerName.map { "\($0)・\(d.kind == .pickup ? "自取" : "外送")" } ?? (d.kind == .pickup ? "自取" : "外送"))
                     .font(.brand(17, .semibold))
                     .foregroundStyle(Theme.ink)
                     .lineLimit(1)
-                Text("\(ticket.itemCount) 項・\(d.subtotal.formatted)")
+                // 短碼放這裡（外送員報的就是它）：上面的平台標籤只寫平台，窄的卡片才放得下時間
+                Text("#\(d.code)・\(ticket.itemCount) 項・\(d.subtotal.formatted)")
                     .font(.brand(13, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
                 if let note = d.customerNote, !note.isEmpty {
                     Text("※ \(note)")
                         .font(.brand(13, .semibold))
@@ -107,7 +131,8 @@ struct DeliveryOrderCard: View {
                 }
             }
             .padding(14)
-            .frame(width: 236, alignment: .topLeading)
+            .frame(width: width, alignment: .topLeading)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .topLeading)
             .background(Theme.surface, in: .rect(cornerRadius: Metric.radiusLg, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Metric.radiusLg, style: .continuous)
@@ -293,5 +318,24 @@ struct DeliveryPlatformRow: View {
         parts.append("備餐 \(state.defaultPrepMinutes) 分")
         if let e = state.lastError { parts.append("錯誤：\(e.message)") }
         return parts.joined(separator: "・")
+    }
+}
+
+/// 外送單要拒單／取消：右欄（手機是下面）蓋上原因
+enum DeliveryReasonTarget: Equatable {
+    case reject(String)
+    case cancel(String)
+
+    var ticketId: String {
+        switch self {
+        case .reject(let id), .cancel(let id): id
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .reject: "拒單的原因"
+        case .cancel: "取消的原因"
+        }
     }
 }

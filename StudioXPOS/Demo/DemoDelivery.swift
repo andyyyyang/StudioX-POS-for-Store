@@ -78,7 +78,7 @@ enum DemoDelivery {
         // 待接單：剛進來的 Uber Eats、快到期的 foodpanda
         let pending: [(DeliveryPlatform, String, [(Int, Int)], Double, String?, String?)] = [
             (.ubereats, "3F2A1", [(2, 2), (4, 1), (6, 1)], 1.5, "王小姐", "不要香菜，餐具不用"),
-            (.foodpanda, "a8x2", [(7, 3)], 5.5, "張先生", nil),
+            (.foodpanda, "a8f2", [(7, 3)], 5.5, "張先生", nil),
         ]
         for (p, code, idx, minutesAgo, customer, note) in pending {
             let placed = now.addingTimeInterval(-minutesAgo * 60)

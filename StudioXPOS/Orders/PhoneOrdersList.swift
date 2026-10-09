@@ -7,7 +7,7 @@ import SwiftUI
 
 /// 手機的訂單：還開著的單，分「進行中｜待結帳」。
 ///
-///   進行中：點餐中、出餐中、用餐中的單（點一下＝到點餐頁、打開那張單）
+///   進行中：外送平台的單在最上面（點一下＝下面出現接單、拒單）；再來是點餐中、出餐中、用餐中的單（點一下＝到點餐頁、打開那張單）
 ///   待結帳：送到結帳櫃台（或印了結帳單）、等客人去付的；櫃台結好的留在下面，標「已結帳」（統一結帳：送出去之後看得到結果）
 struct PhoneOrdersList: View {
     @Environment(POSModel.self) private var model
@@ -16,9 +16,13 @@ struct PhoneOrdersList: View {
     private enum Tab: Hashable { case open, billing }
 
     @State private var tab: Tab = .open
+    /// 外送單要拒單／取消（下面蓋上原因）
+    @State private var deliveryReasonFor: DeliveryReasonTarget?
 
     var body: some View {
-        let open = model.state.openTickets.filter { $0.billPrintedAt == nil }.sorted { $0.openedAt > $1.openedAt }
+        // 外送平台的單不是在店裡點的：不進「點餐中」，另外一區（待接單、製作中、等外送員）
+        let delivery = model.deliveryEnabled ? model.deliveryPending + model.deliveryActive : []
+        let open = model.state.openTickets.filter { $0.billPrintedAt == nil && $0.delivery == nil }.sorted { $0.openedAt > $1.openedAt }
         let waiting = model.awaitingCheckout.sorted { ($0.billPrintedAt ?? $0.openedAt) > ($1.billPrintedAt ?? $1.openedAt) }
         let paid = Array(model.handedOffAndPaid.prefix(20))
         VStack(alignment: .leading, spacing: 12) {
@@ -26,7 +30,7 @@ struct PhoneOrdersList: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             Picker("", selection: $tab) {
-                Text("進行中 \(open.count)").tag(Tab.open)
+                Text("進行中 \(open.count + delivery.count)").tag(Tab.open)
                 Text("待結帳 \(waiting.count)").tag(Tab.billing)
             }
             .pickerStyle(.segmented)
@@ -37,8 +41,21 @@ struct PhoneOrdersList: View {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         switch tab {
                         case .open:
-                            if open.isEmpty {
+                            if open.isEmpty && delivery.isEmpty {
                                 empty("沒有進行中的單", "點餐頁開的單、桌位入座的單會出現在這裡")
+                            }
+                            if !delivery.isEmpty {
+                                Eyebrow("外送平台")
+                                ForEach(delivery) { t in
+                                    Button { toggleDelivery(t) } label: {
+                                        DeliveryOrderCard(ticket: t, selected: model.deliveryFocusId == t.id, width: nil)
+                                    }
+                                    .buttonStyle(PressScale(scale: 0.98))
+                                }
+                                if !open.isEmpty {
+                                    Eyebrow("店裡的單")
+                                        .padding(.top, 8)
+                                }
                             }
                             ForEach(open) { t in
                                 Button { openInOrder(t) } label: { row(t, now: ctx.date) }
@@ -68,9 +85,36 @@ struct PhoneOrdersList: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .dockSelection(deliveryDockItem)
+        .dockPanel(isPresented: Binding(get: { deliveryReasonFor != nil }, set: { if !$0 { deliveryReasonFor = nil } }),
+                   title: deliveryReasonFor?.title ?? "", subtitle: "平台要知道原因") {
+            DeliveryReasonChoices { reason in
+                guard let target = deliveryReasonFor, let t = model.state.tickets[target.ticketId] else { return }
+                deliveryReasonFor = nil
+                Task {
+                    switch target {
+                    case .reject: await model.rejectDelivery(t, reason: reason)
+                    case .cancel: await model.cancelDelivery(t, reason: reason)
+                    }
+                }
+            }
+        }
         .onAppear {
             if LaunchArguments.preselect, !waiting.isEmpty { tab = .billing }
         }
+    }
+
+    /// 選起來的外送單：下面出現「接單・N 分」「出餐好了」這些（和 iPad 的右欄同一份）
+    private var deliveryDockItem: DockSelection? {
+        guard tab == .open, let id = model.deliveryFocusId, let t = model.state.tickets[id] else { return nil }
+        return deliveryDock(t, model: model, reject: { deliveryReasonFor = .reject(id) }, cancel: { deliveryReasonFor = .cancel(id) }) {
+            model.deliveryFocusId = nil
+        }
+    }
+
+    private func toggleDelivery(_ t: Ticket) {
+        model.touch()
+        model.deliveryFocusId = model.deliveryFocusId == t.id ? nil : t.id
     }
 
     /// 點一張開著的單：到點餐頁、單子打開在下面

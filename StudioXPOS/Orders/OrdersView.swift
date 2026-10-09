@@ -2732,22 +2732,3 @@ extension SaleRecord {
         return !digits.isEmpty && digits.count == q.count && String(total.dollars).hasPrefix(digits)
     }
 }
-
-/// 外送單要拒單（還沒接）或取消（接了之後）
-private enum DeliveryReasonTarget: Equatable {
-    case reject(String)
-    case cancel(String)
-
-    var ticketId: String {
-        switch self {
-        case .reject(let id), .cancel(let id): id
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .reject: "拒單的原因"
-        case .cancel: "取消的原因"
-        }
-    }
-}
