@@ -158,7 +158,8 @@ private struct DeliveryDockExtra: View {
                 }
                 if d.status == .pending {
                     // 建議的分鐘數看廚房現在的份數；打數字就用打的
-                    Text("建議 \(model.suggestedPrepMinutes(for: ticket)) 分（廚房 \(model.kitchenLoad) 份待做）・打數字改分鐘數")
+                    // 手機下面沒有數字鍵盤：不叫人「打數字」
+                    Text("建議 \(model.suggestedPrepMinutes(for: ticket)) 分（廚房 \(model.kitchenLoad) 份待做）\(model.isPhone ? "" : "・打數字改分鐘數")")
                         .font(.brand(12.5, .medium))
                         .foregroundStyle(Theme.muted)
                         .fixedSize(horizontal: false, vertical: true)
