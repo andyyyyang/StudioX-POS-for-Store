@@ -340,9 +340,8 @@ nonisolated final class ECRUDPTransport: ECRTransport, @unchecked Sendable {
         conn.stateUpdateHandler = { [weak self] state in
             if case .failed(let e) = state { self?.fail(ECRUDPTransport.describe(e)) }
         }
-        lock.lock()
-        connection = conn
-        lock.unlock()
+        // async 函式裡不能直接 lock()／unlock()（Swift 6）：用 withLock
+        lock.withLock { connection = conn }
         listen(conn)
     }
 
