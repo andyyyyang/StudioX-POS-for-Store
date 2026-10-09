@@ -103,7 +103,7 @@ pending ──接單──▶ accepted ──出餐好了──▶ ready ──�
 | POST | `delivery/simulate` | `{platform, items?}` | 測試單（設定開了「測試模式」才行）：走完整的流程，平台那邊不會真的有單 |
 
 `reason`（拒單、取消）：`too_busy` 太忙｜`item_unavailable` 有東西賣完｜`closed` 打烊了｜`other` 其他。
-連接器把它換成平台的代碼（Uber：`STORE_BUSY`/`ITEM_AVAILABILITY`/`STORE_CLOSED`/`OTHER`；foodpanda：`TOO_BUSY`/`ITEM_UNAVAILABLE`/`CLOSED`/`TECHNICAL_PROBLEM`）。
+連接器把它換成平台的代碼（Uber 拒單：`RESTAURANT_TOO_BUSY`/`ITEM_ISSUE`/`STORE_CLOSED`/`OTHER`（舊版 API 是 `CAPACITY`/`ITEM_AVAILABILITY`）；foodpanda：`TOO_BUSY`/`ITEM_UNAVAILABLE`/`CLOSED`/`TECHNICAL_PROBLEM`）。
 
 接單同一時間兩台按：後台用資料列鎖決定，第一個 `mine:true`、第二個回 `409 already_accepted`（iPad 照事件更新就好）。
 
