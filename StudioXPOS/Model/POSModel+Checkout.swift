@@ -123,14 +123,26 @@ extension POSModel {
         if let fresh = state.tickets[t.id], fresh.totals.isPaidInFull { await complete(fresh) }
     }
 
-    /// 刷卡、電子支付、禮券：金額預設是剩下的（右側鍵盤可以改成只付一部分），刷卡再問末四碼（給對帳用，可以跳過）
+    /// 刷卡、電子支付、禮券：金額預設是剩下的（右側鍵盤可以改成只付一部分），刷卡再問末四碼（給對帳用，可以跳過）。
+    /// 接了刷卡機（設定 → 刷卡機）：金額送到刷卡機，結果自動記，不用打末四碼（POSModel+CardTerminal）
     func take(_ tender: Tender, for t: Ticket) async {
         let due = t.totals.balance
-        guard due.cents > 0, let me = currentStaff else { return }
+        guard due.cents > 0, currentStaff != nil else { return }
         guard let amount = await keypad.askMoney(KeypadSpec(
             kind: .money, title: tender.label, subtitle: "剩 \(due.formatted)", initial: String(due.dollars),
-            quickKeys: [.init("全部", digits: String(due.dollars), commits: true)], confirmLabel: "收款", maxValue: due.dollars, minValue: 1
+            quickKeys: [.init("全部", digits: String(due.dollars), commits: true)], confirmLabel: usesTerminal(for: tender) ? "送到刷卡機" : "收款",
+            maxValue: due.dollars, minValue: 1
         )) else { return }
+        if usesTerminal(for: tender) {
+            await chargeOnTerminal(t, tender: tender, amount: amount)
+            return
+        }
+        await recordManual(tender, amount: amount, for: t)
+    }
+
+    /// 手動記一筆（沒接刷卡機；或刷卡機連不上、但刷卡機的簽單上有成功）：刷卡問末四碼、電子支付問交易序號（都可以跳過）
+    func recordManual(_ tender: Tender, amount: Money, for t: Ticket) async {
+        guard let me = currentStaff else { return }
         var last4: String? = nil
         var reference: String? = nil
         if tender == .card {
@@ -152,7 +164,14 @@ extension POSModel {
 
     func voidPayment(_ p: Payment, in t: Ticket) async {
         guard let auth = await authorize(.refund, detail: "退回 \(p.tender.label) \(p.amount.formatted)") else { return }
-        record(.paymentVoided(PaymentVoided(ticketId: t.id, paymentId: p.id, reason: "結帳前退回", authorizedBy: auth.authorizerId)))
+        // 刷卡機收的：先在刷卡機上取消（或退貨），刷卡機退好了才在 POS 退回
+        var reason = "結帳前退回"
+        switch await reverseOnTerminal(p, amount: p.amount, wholePayment: true) {
+        case .notNeeded: break
+        case .done(let ref): if ref != nil { reason = "結帳前退回（刷卡機）" }
+        case .cancelled: return
+        }
+        record(.paymentVoided(PaymentVoided(ticketId: t.id, paymentId: p.id, reason: reason, authorizedBy: auth.authorizerId)))
         if p.tender == .cash, settings.openDrawerOnCash { printers.openDrawer() }
     }
 
@@ -426,12 +445,29 @@ extension POSModel {
             amount = min(Money.sum(itemised.map(\.amount)), refundable)
         }
         guard amount.cents > 0 || itemised.contains(where: { $0.amount.isZero }) else { return }
+        // 刷卡機收的：先在刷卡機上退（當天整筆＝取消，其他＝退貨），刷卡機退好了才記（POSModel+CardTerminal）
+        var terminalRef: CardTerminalRef? = nil
+        if amount.cents > 0 {
+            let source = terminalSource(in: sale, tender: tender, amount: amount)
+            if !source.viaTerminal.isEmpty {
+                guard let p = source.payment else {
+                    let most = source.viaTerminal.map(\.amount).max() ?? .zero
+                    show("刷卡機一次只能退一筆刷卡：這張最多退 \(most.formatted)，其他的分開退", tone: .warning)
+                    return
+                }
+                switch await reverseOnTerminal(p, amount: amount, wholePayment: amount == p.amount && t.refunds.isEmpty) {
+                case .notNeeded: break
+                case .done(let ref): terminalRef = ref
+                case .cancelled: return
+                }
+            }
+        }
         // 整張退：沒有退過、而且金額是全部（或每一件都退了）
         let full = t.refunds.isEmpty && (amount == refundable || everyLine)
         let invoice = t.invoice.flatMap { state.invoices[$0.number] }
         let action = (invoice != nil && t.invoice?.isVoided == false) ? InvoiceBuilder.refundAction(invoice: invoice, isFullRefund: full, at: Date()) : .none
         var refund = Refund(id: newID(), amount: amount, tender: tender, lines: full ? [] : itemised, reason: reason, invoiceAction: action, at: Date(),
-                            by: me.id, authorizedBy: auth.authorizerId, shiftId: openShift?.id)
+                            by: me.id, authorizedBy: auth.authorizerId, shiftId: openShift?.id, terminal: terminalRef)
         var bodies: [EventBody] = []
         var allowance: EInvoiceAllowance? = nil
         switch action {
@@ -450,7 +486,8 @@ extension POSModel {
         guard record(bodies) else { return }
         if tender == .cash, settings.openDrawerOnCash { printers.openDrawer() }
         printers.print(Self.refundSlip(sale: sale, refund: refund, allowance: allowance, store: store, staff: me.name), role: .receipt)
-        show("已退款 \(amount.formatted)" + (action == .void ? "・發票已作廢" : action == .allowance ? "・開了折讓單" : ""))
+        show("已退款 \(amount.formatted)" + (terminalRef != nil ? "・刷卡機已退" : "")
+             + (action == .void ? "・發票已作廢" : action == .allowance ? "・開了折讓單" : ""))
     }
 
     /// 折讓單號：裝置字母＋時間（yyMMddHHmmss），同一台不會重複
@@ -470,6 +507,8 @@ extension POSModel {
         r.add(.row("原因", refund.reason, .body))
         r.add(.rule)
         r.add(.row("退款（\(refund.tender.label)）", refund.amount.plain, .big))
+        // 刷卡機上退的：調閱編號、授權碼（對帳）
+        if let ref = refund.terminal { r.add(.row("刷卡機", ref.summary, .body)) }
         if let a = allowance {
             r.add(.rule)
             r.add(.text("營業人銷貨退回、進貨退出或折讓證明單", .strong))

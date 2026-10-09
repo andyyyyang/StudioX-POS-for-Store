@@ -174,6 +174,8 @@ final class POSModel {
     let settings = LocalSettings()
     /// 叫號（號碼牌）：後台的號碼、連線狀況（POSModel+Queue）
     let queue = QueueBoard()
+    /// 銀行的刷卡機（收銀機連線）：設定存在這台（Services/CardTerminal.swift、POSModel+CardTerminal）
+    let cardTerminal = CardTerminalHub()
 
     // MARK: 內部
 
@@ -526,7 +528,8 @@ final class POSModel {
     func touch() { lastActivity = Date() }
 
     private func checkAutoLock() {
-        guard phase == .ready, settings.autoLockMinutes > 0, checkoutTicketId == nil, !keypad.isAsking else { return }
+        // 刷卡機正在收或退：不鎖（鎖了那張卡就看不到）
+        guard phase == .ready, settings.autoLockMinutes > 0, checkoutTicketId == nil, !keypad.isAsking, cardTerminal.session == nil else { return }
         if Date().timeIntervalSince(lastActivity) > Double(settings.autoLockMinutes * 60) { lock() }
     }
 

@@ -62,6 +62,59 @@ public enum PaymentStatus: String, Codable, Sendable, Hashable {
     case approved, voided
 }
 
+/// 經銀行刷卡機（EDC 的收銀機連線，ECR）收或退的款：刷卡機回的資料。
+/// 對帳（端末代號、批次、調閱編號）、之後在刷卡機上取消／退貨都要用，所以整份留在付款上。
+/// 欄位都是選填：舊的 iPad、後台不認得這一塊也照常（沒有的時候 JSON 裡不出現）
+public struct CardTerminalRef: Codable, Sendable, Hashable {
+    /// 電文格式（`nccc`：聯卡中心 8N1 標準）
+    public var format: String
+    /// 付款工具（N 信用卡、C 銀聯、S Smart Pay、E 電子票證、W 電子錢包）：退貨時照原來的送
+    public var kind: String?
+    /// 端末代號（TID）
+    public var terminalId: String?
+    /// 商店代號（MID）
+    public var merchantId: String?
+    /// 批次號碼（刷卡機結帳一次換一批）
+    public var batchNo: String?
+    /// 調閱編號（簽單上的 Receipt No；在刷卡機上取消要用）
+    public var receiptNo: String?
+    /// 授權碼（電子錢包沒有）
+    public var approvalNo: String?
+    /// 卡別、錢包、票證（Visa、LINE Pay、悠遊卡…）
+    public var brand: String?
+    /// 主機代號（03 信用卡、06 電子票證、08 電子錢包）
+    public var hostId: String?
+    /// 刷卡機上的交易日期時間（YYMMDDhhmmss）
+    public var at: String?
+    /// 電子錢包：特店訂單編號、錢包業者的交易序號
+    public var walletOrderId: String?
+    public var walletTransactionId: String?
+
+    public init(format: String, kind: String? = nil, terminalId: String? = nil, merchantId: String? = nil, batchNo: String? = nil,
+                receiptNo: String? = nil, approvalNo: String? = nil, brand: String? = nil, hostId: String? = nil, at: String? = nil,
+                walletOrderId: String? = nil, walletTransactionId: String? = nil) {
+        self.format = format; self.kind = kind; self.terminalId = terminalId; self.merchantId = merchantId; self.batchNo = batchNo
+        self.receiptNo = receiptNo; self.approvalNo = approvalNo; self.brand = brand; self.hostId = hostId; self.at = at
+        self.walletOrderId = walletOrderId; self.walletTransactionId = walletTransactionId
+    }
+
+    /// 同一台刷卡機、同一批、同一個調閱編號＝同一筆（查上一筆時認得是不是已經記過的）
+    public var key: String { Self.key(terminalId: terminalId, batchNo: batchNo, receiptNo: receiptNo) }
+
+    public static func key(terminalId: String?, batchNo: String?, receiptNo: String?) -> String {
+        "\(terminalId ?? "")/\(batchNo ?? "")/\(receiptNo ?? "")"
+    }
+
+    /// 「調閱 000123・授權 AB1234・批次 000042」
+    public var summary: String {
+        var parts: [String] = []
+        if let r = receiptNo, !r.isEmpty { parts.append("調閱 \(r)") }
+        if let a = approvalNo, !a.isEmpty { parts.append("授權 \(a)") }
+        if let b = batchNo, !b.isEmpty { parts.append("批次 \(b)") }
+        return parts.isEmpty ? "刷卡機" : parts.joined(separator: "・")
+    }
+}
+
 public struct Payment: Codable, Sendable, Hashable, Identifiable {
     public var id: String
     public var tender: Tender
@@ -81,12 +134,15 @@ public struct Payment: Codable, Sendable, Hashable, Identifiable {
     /// 收在哪一班（交班時算錢櫃）
     public var shiftId: String?
     public var voidReason: String?
+    /// 經刷卡機收的（端末、批次、調閱編號…）；手動輸入的沒有
+    public var terminal: CardTerminalRef?
 
     public init(id: String, tender: Tender, amount: Money, tendered: Money? = nil, change: Money = .zero, reference: String? = nil,
-                cardLast4: String? = nil, status: PaymentStatus = .approved, at: Date, by: String, shiftId: String? = nil, voidReason: String? = nil) {
+                cardLast4: String? = nil, status: PaymentStatus = .approved, at: Date, by: String, shiftId: String? = nil, voidReason: String? = nil,
+                terminal: CardTerminalRef? = nil) {
         self.id = id; self.tender = tender; self.amount = amount; self.tendered = tendered; self.change = change
         self.reference = reference; self.cardLast4 = cardLast4; self.status = status; self.at = at; self.by = by
-        self.shiftId = shiftId; self.voidReason = voidReason
+        self.shiftId = shiftId; self.voidReason = voidReason; self.terminal = terminal
     }
 
     /// 這筆讓錢櫃多了多少現金：現金收的錢扣掉找零；其他方式只有找零（從錢櫃拿出去）
@@ -136,12 +192,15 @@ public struct Refund: Codable, Sendable, Hashable, Identifiable {
     public var shiftId: String?
     /// 折讓單號（invoiceAction == .allowance）
     public var allowanceNumber: String?
+    /// 在刷卡機上退的（取消或退貨）：刷卡機回的資料
+    public var terminal: CardTerminalRef?
 
     public init(id: String, amount: Money, tender: Tender, lines: [RefundLine] = [], reason: String, invoiceAction: InvoiceRefundAction,
-                at: Date, by: String, authorizedBy: String? = nil, shiftId: String? = nil, allowanceNumber: String? = nil) {
+                at: Date, by: String, authorizedBy: String? = nil, shiftId: String? = nil, allowanceNumber: String? = nil,
+                terminal: CardTerminalRef? = nil) {
         self.id = id; self.amount = amount; self.tender = tender; self.lines = lines; self.reason = reason
         self.invoiceAction = invoiceAction; self.at = at; self.by = by; self.authorizedBy = authorizedBy
-        self.shiftId = shiftId; self.allowanceNumber = allowanceNumber
+        self.shiftId = shiftId; self.allowanceNumber = allowanceNumber; self.terminal = terminal
     }
 
     public var isFull: Bool { lines.isEmpty }

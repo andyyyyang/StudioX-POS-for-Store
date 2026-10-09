@@ -214,7 +214,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、會員卡、客人的手機條碼載具、折價券與商品條碼。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "按住單子那一條說要點什麼：用麥克風聽，放開就加進單子。";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把點餐時說的話轉成文字（支援的手機在手機上辨識），對到菜單加進單子。";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機、錢櫃與銀行的刷卡機，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "用 Face ID 解鎖門市 POS";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -256,7 +256,7 @@
 				INFOPLIST_KEY_NSCameraUsageDescription = "掃描配對用的 QR Code、會員卡、客人的手機條碼載具、折價券與商品條碼。";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "按住單子那一條說要點什麼：用麥克風聽，放開就加進單子。";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "把點餐時說的話轉成文字（支援的手機在手機上辨識），對到菜單加進單子。";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機與錢櫃，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "連到店裡的出單機、錢櫃與銀行的刷卡機，並和同一個 Wi-Fi 的其他 iPad、iPhone 即時同步點單（斷網也能用）。";
 				INFOPLIST_KEY_NSFaceIDUsageDescription = "用 Face ID 解鎖門市 POS";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

@@ -131,6 +131,8 @@ struct MainShell: View {
             }
             .onChange(of: showsTicket) { _, v in if !v { showTicketSheet = false } }
             .onChange(of: roomy) { _, v in if v { showTicketSheet = false } }
+            // 刷卡機那一筆的卡（Payment/CardTerminalSheet.swift）：和掃碼的相機放在不同層，兩張 sheet 才不會互相擋
+            .cardTerminalPresenter()
         }
         .background(Theme.page.ignoresSafeArea())
         .animation(Motion.ease, value: showsTicket)

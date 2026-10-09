@@ -105,6 +105,13 @@ struct SettingsView: View {
             let failing = printers.printers.contains(where: { printers.status[$0.id]?.ok == false })
             if failing { return ("連不到", .danger) }
             return nil
+        case .cardTerminal:
+            // 打開了：連不到、還沒填 IP 要提醒
+            let terminal = model.cardTerminal
+            guard terminal.config.enabled else { return nil }
+            if terminal.health?.ok == false { return ("連不到", .danger) }
+            if !model.isDemo && terminal.trimmedHost.isEmpty { return ("沒設定", .warning) }
+            return nil
         case .invoice:
             guard model.features.invoice && model.invoiceSettings.enabled else { return nil }
             let left = model.invoiceNumbersLeft
@@ -139,6 +146,7 @@ struct SettingsView: View {
                 case .mode: SettingsModeSection()
                 case .store: SettingsStoreSection()
                 case .printers: PrinterSettingsSection()
+                case .cardTerminal: CardTerminalSettingsSection()
                 case .receipts: SettingsReceiptsSection()
                 case .invoice: SettingsInvoiceSection()
                 case .queue: SettingsQueueSection(openPrinters: { group = .printers })
@@ -234,7 +242,7 @@ struct PrinterSettingsSection: View {
 // MARK: - 分類
 
 private enum SettingsGroup: String, CaseIterable, Identifiable {
-    case device, workstation, mode, store, printers, receipts, invoice, queue, delivery, appearance, data, advanced
+    case device, workstation, mode, store, printers, cardTerminal, receipts, invoice, queue, delivery, appearance, data, advanced
 
     var id: String { rawValue }
 
@@ -245,6 +253,7 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
         case .mode: "營業模式"
         case .store: "門市設定"
         case .printers: "出單機"
+        case .cardTerminal: "刷卡機"
         case .receipts: "收據與出單"
         case .invoice: "電子發票"
         case .queue: "叫號"
@@ -262,6 +271,7 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
         case .mode: "rectangle-stack"
         case .store: "building-storefront"
         case .printers: "printer"
+        case .cardTerminal: "credit-card"
         case .receipts: "document-text"
         case .invoice: "qr-code"
         case .queue: "ticket"
@@ -296,7 +306,7 @@ private struct SettingsNavStyle: ButtonStyle {
 
 // MARK: - 共用的小元件
 
-private struct SettingsHeading: View {
+struct SettingsHeading: View {
     let title: String
     var detail: String? = nil
 
@@ -316,7 +326,7 @@ private struct SettingsHeading: View {
 }
 
 /// 表單的一格：標題、欄位、下面一行說明
-private struct SettingsField<Content: View>: View {
+struct SettingsField<Content: View>: View {
     let label: String
     let hint: String?
     let content: Content
@@ -343,7 +353,7 @@ private struct SettingsField<Content: View>: View {
     }
 }
 
-private struct SettingsToggleLabel: View {
+struct SettingsToggleLabel: View {
     let title: String
     let detail: String
 
@@ -382,7 +392,7 @@ private struct SettingsMeter: View {
 
 extension View {
     /// 設定頁的文字欄位：細框、方角
-    fileprivate func settingsInput() -> some View {
+    func settingsInput() -> some View {
         font(.brand(16, .regular))
             .padding(.horizontal, 12)
             .frame(height: 44)

@@ -226,6 +226,10 @@ struct PaymentView: View {
                         VStack(spacing: 6) {
                             tenderIcon(tender)
                             Text(tender.label).font(.brand(14, .medium))
+                            // 接了刷卡機：金額送到刷卡機，不用打末四碼
+                            if model.usesTerminal(for: tender) {
+                                Text("刷卡機").font(.brand(11.5, .medium)).opacity(0.6)
+                            }
                         }
                         .frame(maxWidth: .infinity, minHeight: 74)
                     }
@@ -454,6 +458,8 @@ struct PaymentView: View {
         if p.tender == .prepaid, let ref = p.reference, !ref.isEmpty {
             return "會員 \(ref)"
         }
+        // 刷卡機收的：調閱編號、授權碼
+        if let terminal = p.terminal { return terminal.summary }
         return nil
     }
 

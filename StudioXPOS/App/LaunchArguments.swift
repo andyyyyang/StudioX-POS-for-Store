@@ -25,6 +25,7 @@ import UIKit
 ///   -checkInTab classes                  報到頁直接看課表（健身）
 ///   -checkout                            登入、開頁之後選一張有點東西的單、打開結帳畫面（截付款的樣子）
 ///   -deliveryFocus                       登入、開頁之後選起最快到期的外送待接單（截接單的樣子）
+///   -cardTerminal                        示範店接上模擬的刷卡機（信用卡、電子票證、電子錢包都經刷卡機；不存設定）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments

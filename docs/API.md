@@ -317,6 +317,10 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 **付款方式**多了 `prepaid`（儲值金）與 `exchange`（換貨抵用：退回的商品抵掉新買的；`change` > 0＝退差額，從錢櫃拿現金）。實收不算這兩種。
 還有 `platform`（外送平台代收：客人在 Uber Eats、foodpanda 上付了，`reference`＝「Uber Eats #3F2A1」）：不進錢櫃、不用輸入交易序號，報表照 `reference` 開頭分平台。
 
+**經銀行刷卡機收、退的**（[PAYMENTS-INSTORE.md](PAYMENTS-INSTORE.md)）：付款（`payment.added`、`ticket.closed` 的 `payments[]`）與退款（`sale.refunded` 的 `refund`）選填 `terminal`：
+`{format: "nccc", kind: "N"|"C"|"S"|"E"|"W", terminalId, merchantId, batchNo, receiptNo, approvalNo, brand, hostId, at: "YYMMDDhhmmss", walletOrderId, walletTransactionId}`（都是選填字串）。
+沒有的時候 JSON 裡不出現；後台不認得也照常（`reference` 已經是「授權 123456・調閱 000123」、`cardLast4` 是末四碼）。對帳用：同一台（`terminalId`）、同一批（`batchNo`）、同一個調閱編號（`receiptNo`）＝同一筆。
+
 **換貨**：結帳時同一批事件裡有原單的 `sale.refunded`（`tender = exchange`，照規則作廢或開折讓）與新單的 `ticket.closed`（`payments` 有一筆 `exchange`、`exchange` 欄位指向原單）。
 
 **發票與儲值**：`prepaidInvoicing = atTopUp` 時，用儲值金付的部分 iPad 已經從發票扣掉（發票上有一行「儲值金扣抵」）；`atRedemption` 時賣儲值那一行不開。課程卡抵用的行金額是 0，不列。
