@@ -273,8 +273,8 @@ jobs:
             "phone/12-more|$P -section settings|8"
             # 這支手機也能收款：結帳畫面（刷卡、電子支付）
             "phone/13-payment|$P -section order -phoneTakesPayment YES -checkout|12"
-  # 外送平台的單：訂單頁最上面一排，選起待接單（下面的卡片：接單・N 分）
-  "phone/14-delivery|$P -section orders -deliveryFocus|12"
+            # 外送平台的單：訂單頁最上面一排，選起待接單（下面的卡片：接單・N 分）
+            "phone/14-delivery|$P -section orders -deliveryFocus|12"
             "phone/20-apparel-order|-demo apparel -autologin 1234 -section order|16"
             "phone/21-apparel-ticket|-demo apparel -autologin 1234 -section order -preselect|10"
             "phone/30-salon-appointments|-demo salon -autologin 1234 -section appointments|14"

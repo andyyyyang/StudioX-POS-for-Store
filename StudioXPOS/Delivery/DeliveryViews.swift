@@ -148,7 +148,7 @@ private struct DeliveryDockExtra: View {
                             Text(l.modifierText.isEmpty ? l.name : "\(l.name)（\(l.modifierText)）")
                                 .font(.brand(13, .regular))
                                 .lineLimit(1)
-                            if l.itemId.isEmpty {
+                            if (l.itemId ?? "").isEmpty {
                                 // 平台上的品項對不到 POS 的（菜單沒同步）：照樣做，標出來
                                 StatusBadge("沒對到", tone: .warning)
                             }
