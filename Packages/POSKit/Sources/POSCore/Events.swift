@@ -27,15 +27,17 @@ public struct TicketOpened: Codable, Sendable, Hashable {
     /// 換貨單
     public var exchange: ExchangeCredit?
     public var appointmentId: String?
+    /// 外送平台的單（後台收下平台的單時寫的；docs/DELIVERY.md）
+    public var delivery: DeliveryOrder?
 
     public init(ticketId: String, number: String, orderType: OrderType, tableIds: [String] = [], guests: Int = 0,
                 serviceChargeBps: Int = 0, businessDate: String, customerName: String? = nil, splitFrom: String? = nil,
                 serviceMode: ServiceMode? = nil, member: MemberRef? = nil, salespersonId: String? = nil, exchange: ExchangeCredit? = nil,
-                appointmentId: String? = nil) {
+                appointmentId: String? = nil, delivery: DeliveryOrder? = nil) {
         self.ticketId = ticketId; self.number = number; self.orderType = orderType; self.tableIds = tableIds; self.guests = guests
         self.serviceChargeBps = serviceChargeBps; self.businessDate = businessDate; self.customerName = customerName; self.splitFrom = splitFrom
         self.serviceMode = serviceMode; self.member = member; self.salespersonId = salespersonId; self.exchange = exchange
-        self.appointmentId = appointmentId
+        self.appointmentId = appointmentId; self.delivery = delivery
     }
 }
 
@@ -343,6 +345,8 @@ public enum EventBody: Sendable, Hashable {
     case saleExchanged(SaleExchanged)
     case checkedIn(CheckedIn)
     case checkInVoided(CheckInVoided)
+    /// 外送平台那邊的狀態變了（後台寫的）
+    case deliveryUpdated(DeliveryUpdated)
     /// 這個版本不認得的事件（新版 App 送來的）：原樣保留、轉送，不做投影
     case unknown(type: String, data: String)
 
@@ -378,6 +382,7 @@ public enum EventBody: Sendable, Hashable {
         case .saleExchanged: "sale.exchanged"
         case .checkedIn: "member.checkedIn"
         case .checkInVoided: "member.checkInVoided"
+        case .deliveryUpdated: "delivery.updated"
         case .unknown(let type, _): type
         }
     }
@@ -405,6 +410,7 @@ public enum EventBody: Sendable, Hashable {
         case .ticketVoided(let e): e.ticketId
         case .saleRefunded(let e): e.ticketId
         case .saleExchanged(let e): e.ticketId
+        case .deliveryUpdated(let e): e.ticketId
         case .tableCleaned, .shiftOpened, .cashMoved, .shiftClosed, .clockedIn, .clockedOut, .itemAvailability, .checkedIn, .checkInVoided, .unknown: nil
         }
     }
@@ -442,6 +448,7 @@ public enum EventBody: Sendable, Hashable {
         case .saleExchanged(let e): try encoder.encode(e)
         case .checkedIn(let e): try encoder.encode(e)
         case .checkInVoided(let e): try encoder.encode(e)
+        case .deliveryUpdated(let e): try encoder.encode(e)
         case .unknown(_, let raw): Data(raw.utf8)
         }
         return String(decoding: data, as: UTF8.self)
@@ -480,6 +487,7 @@ public enum EventBody: Sendable, Hashable {
         case "sale.exchanged": return .saleExchanged(try d.decode(SaleExchanged.self, from: bytes))
         case "member.checkedIn": return .checkedIn(try d.decode(CheckedIn.self, from: bytes))
         case "member.checkInVoided": return .checkInVoided(try d.decode(CheckInVoided.self, from: bytes))
+        case "delivery.updated": return .deliveryUpdated(try d.decode(DeliveryUpdated.self, from: bytes))
         default: return .unknown(type: type, data: data)
         }
     }

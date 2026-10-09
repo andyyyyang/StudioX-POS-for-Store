@@ -8,6 +8,27 @@ public struct TenderTotal: Codable, Sendable, Hashable {
     public var amount: Money
 }
 
+/// 一個通路（店裡、Uber Eats、foodpanda）的單數、營業額、抽成、實收
+public struct ChannelTotal: Codable, Sendable, Hashable, Identifiable {
+    /// store｜ubereats｜foodpanda
+    public var channel: String
+    public var tickets: Int
+    public var total: Money
+    /// 平台抽成（店裡的單是 0）
+    public var commission: Money
+    /// 有幾張的抽成是照抽成率估的（平台還沒給撥款明細）
+    public var estimated: Int
+
+    public var id: String { channel }
+    /// 扣掉抽成之後店實際拿到的
+    public var net: Money { total - commission }
+    public var label: String { DeliveryPlatform(rawValue: channel)?.label ?? "店裡" }
+
+    public init(channel: String, tickets: Int = 0, total: Money = .zero, commission: Money = .zero, estimated: Int = 0) {
+        self.channel = channel; self.tickets = tickets; self.total = total; self.commission = commission; self.estimated = estimated
+    }
+}
+
 public struct NamedTotal: Codable, Sendable, Hashable {
     public var id: String
     public var name: String
@@ -91,6 +112,8 @@ public struct SalesSummary: Codable, Sendable, Hashable {
     public var exchangeCredit: Money
     /// 入場報到人次
     public var checkIns: Int
+    /// 分通路：店裡、各外送平台（有外送的店才有平台那幾列）
+    public var byChannel: [ChannelTotal]
 
     public var averageTicket: Money { tickets > 0 ? Money(dollars: Int((Double(total.dollars) / Double(tickets)).rounded())) : .zero }
     public var averagePerGuest: Money { guests > 0 ? Money(dollars: Int((Double(total.dollars) / Double(guests)).rounded())) : .zero }
@@ -209,13 +232,27 @@ public struct SalesSummary: Codable, Sendable, Hashable {
         let realOut = Money.sum(refunds.filter { !$0.tender.isInternal }.map(\.amount))
         received = realIn - cashBack - realOut
         self.checkIns = checkIns
+
+        var channels: [String: ChannelTotal] = [:]
+        for s in sales {
+            let key = s.delivery?.platform.rawValue ?? "store"
+            var c = channels[key] ?? ChannelTotal(channel: key)
+            c.tickets += 1
+            c.total += s.total
+            if let d = s.delivery {
+                c.commission += d.commission ?? .zero
+                if d.estimated == true || d.commission == nil { c.estimated += 1 }
+            }
+            channels[key] = c
+        }
+        byChannel = channels.values.sorted { ($0.channel == "store" ? 0 : 1, $1.total) < ($1.channel == "store" ? 0 : 1, $0.total) }
     }
 
     // 舊版 App 的交班單（事件裡存著）沒有後面這些欄位：用 0 補上，不要整筆讀不進來
     enum CodingKeys: String, CodingKey {
         case tickets, guests, itemsGross, discounts, serviceCharge, total, tax, tips, refunds, net, byTender, byCategory, topItems, byHour
         case byOrderType, voidedItems, voidedAmount, voidedTickets, invoicesIssued, invoicesVoided, invoiceRanges
-        case byStaff, byMode, prepaidSold, passesSold, prepaidUsed, redeemedValue, received, exchangeCredit, checkIns
+        case byStaff, byMode, prepaidSold, passesSold, prepaidUsed, redeemedValue, received, exchangeCredit, checkIns, byChannel
     }
 
     public init(from decoder: Decoder) throws {
@@ -250,6 +287,7 @@ public struct SalesSummary: Codable, Sendable, Hashable {
         received = try c.decodeIfPresent(Money.self, forKey: .received) ?? (total + tips - refunds)
         exchangeCredit = try c.decodeIfPresent(Money.self, forKey: .exchangeCredit) ?? .zero
         checkIns = try c.decodeIfPresent(Int.self, forKey: .checkIns) ?? 0
+        byChannel = try c.decodeIfPresent([ChannelTotal].self, forKey: .byChannel) ?? []
     }
 
     /// 營收（扣掉預收的儲值；課程卡賣出時就算營收）

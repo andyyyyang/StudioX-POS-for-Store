@@ -361,6 +361,8 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
     public var swaps: [VariantSwap]?
     /// 從哪裡送到結帳櫃台的（「手機」「報到接待」）；nil＝結帳單是印出來的（或還沒待結帳）
     public var billSentFrom: String?
+    /// 外送平台的單（Uber Eats、foodpanda）；nil＝店裡的單
+    public var delivery: DeliveryOrder? = nil
 
     public init(
         id: String, number: String, deviceId: String, orderType: OrderType, tableIds: [String] = [], guests: Int = 0,
@@ -399,6 +401,7 @@ public struct Ticket: Codable, Sendable, Hashable, Identifiable {
             if let m = member { return m.name ?? m.maskedPhone }
             return number
         }
+        if let d = delivery { return d.title }
         if let name = customerName, !name.isEmpty { return "\(orderType.label) \(name)" }
         if let q = queueNumber { return "\(orderType.label) \(q) 號" }
         return "\(orderType.label) \(number)"

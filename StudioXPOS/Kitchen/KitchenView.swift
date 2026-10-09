@@ -725,6 +725,13 @@ private struct KitchenTicketCard: View {
                         .foregroundStyle(Theme.ink2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // 外送平台的單：哪個平台、幾點要好／外送員到了沒（打包時對短碼）
+                if let d = card.ticket.delivery {
+                    HStack(spacing: 8) {
+                        DeliveryTag(delivery: d, size: 13)
+                        DeliveryClock(delivery: d, size: 13)
+                    }
+                }
             }
             Spacer(minLength: 6)
             VStack(alignment: .trailing, spacing: 2) {
@@ -990,10 +997,14 @@ extension POSModel {
     /// 廚房看得到的單：還沒結帳的；外帶先結帳後出餐很常見，所以 30 分鐘內結帳的也算（右邊的出餐數字也照這個算）
     func kitchenTickets(now: Date = Date()) -> [Ticket] {
         let cutoff = now.addingTimeInterval(-30 * 60)
+        // 外送平台的單接單就結帳了（先付的），外送員拿走之前都還在廚房（最多 3 小時，避免平台沒通知「拿走了」就一直掛著）
+        let deliveryCutoff = now.addingTimeInterval(-3 * 3600)
         return state.tickets.values.filter { t in
             switch t.status {
-            case .open: return true
-            case .closed: return (t.closedAt ?? .distantPast) > cutoff
+            case .open: return t.delivery?.status != .pending
+            case .closed:
+                if let d = t.delivery, !d.status.isFinal { return (t.closedAt ?? .distantPast) > deliveryCutoff }
+                return (t.closedAt ?? .distantPast) > cutoff
             case .voided: return false
             }
         }

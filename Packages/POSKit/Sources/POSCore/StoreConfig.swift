@@ -266,18 +266,20 @@ public struct FeatureFlags: Codable, Sendable, Hashable {
     public var commission: Bool
     /// 叫號（號碼牌）：取號、叫號、過號（Bootstrap.queue 是它的設定）。要後台設好號碼存在哪裡，所以預設關
     public var queue: Bool
+    /// 外送平台（Uber Eats、foodpanda）的單直接進 POS（Bootstrap.delivery 是它的設定）。要後台串好平台，所以預設關
+    public var delivery: Bool
 
     public init(seating: Bool = true, kitchen: Bool = true, reservations: Bool = true, invoice: Bool = true, members: Bool = true, waitlistSMS: Bool = false,
-                appointments: Bool = true, accounts: Bool = true, commission: Bool = true, queue: Bool = false) {
+                appointments: Bool = true, accounts: Bool = true, commission: Bool = true, queue: Bool = false, delivery: Bool = false) {
         self.seating = seating; self.kitchen = kitchen; self.reservations = reservations; self.invoice = invoice
         self.members = members; self.waitlistSMS = waitlistSMS
         self.appointments = appointments; self.accounts = accounts; self.commission = commission
-        self.queue = queue
+        self.queue = queue; self.delivery = delivery
     }
 
     public static let all = FeatureFlags()
 
-    enum CodingKeys: String, CodingKey { case seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission, queue }
+    enum CodingKeys: String, CodingKey { case seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission, queue, delivery }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -292,6 +294,7 @@ public struct FeatureFlags: Codable, Sendable, Hashable {
         accounts = try c.decodeIfPresent(Bool.self, forKey: .accounts) ?? false
         commission = try c.decodeIfPresent(Bool.self, forKey: .commission) ?? false
         queue = try c.decodeIfPresent(Bool.self, forKey: .queue) ?? false
+        delivery = try c.decodeIfPresent(Bool.self, forKey: .delivery) ?? false
     }
 }
 

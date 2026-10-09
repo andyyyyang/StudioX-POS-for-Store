@@ -194,6 +194,10 @@ private struct DashReport: View {
                     .frame(width: 300)
             }
             .fixedSize(horizontal: false, vertical: true)
+            // 有外送平台的單：店裡、Uber Eats、foodpanda 各賣多少、抽成多少、實際拿到多少
+            if summary.byChannel.contains(where: { $0.channel != "store" }) {
+                DashChannelPanel(channels: summary.byChannel)
+            }
             if showsStaff {
                 DashStaffPanel(staff: summary.byStaff, title: "\(model.mode.staffTitle)業績")
             }
@@ -911,6 +915,61 @@ private struct DashModePanel: View {
             if let m = ServiceMode(rawValue: key) { out.append(DashModeRow(mode: m, amount: amount)) }
         }
         return out.sorted { $0.amount > $1.amount }
+    }
+}
+
+// MARK: - 通路（店裡、外送平台）
+
+/// 每個通路：單數、營業額、抽成、實收（扣掉抽成之後）。外送平台的抽成是 30% 起跳：看實收才知道值不值得
+private struct DashChannelPanel: View {
+    let channels: [ChannelTotal]
+
+    var body: some View {
+        let total = channels.reduce(0) { $0 + $1.total.cents }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Eyebrow("各通路")
+                Spacer()
+                Text("實收＝營業額 − 平台抽成")
+                    .font(.brand(12, .regular))
+                    .foregroundStyle(Theme.muted)
+            }
+            ForEach(channels) { c in
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Circle()
+                            .fill(DeliveryPlatform(rawValue: c.channel)?.tint ?? Theme.ink2)
+                            .frame(width: 8, height: 8)
+                        Text(c.label)
+                            .font(.brand(14.5, .medium))
+                            .foregroundStyle(Theme.ink)
+                        Text("\(c.tickets) 單")
+                            .font(.brand(12.5, .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.muted)
+                        Spacer(minLength: 8)
+                        Text(c.total.formatted)
+                            .font(.brand(14.5, .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(Theme.ink)
+                    }
+                    DashShareBar(ratio: total > 0 ? Double(c.total.cents) / Double(total) : 0,
+                                 color: DeliveryPlatform(rawValue: c.channel)?.tint ?? Theme.accent)
+                    if c.commission.cents > 0 {
+                        HStack(spacing: 8) {
+                            Text("抽成 \(c.commission.formatted)\(c.estimated > 0 ? "（估）" : "")")
+                            Spacer(minLength: 8)
+                            Text("實收 \(c.net.formatted)").foregroundStyle(Theme.ink2)
+                        }
+                        .font(.brand(12.5, .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.muted)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .dashPanel()
     }
 }
 

@@ -95,6 +95,8 @@ public struct SaleRecord: Codable, Sendable, Hashable {
     public var exchange: ExchangeCredit?
     /// 從哪一筆預約來的
     public var appointmentId: String?
+    /// 外送平台的單：哪個平台、抽成、撥款（報表分通路）
+    public var delivery: DeliveryOrder?
 
     public init(ticket t: Ticket, closedOn deviceId: String, shiftId: String?, closedAt: Date, closedBy: String, staffName: String, floor: FloorPlan) {
         let totals = t.totals
@@ -148,6 +150,7 @@ public struct SaleRecord: Codable, Sendable, Hashable {
         salespersonId = t.salespersonId
         exchange = t.exchange
         appointmentId = t.appointmentId
+        delivery = t.delivery
     }
 
     /// 這一行退 quantity 個值多少（照實收比例，整數元；退到最後一個時把零頭補齊）

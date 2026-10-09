@@ -201,6 +201,7 @@ struct DemoStore {
         case .fitness: try seedFitness(into: ledger)
         case .yellowgirl: try seedYellowgirl(into: ledger)
         }
+        if bootstrap.features.delivery { try DemoDelivery.seed(into: ledger, bootstrap: bootstrap, now: createdAt) }
     }
 
     /// 今天的訂位、候位、預約、課程報名（和 DemoAPI 手上的一樣）
@@ -265,7 +266,7 @@ struct DemoStore {
             ),
             // 餐飲：沒有預約表、儲值與課程卡、抽成（會員只查電話、累積消費）；有叫號（號碼牌）
             features: FeatureFlags(seating: true, kitchen: true, reservations: true, invoice: true, members: true, waitlistSMS: true,
-                                   appointments: false, accounts: false, commission: false, queue: true),
+                                   appointments: false, accounts: false, commission: false, queue: true, delivery: true),
             catalog: Self.catalog,
             floor: Self.floor,
             staff: Self.staff,
@@ -274,7 +275,9 @@ struct DemoStore {
             // 號碼存在示範的「後台」（DemoQueue）；號碼牌用 iPad 的預設版面（沒有背景圖）
             queue: QueueConfig(mode: DemoQueue.mode, customerUrl: "https://chenmai.example.tw/q?no={number}&waiting={waiting}", ticket: QueueTicketLayout()),
             // 單據樣式：麥穗店標＋店家自己的字（圖在 iPad 上畫：DemoPrintArt）
-            printStyle: DemoPrintArt.cafeStyle
+            printStyle: DemoPrintArt.cafeStyle,
+            // 外送平台（假的 Uber Eats、foodpanda）：今天的外送單在 DemoDelivery.seed
+            delivery: DemoDelivery.config(now: now)
         )
     }
 

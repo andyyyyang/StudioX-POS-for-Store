@@ -116,11 +116,12 @@ public struct MeshConfig: Codable, Sendable, Hashable {
 public struct Bootstrap: Codable, Sendable, Hashable {
     public init(version: String, serverTime: Date, device: DeviceProfile, store: StoreProfile, features: FeatureFlags, catalog: Catalog,
                 floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig, queue: QueueConfig? = nil,
-                printStyle: PrintStyle? = nil) {
+                printStyle: PrintStyle? = nil, delivery: DeliveryConfig? = nil) {
         self.version = version; self.serverTime = serverTime; self.device = device; self.store = store; self.features = features
         self.catalog = catalog; self.floor = floor; self.staff = staff; self.invoice = invoice; self.mesh = mesh
         self.queue = queue
         self.printStyle = printStyle
+        self.delivery = delivery
     }
 
     public var version: String
@@ -137,6 +138,8 @@ public struct Bootstrap: Codable, Sendable, Hashable {
     public var queue: QueueConfig?
     /// 單據樣式（POSPrinting/PrintStyle.swift）：先畫成圖片再印、疊店家的圖；沒給＝預設（圖片、不疊圖）。讀的時候很寬鬆，壞掉的樣式不會讓開機資料讀不進來
     public var printStyle: PrintStyle?
+    /// 外送平台（docs/DELIVERY.md）；features.delivery 關著、或舊版後台沒有時是 nil
+    public var delivery: DeliveryConfig?
 }
 
 // MARK: - 事件

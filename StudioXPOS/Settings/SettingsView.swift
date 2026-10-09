@@ -66,7 +66,8 @@ struct SettingsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 // 叫號：後台開了才有這一類
-                ForEach(SettingsGroup.allCases.filter { $0 != .queue || model.features.queue }) { g in
+                // 叫號、外送平台：後台開了才有這一類
+                ForEach(SettingsGroup.allCases.filter { ($0 != .queue || model.features.queue) && ($0 != .delivery || model.features.delivery) }) { g in
                     Button {
                         group = g
                     } label: {
@@ -116,6 +117,12 @@ struct SettingsView: View {
         case .queue:
             // 這台取號要印：沒有號碼牌出單機就提醒
             return model.features.queue && !model.hasQueuePrinter ? ("沒出單機", .warning) : nil
+        case .delivery:
+            let states = model.deliveryConfig?.enabled ?? []
+            if states.contains(where: { !$0.connected }) { return ("沒連上", .danger) }
+            if !model.deliveryPending.isEmpty { return ("待接 \(model.deliveryPending.count)", .warning) }
+            if states.contains(where: { !$0.isOnline }) { return ("暫停", .warning) }
+            return nil
         case .mode, .store, .receipts, .appearance, .data, .advanced:
             return nil
         }
@@ -135,6 +142,7 @@ struct SettingsView: View {
                 case .receipts: SettingsReceiptsSection()
                 case .invoice: SettingsInvoiceSection()
                 case .queue: SettingsQueueSection(openPrinters: { group = .printers })
+                case .delivery: SettingsDeliverySection()
                 case .appearance: SettingsAppearanceSection()
                 case .data: SettingsDataSection()
                 case .advanced: SettingsAdvancedSection()
@@ -226,7 +234,7 @@ struct PrinterSettingsSection: View {
 // MARK: - 分類
 
 private enum SettingsGroup: String, CaseIterable, Identifiable {
-    case device, workstation, mode, store, printers, receipts, invoice, queue, appearance, data, advanced
+    case device, workstation, mode, store, printers, receipts, invoice, queue, delivery, appearance, data, advanced
 
     var id: String { rawValue }
 
@@ -240,6 +248,7 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
         case .receipts: "收據與出單"
         case .invoice: "電子發票"
         case .queue: "叫號"
+        case .delivery: "外送平台"
         case .appearance: "外觀與安全"
         case .data: "資料"
         case .advanced: "進階"
@@ -256,6 +265,7 @@ private enum SettingsGroup: String, CaseIterable, Identifiable {
         case .receipts: "document-text"
         case .invoice: "qr-code"
         case .queue: "ticket"
+        case .delivery: "truck"
         case .appearance: "swatch"
         case .data: "circle-stack"
         case .advanced: "adjustments-horizontal"
@@ -2318,6 +2328,74 @@ private struct SettingsAdvancedSection: View {
                 ValueRow(label: "設定版本", value: model.configVersion ?? "—")
             }
             .panel(padding: 22)
+        }
+    }
+}
+
+// MARK: - 外送平台
+
+/// 外送平台（Uber Eats、foodpanda）：各平台的連線與接單狀態、忙碌、暫停、測試單。
+/// 帳密、哪家店、自動接單、抽成率在後台設；這裡是現場要按的
+private struct SettingsDeliverySection: View {
+    @Environment(POSModel.self) private var model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsHeading(title: "外送平台", detail: "Uber Eats、foodpanda 的單直接進 POS：不用另外的平板、不用重打。帳密、連哪家店、自動接單、抽成率在後台設定。")
+            let states = model.deliveryConfig?.platforms ?? []
+            if states.isEmpty {
+                Text("後台還沒有串外送平台").textRole(.small).foregroundStyle(Theme.muted)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(states) { p in
+                        DeliveryPlatformRow(state: p)
+                        if p.id != states.last?.id { Rule(color: Theme.hair) }
+                    }
+                }
+                .panel(padding: 22)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Eyebrow("尖峰的時候")
+                    let busy = model.deliveryBusyMinutes
+                    HStack(spacing: 10) {
+                        ForEach([0, 10, 20, 30], id: \.self) { m in
+                            Button(m == 0 ? "正常" : "+\(m) 分") { Task { await model.setDeliveryBusy(m) } }
+                                .buttonStyle(.brand(busy == m ? .primary : .ghost, size: .md))
+                        }
+                    }
+                    Text("忙碌：之後的單答應的時間多加幾分鐘（廚房份數多時，建議的時間本來就會自動加）")
+                        .textRole(.small).foregroundStyle(Theme.muted)
+                    Rule(color: Theme.hair)
+                    HStack(spacing: 10) {
+                        Button("暫停 30 分") { Task { await model.pauseDelivery(nil, minutes: 30) } }
+                            .buttonStyle(.brand(.ghost, size: .md))
+                        Button("暫停到明天") { Task { await model.pauseDelivery(nil, minutes: nil) } }
+                            .buttonStyle(.brand(.ghost, size: .md))
+                        Button("恢復接單") { Task { await model.resumeDelivery(nil) } }
+                            .buttonStyle(.brand(model.deliveryPaused.isEmpty ? .ghost : .accent, size: .md))
+                            .disabled(model.deliveryPaused.isEmpty)
+                    }
+                    Text("POS 全部斷線超過 3 分鐘，後台會先替你暫停平台（避免接不到單被平台處罰），連回來自動恢復。")
+                        .textRole(.small).foregroundStyle(Theme.muted)
+                }
+                .panel(padding: 22)
+
+                if model.isDemo || model.currentStaff?.can(.manageDevice) == true {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Eyebrow("測試單")
+                        HStack(spacing: 10) {
+                            ForEach(DeliveryPlatform.allCases, id: \.self) { p in
+                                Button("來一張 \(p.label)") { Task { await model.simulateDelivery(p) } }
+                                    .buttonStyle(.brand(.ghost, size: .md))
+                            }
+                        }
+                        Text(model.isDemo ? "示範：在這台做一張假的平台單，可以試接單、出餐好了。"
+                             : "後台開了「測試模式」才會進單；平台那邊不會真的有這張單。")
+                            .textRole(.small).foregroundStyle(Theme.muted)
+                    }
+                    .panel(padding: 22)
+                }
+            }
         }
     }
 }

@@ -29,7 +29,7 @@ extension DemoStore {
             ),
             // 全外帶：沒有桌位、訂位、會員、預約、儲值；有廚房螢幕（滷好了叫號）與叫號
             features: FeatureFlags(seating: false, kitchen: true, reservations: false, invoice: false, members: false, waitlistSMS: false,
-                                   appointments: false, accounts: false, commission: false, queue: true),
+                                   appointments: false, accounts: false, commission: false, queue: true, delivery: true),
             catalog: yellowgirlCatalog,
             floor: .empty,
             staff: yellowgirlStaff,
@@ -38,7 +38,9 @@ extension DemoStore {
             queue: QueueConfig(mode: DemoQueue.mode, customerUrl: "https://yellowgirl.tw/q/{number}?d={date}",
                                ticket: QueueTicketLayout(), usage: [.takeout]),
             // 單據樣式：小鴨店標、圓點底圖、「好吃」印章、「謝謝光臨」頁尾（不是真的店標：DemoPrintArt 在 iPad 上畫）
-            printStyle: DemoPrintArt.yellowgirlStyle
+            printStyle: DemoPrintArt.yellowgirlStyle,
+            // 黃毛丫頭在 foodpanda 上有店（Uber Eats 是示範用的）
+            delivery: DemoDelivery.config(now: now)
         )
     }
 

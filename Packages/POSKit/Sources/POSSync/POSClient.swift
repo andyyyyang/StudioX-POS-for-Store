@@ -71,6 +71,10 @@ public protocol POSAPI: Sendable {
     /// 主管授權問後台（個人的裝置沒有 PIN 雜湊）：PIN 對到的人（staffId 省略＝看 PIN 對到誰）。
     /// PIN 不對丟 `.http(401, "wrong_pin", "PIN 不對")`；錯太多次 `.http(429, "rate_limited", …)`；斷線 `.offline`
     func verifyPin(staffId: String?, pin: String, purpose: String) async throws -> VerifiedStaff
+    /// 外送平台（DeliveryAPI.swift）：各平台的狀態
+    func delivery() async throws -> DeliveryStateResponse
+    /// 外送平台的動作：接單、拒單、出餐好了、忙碌、暫停。另一台先接了丟 `.http(409, "already_accepted", …)`
+    func delivery(_ action: DeliveryAction) async throws -> DeliveryActionResult
 }
 
 extension POSAPI {

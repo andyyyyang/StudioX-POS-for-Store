@@ -22,6 +22,8 @@ public enum Tender: String, Codable, Sendable, Hashable, CaseIterable {
     case prepaid
     /// 換貨：退回的商品抵掉的金額（不是真的收錢）
     case exchange
+    /// 外送平台代收（Uber Eats、foodpanda 的單：客人在平台上付了，平台扣掉抽成之後撥給店）
+    case platform
 
     public var label: String {
         switch self {
@@ -38,6 +40,7 @@ public enum Tender: String, Codable, Sendable, Hashable, CaseIterable {
         case .other: "其他"
         case .prepaid: "儲值金"
         case .exchange: "換貨抵用"
+        case .platform: "外送平台"
         }
     }
 
@@ -50,7 +53,7 @@ public enum Tender: String, Codable, Sendable, Hashable, CaseIterable {
     /// 會進錢櫃的（交班時要點錢）
     public var isCash: Bool { self == .cash }
     /// 需要輸入交易序號／授權碼（對帳用）
-    public var wantsReference: Bool { self != .cash && !isInternal }
+    public var wantsReference: Bool { self != .cash && !isInternal && self != .platform }
     /// 電子支付（掃客人的付款碼）
     public var isWallet: Bool { [.linePay, .jkoPay, .pxPay, .easyWallet].contains(self) }
 }

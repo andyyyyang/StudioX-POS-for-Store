@@ -330,6 +330,7 @@ struct PaymentView: View {
         case .other: HeroIcon("ellipsis-horizontal", size: 22)
         case .prepaid: HeroIcon("gift", size: 22)
         case .exchange: HeroIcon("arrows-right-left", size: 22)
+        case .platform: HeroIcon("truck", size: 22)
         }
     }
 

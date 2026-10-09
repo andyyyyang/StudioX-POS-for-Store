@@ -82,6 +82,7 @@ public struct StoreState: Codable, Sendable, Hashable {
                 businessDate: o.businessDate, splitFrom: o.splitFrom, customerName: o.customerName,
                 serviceMode: o.serviceMode, salespersonId: o.salespersonId, exchange: o.exchange, appointmentId: o.appointmentId
             )
+            tickets[o.ticketId]?.delivery = o.delivery
             needsCleaning.subtract(o.tableIds)
 
         case .linesAdded(let a):
@@ -351,6 +352,14 @@ public struct StoreState: Codable, Sendable, Hashable {
             ci.note = ci.note.isEmpty ? v.reason : ci.note + "；" + v.reason
             checkIns[ci.id] = ci
             logAccount(e, AccountRules.moves(checkInVoided: ci, at: at))
+
+        case .deliveryUpdated(let u):
+            guard var t = tickets[u.ticketId], var d = t.delivery else { return }
+            u.apply(to: &d)
+            t.delivery = d
+            tickets[t.id] = t
+            // 已經結帳的單，報表上的抽成、撥款也跟著更新
+            if sales[t.id] != nil { sales[t.id]?.delivery = d }
 
         case .unknown:
             break

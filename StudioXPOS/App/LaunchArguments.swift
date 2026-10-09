@@ -24,6 +24,7 @@ import UIKit
 ///   -phoneCashPadCollapsed YES          手機現金模式的數字鍵收起來（往下滑之後的樣子）
 ///   -checkInTab classes                  報到頁直接看課表（健身）
 ///   -checkout                            登入、開頁之後選一張有點東西的單、打開結帳畫面（截付款的樣子）
+///   -deliveryFocus                       登入、開頁之後選起最快到期的外送待接單（截接單的樣子）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -40,6 +41,8 @@ enum LaunchArguments {
     static var typeDemoDone = false
     /// -checkout 只開一次
     static var checkoutDemoDone = false
+    /// -deliveryFocus 只選一次
+    static var deliveryFocusDone = false
 
     /// 截圖用：頁面出現時先選起第一筆（只在 Debug）。各頁在 .onAppear／.task 裡看這個
     static var preselect: Bool {
@@ -83,10 +86,18 @@ extension POSModel {
             LaunchArguments.checkoutDemoDone = true
             Task {
                 try? await Task.sleep(for: .seconds(1.2))
-                let open = state.openTickets.filter { !$0.activeLines.isEmpty }
+                let open = state.openTickets.filter { !$0.activeLines.isEmpty && $0.delivery == nil }
                 guard let t = open.max(by: { $0.totals.subtotal < $1.totals.subtotal }) else { return }
                 selectedTicketId = t.id
                 beginCheckout(t)
+            }
+        }
+        // 外送單的截圖：選起最快到期的待接單（右欄是「接單・N 分」）
+        if phase == .ready, !LaunchArguments.deliveryFocusDone, LaunchArguments.has("-deliveryFocus") {
+            LaunchArguments.deliveryFocusDone = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.2))
+                deliveryFocusId = deliveryPending.first?.id
             }
         }
         if phase == .ready, LaunchArguments.has("-lockNow") { lock() }
@@ -99,7 +110,7 @@ extension POSModel {
     private func runScanDemo(_ code: String) async {
         try? await Task.sleep(for: .seconds(1.2))
         if section == .order, selectedTicket == nil {
-            let open = state.openTickets.filter { !$0.activeLines.isEmpty && $0.billPrintedAt == nil }
+            let open = state.openTickets.filter { !$0.activeLines.isEmpty && $0.billPrintedAt == nil && $0.delivery == nil }
             if let t = open.max(by: { $0.totals.subtotal < $1.totals.subtotal }) { selectedTicketId = t.id }
         }
         await handleScan(code)

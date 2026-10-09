@@ -59,6 +59,10 @@ struct DockContext: View {
 
     @ViewBuilder
     private var idle: some View {
+        // 外送平台：點餐、訂單、廚房、叫號頁的最上面（待接單有倒數，點一下到訂單接單）
+        if model.deliveryEnabled && [.order, .orders, .kitchen, .queue, .floor].contains(model.section) {
+            DockDeliveryPulse()
+        }
         switch model.section {
         case .floor: DockFloorPulse()
         case .orders: DockOrdersPulse()
@@ -361,6 +365,62 @@ private struct DockOrdersPulse: View {
                             Rule()
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 外送平台
+
+/// 待接單（倒數，點一下到訂單接單）、各平台的狀態、忙碌／暫停（一鍵）
+private struct DockDeliveryPulse: View {
+    @Environment(POSModel.self) private var model
+
+    var body: some View {
+        let pending = model.deliveryPending
+        let active = model.deliveryActive
+        DockSection(title: pending.isEmpty ? "外送平台" : "外送待接 \(pending.count)") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(pending.prefix(4)) { t in
+                    if let d = t.delivery {
+                        Button {
+                            model.selectedTicketId = nil
+                            model.deliveryFocusId = t.id
+                            if model.section != .orders { model.go(.orders) }
+                        } label: {
+                            HStack(spacing: 8) {
+                                DeliveryTag(delivery: d, size: 12)
+                                Spacer(minLength: 4)
+                                DeliveryClock(delivery: d, size: 12.5)
+                            }
+                            .padding(.vertical, 4)
+                            .contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                if pending.isEmpty {
+                    Text(active.isEmpty ? "沒有外送單" : "製作中、等取餐 \(active.count) 張")
+                        .font(.brand(13, .regular))
+                        .foregroundStyle(Theme.muted)
+                }
+                ForEach(model.deliveryConfig?.enabled ?? []) { p in
+                    DeliveryPlatformRow(state: p)
+                }
+                HStack(spacing: 8) {
+                    let busy = model.deliveryBusyMinutes
+                    Button(busy > 0 ? "取消忙碌" : "忙碌 +10 分") {
+                        Task { await model.setDeliveryBusy(busy > 0 ? 0 : 10) }
+                    }
+                    .buttonStyle(.brand(busy > 0 ? .primary : .ghost, size: .sm))
+                    let paused = !model.deliveryPaused.isEmpty
+                    Button(paused ? "恢復接單" : "暫停 30 分") {
+                        Task {
+                            if paused { await model.resumeDelivery(nil) } else { await model.pauseDelivery(nil, minutes: 30) }
+                        }
+                    }
+                    .buttonStyle(.brand(paused ? .accent : .ghost, size: .sm))
                 }
             }
         }

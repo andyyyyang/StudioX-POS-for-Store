@@ -170,4 +170,7 @@ docs/                     架構、API、範例 JSON（由測試產生）
   或 LINE Pay／街口的反掃 API，需要收單機構的合約與金鑰
 - **電子發票上傳的加值中心 API**：後台已經產生 MIG 4.1 的 XML（F0401／F0501／G0401／E0402）並排進上傳佇列（Turnkey 模式）；
   接特定加值中心要等合約與測試環境的金鑰
-- 客顯（第二螢幕給客人看金額）、外送平台（Uber Eats、foodpanda）接單
+- **外送平台的正式連線**：Uber Eats、foodpanda 的單直接進 POS（[docs/DELIVERY.md](docs/DELIVERY.md)）——待接單倒數、在右欄打分鐘數一鍵接單、
+  拒單、廚房整張做好自動通知平台、忙碌／暫停一鍵、賣完同步、POS 斷線時後台自動暫停、報表分通路（抽成、實收）、示範與測試單都做好了；
+  正式上線要等平台核准串接夥伴（Uber：NDA、API 授權、一起測試；foodpanda／Delivery Hero：plugin secret 與各店 remoteId）
+- 客顯（第二螢幕給客人看金額）

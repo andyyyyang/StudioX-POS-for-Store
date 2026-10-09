@@ -100,6 +100,13 @@ final class POSModel {
     var meshConfig: MeshConfig?
     /// 叫號的設定（號碼存在哪裡、號碼牌的版面）；features.queue 開著才有
     var queueConfig: QueueConfig?
+    /// 外送平台（Uber Eats、foodpanda）各平台的狀態；features.delivery 開著才有（POSModel+Delivery）
+    var deliveryConfig: DeliveryConfig?
+    /// 已經響過的外送新單（同一張不再響）、正在送出動作的單（防連按）
+    var deliverySeen: Set<String> = []
+    var deliveryBusy: Set<String> = []
+    /// 選起來的外送單（訂單看板的外送那一排、右欄的「外送」列表點的）：右欄是接單、出餐好了
+    var deliveryFocusId: String?
     var configVersion: String?
     var isDemo = false
 
@@ -275,6 +282,15 @@ final class POSModel {
                     try? await Task.sleep(for: .seconds(wait))
                 }
             },
+            // 外送平台：每 2 秒看有沒有新單（響一聲）、這台負責的已接單結帳；平台的狀態每 30 秒
+            Task { [weak self] in
+                var n = 0
+                while !Task.isCancelled {
+                    await self?.deliveryBackgroundTick(refresh: n % 15 == 0)
+                    n += 1
+                    try? await Task.sleep(for: .seconds(2))
+                }
+            },
         ]
     }
 
@@ -290,6 +306,7 @@ final class POSModel {
         meshConfig = b.mesh
         queueConfig = b.features.queue ? b.queue : nil
         if !b.features.queue { queue.reset() }
+        deliveryConfig = b.features.delivery ? (b.delivery ?? DeliveryConfig()) : nil
         if let url = queueConfig?.ticket.backgroundUrl {
             let art = queue.art
             Task { await art.prefetch(url) }
@@ -416,6 +433,9 @@ final class POSModel {
         reservations = []
         queue.reset()
         queueConfig = nil
+        deliveryConfig = nil
+        deliverySeen = []
+        deliveryBusy = []
         pendingCarrier = nil
         memberRequest = nil
         scanRequest = nil

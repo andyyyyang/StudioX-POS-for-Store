@@ -560,7 +560,8 @@ extension POSModel {
     /// 這張單用叫號的號碼當單號（叫號用在外帶取餐、不是內用有桌子的單）：一進結帳就取號，
     /// 結帳畫面、收據、廚房、叫號、QR 都是這一個號碼。結帳時沒取到（斷網）就結完再取一次
     func takesTakeoutNumber(_ t: Ticket) -> Bool {
-        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty
+        // 外送平台的單用平台的短碼（外送員、客人拿的是平台給的號碼），不取號
+        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty && t.delivery == nil
     }
 
     /// 一進結帳就取號（取號＝印號碼牌，客人付完就拿得到）。取不到也不擋結帳，結完再取
@@ -580,7 +581,7 @@ extension POSModel {
     /// 外帶單的取餐號碼是叫號的號碼（付完才取）：點餐、結帳畫面不寫單號（A036），免得和取餐號碼搞混。
     /// 訂單、廚房照樣有單號（找單、補取號用）
     func hidesTicketNumber(_ t: Ticket) -> Bool {
-        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty
+        queueForTakeout && t.orderType != .dineIn && t.tableIds.isEmpty && t.delivery == nil
     }
 
     /// 點餐、結帳畫面上的單子名字：外帶叫號的店＝「外帶」（取到號＝「外帶 33 號」、有稱呼＝「外帶 王小姐」）；其他照 Ticket.title

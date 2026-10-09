@@ -49,6 +49,8 @@ struct OrdersView: View {
     @State private var selectedConflictId: String?
     /// 要作廢的那張進行中的單（右欄蓋上「作廢的原因」）
     @State private var voidingTicketId: String?
+    /// 外送單要拒單／取消（右欄蓋上原因）
+    @State private var deliveryReasonFor: DeliveryReasonTarget?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -59,10 +61,25 @@ struct OrdersView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .dockSelection(dockItem)
+        // 選了一般的單就不是在看外送單（反過來外送那一排自己清）
+        .onChange(of: model.selectedTicketId) { _, id in if id != nil { model.deliveryFocusId = nil } }
         // 結帳櫃台：手機送來結帳的單（沒選單子時在右欄）
         .dockPanel(isPresented: Binding(get: { voidingTicketId != nil }, set: { if !$0 { voidingTicketId = nil } }),
                    title: "作廢整張單", subtitle: voidSubtitle) {
             voidChoices
+        }
+        .dockPanel(isPresented: Binding(get: { deliveryReasonFor != nil }, set: { if !$0 { deliveryReasonFor = nil } }),
+                   title: deliveryReasonFor?.title ?? "", subtitle: "平台要知道原因") {
+            DeliveryReasonChoices { reason in
+                guard let target = deliveryReasonFor, let t = model.state.tickets[target.ticketId] else { return }
+                deliveryReasonFor = nil
+                Task {
+                    switch target {
+                    case .reject: await model.rejectDelivery(t, reason: reason)
+                    case .cancel: await model.cancelDelivery(t, reason: reason)
+                    }
+                }
+            }
         }
         .onAppear {
             if LaunchArguments.preselect { preselectLatestSale() }
@@ -74,6 +91,11 @@ struct OrdersView: View {
     /// 衝突 → 看板選的單（進行中）→「全部」選的進行中的單。已結帳的那一筆由明細自己交上去（裡面的優先）
     private var dockItem: DockSelection? {
         if let c = selectedConflict { return conflictDock(c) }
+        if let id = model.deliveryFocusId, let t = model.state.tickets[id] {
+            return deliveryDock(t, model: model, reject: { deliveryReasonFor = .reject(id) }, cancel: { deliveryReasonFor = .cancel(id) }) {
+                model.deliveryFocusId = nil
+            }
+        }
         switch tab {
         case .open:
             guard let t = model.selectedTicket else { return nil }
@@ -315,14 +337,19 @@ struct OrdersView: View {
     /// 有桌位（內用）：出餐後是「用餐中」；全外帶是「出餐好了」
     private var boardTables: Bool { model.visibleSections.contains(.floor) }
 
+    /// 外送平台的單（待接單、製作中、等取餐）：看板最上面一排，不放進下面的欄（接了就結帳了，但外送員還沒拿走）
+    private var deliveryTickets: [Ticket] { model.deliveryPending + model.deliveryActive }
+
     @ViewBuilder
     private var board: some View {
-        let openTickets = model.state.openTickets
-        if openTickets.isEmpty {
+        let openTickets = model.state.openTickets.filter { $0.delivery == nil }
+        let deliveries = deliveryTickets
+        if openTickets.isEmpty && deliveries.isEmpty {
             EmptyState(icon: "queue-list", title: "沒有進行中的單", message: "從「點餐」或「桌位」開單，就會出現在這裡")
         } else {
             let kitchen = boardKitchen
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                if !deliveries.isEmpty { deliveryStrip(deliveries) }
                 GeometryReader { geo in
                     // 四欄排在工作區裡（11 吋 iPad 也看得到「待結帳」那一欄）：沒有單的那一欄窄一點（只有標題與虛線框），
                     // 有單的平分剩下的；一欄至少 188，再放不下才左右滑
@@ -348,6 +375,41 @@ struct OrdersView: View {
             }
             .animation(Motion.fast, value: model.selectedTicketId)
         }
+    }
+
+    /// 外送平台那一排：待接單（倒數）在前、製作中、等取餐；點一下選起來，右欄接單、出餐好了
+    private func deliveryStrip(_ tickets: [Ticket]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Circle().fill(Theme.accent).frame(width: 7, height: 7)
+                Text("外送平台").font(.brand(15, .semibold)).foregroundStyle(Theme.ink)
+                let pending = tickets.filter { $0.delivery?.status == .pending }.count
+                if pending > 0 { StatusBadge("待接 \(pending)", tone: .warning) }
+                Text("\(tickets.count)").font(.brand(13, .medium)).monospacedDigit().foregroundStyle(Theme.muted)
+                Spacer(minLength: 8)
+                ForEach(model.deliveryPaused) { p in
+                    StatusBadge("\(p.platform.label) 暫停", tone: .warning)
+                }
+            }
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(tickets) { t in
+                        Button {
+                            withAnimation(Motion.fast) {
+                                model.selectedTicketId = nil
+                                model.deliveryFocusId = model.deliveryFocusId == t.id ? nil : t.id
+                            }
+                        } label: {
+                            DeliveryOrderCard(ticket: t, selected: model.deliveryFocusId == t.id)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+        }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 18)
     }
 
     // MARK: 全部：一天的清單＋明細
@@ -2668,5 +2730,24 @@ extension SaleRecord {
         if lines.contains(where: { $0.displayName.uppercased().contains(q) }) { return true }
         let digits = q.filter(\.isNumber)
         return !digits.isEmpty && digits.count == q.count && String(total.dollars).hasPrefix(digits)
+    }
+}
+
+/// 外送單要拒單（還沒接）或取消（接了之後）
+private enum DeliveryReasonTarget: Equatable {
+    case reject(String)
+    case cancel(String)
+
+    var ticketId: String {
+        switch self {
+        case .reject(let id), .cancel(let id): id
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .reject: "拒單的原因"
+        case .cancel: "取消的原因"
+        }
     }
 }

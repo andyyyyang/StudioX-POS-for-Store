@@ -506,7 +506,9 @@ extension POSModel {
     }
 
     func kitchen(_ status: KitchenStatus, lines: [TicketLine], in t: Ticket) {
-        record(.kitchenUpdated(KitchenUpdated(ticketId: t.id, lineIds: lines.map(\.id), status: status)))
+        guard record(.kitchenUpdated(KitchenUpdated(ticketId: t.id, lineIds: lines.map(\.id), status: status))) else { return }
+        // 外送平台的單整張做好了：自動告訴平台（叫外送員）
+        if t.delivery != nil { kitchenDidUpdate(t.id) }
     }
 
     func printKitchen(_ t: Ticket, lines: [TicketLine], mode: Templates.KitchenMode) {
