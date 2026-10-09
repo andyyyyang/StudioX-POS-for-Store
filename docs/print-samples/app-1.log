@@ -5,8 +5,8 @@ PrinterLab: 測試頁 虛擬 80 圖片（收據）
 PrinterLab: 交易明細 A018
 PrinterLab: 廚房單 A023
 PrinterLab: 結帳單 A023
-PrinterLab: 證明聯 XD12345656
-2026-10-08 15:56:14.108 StudioXPOS[63540:179654] The filter 'CIPortraitEffectSpillCorrection' is not implemented in the bundle at /Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot/System/Library/CoreImage/PortraitFilters.cifilter.
+PrinterLab: 證明聯 XD12345655
+2026-10-09 08:43:13.016 StudioXPOS[58341:169582] The filter 'CIPortraitEffectSpillCorrection' is not implemented in the bundle at /Library/Developer/CoreSimulator/Volumes/iOS_23F77/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.5.simruntime/Contents/Resources/RuntimeRoot/System/Library/CoreImage/PortraitFilters.cifilter.
 PrinterLab: 號碼牌（預設版面）
 PrinterLab: 號碼牌（黑框背景）
 PrinterLab: 取餐單（黃毛丫頭的單據樣式）58
@@ -14,4 +14,4 @@ PrinterLab: 取餐單（黃毛丫頭的單據樣式）80
 PrinterLab: 廚房單（圖片）A023
 PrinterLab: 開錢櫃
 PrinterLab: done
-tw.studiox.pos: 63540
+tw.studiox.pos: 58341
