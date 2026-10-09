@@ -69,6 +69,15 @@ struct PaymentView: View {
             if case .consumer(let c?) = buyer { carrierText = c.id }
         }
         .sheet(isPresented: $tapping) { TapToPaySheet(ticketId: t.id) }
+        // 掃碼付那一筆的卡（Payment/WalletPaySheet.swift）：由流程自己關；被關掉（鎖定、離開）時流程停下來，還不知道結果的背景查
+        .sheet(item: walletSession) { s in
+            WalletPaySheet(session: s)
+        }
+    }
+
+    /// 這張單正在進行的掃碼付
+    private var walletSession: Binding<WalletPaySession?> {
+        Binding(get: { model.walletPay.session.flatMap { $0.ticketId == ticketId ? $0 : nil } }, set: { _ in })
     }
 
     // MARK: 上面：應收
@@ -141,6 +150,10 @@ struct PaymentView: View {
         return VStack(alignment: .leading, spacing: 12) {
             // 付款方式是「選一個」（格子），不是一排動作；平分、小費這些在下面的「⋯」
             Eyebrow("付款方式")
+            // 送出去還不知道結果的電子支付：先查清楚才能再收（不重複扣款）
+            if let p = model.walletPay.pendingPayment(for: t.id), model.walletPay.session == nil {
+                walletPendingCard(p)
+            }
             if counter {
                 Text("要印發票證明聯：上面輸入手機條碼或捐贈就能在這裡收，不然請到櫃台結帳")
                     .textRole(.small)
@@ -229,6 +242,9 @@ struct PaymentView: View {
                             // 接了刷卡機：金額送到刷卡機，不用打末四碼
                             if model.usesTerminal(for: tender) {
                                 Text("刷卡機").font(.brand(11.5, .medium)).opacity(0.6)
+                            } else if model.scansWallet(tender) {
+                                // 掃碼付：掃客人的付款碼（斷線時不能收）
+                                Text(model.walletOffline ? "斷線不能收" : "掃付款碼").font(.brand(11.5, .medium)).opacity(0.6)
                             }
                         }
                         .frame(maxWidth: .infinity, minHeight: 74)
@@ -238,6 +254,37 @@ struct PaymentView: View {
                 }
             }
         }
+    }
+
+    /// 送出去還不知道結果的電子支付（App 重開、斷線、卡先關掉了）：點一下打開卡、查結果；查清楚之前不能再收電子支付
+    private func walletPendingCard(_ p: WalletPending) -> some View {
+        Button {
+            Task { await model.resumeWalletPending(p) }
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                HeroIcon("arrow-path", size: 20)
+                    .foregroundStyle(Theme.warningFG)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(p.tender.label) \(p.amount.formatted) 還不知道有沒有扣款")
+                        .font(.brand(15.5, .semibold))
+                        .foregroundStyle(Theme.ink)
+                        .monospacedDigit()
+                    Text("點這裡查結果；查清楚之前先不要再收一次")
+                        .font(.brand(12.5, .regular))
+                        .foregroundStyle(Theme.ink2)
+                }
+                Spacer(minLength: 8)
+                Text("查結果")
+                    .font(.brand(14, .semibold))
+                    .foregroundStyle(Theme.ink)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tone.warning.background, in: .rect(cornerRadius: Metric.radius, style: .continuous))
+        }
+        .buttonStyle(PressScale(scale: 0.98))
+        .accessibilityHint("查這筆電子支付的結果")
     }
 
     /// 會員的儲值金（美業、健身常用）：有會員、開了帳戶功能、餘額大於 0 才出現；還沒查過餘額先出現、一邊查。
@@ -460,6 +507,8 @@ struct PaymentView: View {
         }
         // 刷卡機收的：調閱編號、授權碼
         if let terminal = p.terminal { return terminal.summary }
+        // 掃碼付收的：錢包的交易序號（對帳、退款）
+        if p.intentId != nil { return "掃碼付" + (p.reference.map { "・交易序號 \(POSModel.tail($0))" } ?? "") }
         return nil
     }
 

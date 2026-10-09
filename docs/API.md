@@ -66,13 +66,14 @@ Swift 端的型別在 `Packages/POSKit/Sources/POSSync/APIModels.swift`，範例
 | `version` | 設定的版本（菜單、桌位、人員、店家設定、號碼段任一個改了就變） |
 | `device` | 這台：`id, name, code, role, stations`。`role` 是崗位（見下方「崗位」）；不認得的值 iPad 當作 `register` |
 | `store` | `StoreProfile`：店名、統編、地址、服務費、營業日分界、折扣上限、找零快速鍵、`serviceModes`（開了哪些營業模式：`tableService`／`counter`／`retail`／`cafe`／`apparel`／`salon`／`fitness`）與 `defaultServiceMode`、`prepaidInvoicing`（`atTopUp` 儲值時開發票［預設］／`atRedemption` 消費時開）、`exchangeDays`（幾天內可以換貨，預設 7、0＝不限）、`bookingSlotMinutes`（預約表一格幾分，預設 15）。少給的欄位 iPad 用預設值 |
-| `features` | 開了哪些功能：`seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission`。後三個沒給＝`false`（要後台有對應的資料表才開） |
+| `features` | 開了哪些功能：`seating, kitchen, reservations, invoice, members, waitlistSMS, appointments, accounts, commission`。後三個沒給＝`false`（要後台有對應的資料表才開）；`queue`、`delivery`、`walletScan`（門市掃碼付，見下方「掃碼付」）沒給＝`false` |
 | `catalog` | `categories`（`swatch` 是色塊名稱）、`items`（只給上架的；`isAvailable=false` 是今天賣完；非餐飲的欄位見下方「品項的種類與規格」）、`modifierGroups` |
 | `floor` | `areas[].tables[]`，座標是 0–100 的格子 |
 | `staff` | 門市人員（只給啟用中的），含 PIN 雜湊（**個人的裝置沒有**，見「用 StudioX 帳號登入」）：`PBKDF2-HMAC-SHA256(pin, pinSalt, pinIterations, 32 bytes)` 的十六進位。後台用 Node：`crypto.pbkdf2Sync(pin, salt, iterations, 32, 'sha256').toString('hex')`。選填：`title`（職稱：設計師、教練）、`bookable`（排進預約表）、`commissionBps`（預設抽成，萬分比） |
 | `invoice` | `enabled, sellerTaxId, sellerName, sellerAddress, qrKey`（財政部的 QR Code 加密金鑰，32 個十六進位字）、`rolls`（**這台**還在用的號碼段；每段帶 `usedThrough`＝後台收到這一段用到的最後一號，iPad 一定從它的下一號開始，所以本機事件刪掉了也不會重號） |
 | `mesh` | 同一家店的 iPad 在區網互相同步用的金鑰（32 bytes 十六進位）與開關 |
 | `printStyle` | 單據樣式（見下方「單據樣式」）；沒給＝預設 |
+| `walletScan` | 門市掃碼付開了哪些錢包：`{ methods: ["line_pay","jko_pay"], pollMs: 3000, windowMinutes: 20 }`（`features.walletScan` 開著才有；見下方「掃碼付」） |
 
 ### 單據樣式（`printStyle`）：先畫成圖片再印
 
@@ -317,6 +318,8 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 **付款方式**多了 `prepaid`（儲值金）與 `exchange`（換貨抵用：退回的商品抵掉新買的；`change` > 0＝退差額，從錢櫃拿現金）。實收不算這兩種。
 還有 `platform`（外送平台代收：客人在 Uber Eats、foodpanda 上付了，`reference`＝「Uber Eats #3F2A1」）：不進錢櫃、不用輸入交易序號，報表照 `reference` 開頭分平台。
 
+**掃碼付收的**（見「掃碼付」）：付款選填 `intentId`（StudioX Pay 的付款 id，`pi_…`；退款照它退回錢包），`reference` 是錢包的交易序號。沒有的時候 JSON 裡不出現。
+
 **經銀行刷卡機收、退的**（[PAYMENTS-INSTORE.md](PAYMENTS-INSTORE.md)）：付款（`payment.added`、`ticket.closed` 的 `payments[]`）與退款（`sale.refunded` 的 `refund`）選填 `terminal`：
 `{format: "nccc", kind: "N"|"C"|"S"|"E"|"W", terminalId, merchantId, batchNo, receiptNo, approvalNo, brand, hostId, at: "YYMMDDhhmmss", walletOrderId, walletTransactionId}`（都是選填字串）。
 沒有的時候 JSON 裡不出現；後台不認得也照常（`reference` 已經是「授權 123456・調閱 000123」、`cardLast4` 是末四碼）。對帳用：同一台（`terminalId`）、同一批（`batchNo`）、同一個調閱編號（`receiptNo`）＝同一筆。
@@ -440,6 +443,46 @@ iPad 在叫號頁每 2 秒 `GET /queue`；動作的回應直接拿來更新畫�
 
 範例：`samples/queue-state.json`。
 
+## 掃碼付（掃客人的付款碼，StudioX Pay）
+
+結帳選 LINE Pay、街口、全支付、悠遊付（開機資料 `walletScan.methods` 有的）→ 右側鍵盤打金額 →「掃付款碼」→ 相機掃客人手機上的付款碼
+（iPad 接條碼機的：掃進卡上的框，Enter 送出）→ 後台經 StudioX Pay 直接跟錢包收（iPad 手上沒有金流的金鑰：後台用網站自己的憑證轉給 console）。
+`features.walletScan` 沒開（後台沒開通 StudioX Pay、店家沒開門市掃碼、舊版後台）：照舊手動記一筆（交易序號選填）。
+接了刷卡機、設定「電子錢包經刷卡機」的 iPad 照刷卡機（[PAYMENTS-INSTORE.md](PAYMENTS-INSTORE.md)）。只有收錢的崗位（`register`、`handheld`）能用；**斷線時不收**（「斷線時不能收電子支付」）。
+
+| 方法 | 路徑 | 內容 |
+|---|---|---|
+| POST | `/pay/scan` | → `{ paymentId, ticketId, amount, method, code, staffId? }`（`method`：`line_pay`／`jko_pay`／`px_pay`／`easy_wallet`／`twqr`；`code` 6–64 個英數字） |
+| GET | `/pay/intents/{intentId}` | 現在的結果 |
+| POST | `/pay/intents/{intentId}/cancel` | 取消（錢包正在處理的取消不了：`cancelable: false`，繼續等結果） |
+| POST | `/pay/refunds` | → `{ intentId, amount?（沒給＝剩下的全部）, refundId, reason?, managerPin? }` ← `{ refundId, status: pending｜succeeded｜failed｜requires_manual_action, amount, message? }` |
+
+前三個都回同一個樣子：`{ status: succeeded｜processing｜failed, intentId, amount, method?, pspTransactionId?, wallet?, paidAt?, code?, message?, pollAfterMs?, pollUntil?, cancelable? }`
+
+- `succeeded`：記一筆付款（`Payment.id`＝`paymentId`、`reference`＝錢包的交易序號 `pspTransactionId`、`intentId`）。付清了就結帳
+- `processing`（客人在手機上確認、錢包逾時）：每 `pollAfterMs`（3 秒）`GET /pay/intents/{intentId}`，最多到 `pollUntil`（20 分鐘；錢包 20 分鐘還不知道後台會當失敗）
+- `failed`：**確定沒有扣款**，`message` 是原因（付款碼過期、餘額不足…），可以再掃一次（新的 `paymentId`）。`code`：`not_started`（沒送到錢包）、`canceled`、`expired`、
+  錢包的錯誤代碼；`conflicted`＝錢包扣的金額和這筆不一樣（錢可能動了：不能再收一次，請店長到 StudioX 後台處理）
+- 錯誤（HTTP）：`400 invalid`、`403 forbidden`（不收錢的崗位）、`409 pay_off`（沒開通 StudioX Pay）／`wallet_not_enabled`（店家沒開這個錢包的掃碼）——這些都**沒有扣款**；
+  `502 pay_unreachable`（StudioX Pay 暫時連不上）
+
+**不重複扣款**：
+- `paymentId`（POS 的付款 id）是後台的冪等鍵：先存在這台才送；沒網路、逾時、5xx、看不懂回應都**不能當失敗**——卡上用同一個請求再送（2 分鐘內、客人還在），拿到同一個結果
+- 一筆付款只能確認一次：同一個 `paymentId` 換了付款碼也不會再扣（回現在的狀態）
+- **只查**：同一個 `paymentId`、不帶 `code` → 回那一筆的結果，不會扣款；還沒送到錢包的那一筆後台直接取消（之後遲到的請求也扣不了）。
+  App 重開、店員先關掉卡（「先關掉，之後再查」）之後一律只查：背景每 20 秒查一次，收到了自動記上；這張單結帳畫面上方有「還不知道有沒有扣款・查結果」，查清楚之前不能再收電子支付
+- 已經結帳的單之後才查到收到了：跳出來請店長到 StudioX 後台退
+
+**退款**：退款（或結帳前「退回第 N 筆」）選原本的錢包、這張單有掃碼付收的那一筆 → 先 `POST /pay/refunds`（`refundId`＝POS 的退款 id），退好了才記。
+超過店家設定的金額（StudioX Pay 的 `refunds.posMaxWithoutManager`）→ `403 manager_approval_required` → 右側鍵盤請店長打 PIN、帶 `managerPin` 再送
+（後台驗，`401 wrong_pin`；綁著店長、負責人的個人裝置不用打）。不知道退了沒有：再按一次退款用同一個 `refundId`（不會退兩次）。斷線時不能退。
+
+**示範模式**：晨麥手作開著掃碼付（四個錢包）；示範的後台不連網路：掃到付款碼先「等客人在手機上確認」，兩秒後成功。模擬器沒有相機：卡上有「示範：模擬掃到付款碼」。
+截圖：`-walletScan`（打開結帳、LINE Pay 掃到付款碼，卡停在等客人確認）。
+
+Swift 端：`Packages/POSKit/Sources/POSSync/WalletPayAPI.swift`（`WalletScanConfig`、`WalletScanRequest`、`WalletPayResult`、`WalletRefundRequest`），App 的流程在
+`StudioXPOS/Model/POSModel+WalletPay.swift`、卡在 `StudioXPOS/Payment/WalletPaySheet.swift`。後台：atelier-cms 的 `lib/pos/wallet-pay.ts`（docs/PAYMENTS.md 的 POS）。
+
 ## 歷史
 
 `GET /history?date=2026-10-01` → 那一個營業日所有裝置的資料（iPad 只留最近兩天，更早的跟後台要）：
@@ -459,3 +502,4 @@ iPad 在叫號頁每 2 秒 `GET /queue`；動作的回應直接拿來更新畫�
 - `POST /heartbeat` `{ appVersion, outbox, lastSeq, printers[], battery, openTickets, staffId, workstation }` → `{ serverTime, configVersion, serverSeq }`：每分鐘一次；後台「裝置」頁顯示在線、未送出的事件數、出單機狀態、目前的崗位。
   開了外送平台時，3 分鐘內沒有任何一台連上後台，後台會先把平台暫停（連回來自動恢復）
 - 外送平台：`GET /delivery`、`POST /delivery/orders/{id}/accept|reject|ready|cancel`、`POST /delivery/busy|pause|resume|simulate`；開機資料的 `features.delivery`、`delivery`。見 [DELIVERY.md](DELIVERY.md)
+- 掃碼付：`POST /pay/scan`、`GET /pay/intents/{id}`、`POST /pay/intents/{id}/cancel`、`POST /pay/refunds`；開機資料的 `features.walletScan`、`walletScan`。見上方「掃碼付」

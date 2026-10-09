@@ -124,17 +124,35 @@ extension POSModel {
     }
 
     /// 刷卡、電子支付、禮券：金額預設是剩下的（右側鍵盤可以改成只付一部分），刷卡再問末四碼（給對帳用，可以跳過）。
-    /// 接了刷卡機（設定 → 刷卡機）：金額送到刷卡機，結果自動記，不用打末四碼（POSModel+CardTerminal）
+    /// 接了刷卡機（設定 → 刷卡機）：金額送到刷卡機，結果自動記，不用打末四碼（POSModel+CardTerminal）。
+    /// 後台開了掃碼付的錢包：掃客人的付款碼、經 StudioX Pay 收（POSModel+WalletPay）
     func take(_ tender: Tender, for t: Ticket) async {
         let due = t.totals.balance
         guard due.cents > 0, currentStaff != nil else { return }
+        let scan = scansWallet(tender)
+        if scan {
+            // 這張單還有送出去、不知道結果的電子支付：先查清楚才能再收（不重複扣款）
+            if let p = walletPay.pendingPayment(for: t.id) {
+                await resumeWalletPending(p)
+                return
+            }
+            guard !walletOffline else {
+                show(Self.walletOfflineMessage, tone: .warning)
+                return
+            }
+        }
         guard let amount = await keypad.askMoney(KeypadSpec(
             kind: .money, title: tender.label, subtitle: "剩 \(due.formatted)", initial: String(due.dollars),
-            quickKeys: [.init("全部", digits: String(due.dollars), commits: true)], confirmLabel: usesTerminal(for: tender) ? "送到刷卡機" : "收款",
+            quickKeys: [.init("全部", digits: String(due.dollars), commits: true)],
+            confirmLabel: usesTerminal(for: tender) ? "送到刷卡機" : scan ? "掃付款碼" : "收款",
             maxValue: due.dollars, minValue: 1
         )) else { return }
         if usesTerminal(for: tender) {
             await chargeOnTerminal(t, tender: tender, amount: amount)
+            return
+        }
+        if scan {
+            await payByWalletScan(t, tender: tender, amount: amount)
             return
         }
         await recordManual(tender, amount: amount, for: t)
@@ -169,6 +187,14 @@ extension POSModel {
         switch await reverseOnTerminal(p, amount: p.amount, wholePayment: true) {
         case .notNeeded: break
         case .done(let ref): if ref != nil { reason = "結帳前退回（刷卡機）" }
+        case .cancelled: return
+        }
+        // 掃碼付收的：先退回客人的錢包，退好了才在 POS 退回
+        switch await refundOnWallet(p, amount: p.amount, reason: reason) {
+        case .notNeeded: break
+        case .done(let note, _):
+            reason = "結帳前退回（\(p.tender.label) 已退）"
+            if let note { show(note, tone: .info) }
         case .cancelled: return
         }
         record(.paymentVoided(PaymentVoided(ticketId: t.id, paymentId: p.id, reason: reason, authorizedBy: auth.authorizerId)))
@@ -447,6 +473,10 @@ extension POSModel {
         guard amount.cents > 0 || itemised.contains(where: { $0.amount.isZero }) else { return }
         // 刷卡機收的：先在刷卡機上退（當天整筆＝取消，其他＝退貨），刷卡機退好了才記（POSModel+CardTerminal）
         var terminalRef: CardTerminalRef? = nil
+        // 掃碼付收的：先退回客人的錢包（StudioX Pay），退好了才記（POSModel+WalletPay）
+        var walletNote: String? = nil
+        var walletRefunded = false
+        var walletRefundId: String? = nil
         if amount.cents > 0 {
             let source = terminalSource(in: sale, tender: tender, amount: amount)
             if !source.viaTerminal.isEmpty {
@@ -461,12 +491,29 @@ extension POSModel {
                 case .cancelled: return
                 }
             }
+            let wallet = walletSource(in: sale, tender: tender, amount: amount)
+            if source.viaTerminal.isEmpty, !wallet.viaWallet.isEmpty {
+                guard let p = wallet.payment else {
+                    let most = wallet.viaWallet.map(\.amount).max() ?? .zero
+                    show("電子支付一次只能退一筆：這張最多退 \(most.formatted)，其他的分開退", tone: .warning)
+                    return
+                }
+                switch await refundOnWallet(p, amount: amount, reason: reason) {
+                case .notNeeded: break
+                case .done(let note, let id):
+                    walletRefunded = true
+                    walletNote = note
+                    walletRefundId = id
+                case .cancelled: return
+                }
+            }
         }
         // 整張退：沒有退過、而且金額是全部（或每一件都退了）
         let full = t.refunds.isEmpty && (amount == refundable || everyLine)
         let invoice = t.invoice.flatMap { state.invoices[$0.number] }
         let action = (invoice != nil && t.invoice?.isVoided == false) ? InvoiceBuilder.refundAction(invoice: invoice, isFullRefund: full, at: Date()) : .none
-        var refund = Refund(id: newID(), amount: amount, tender: tender, lines: full ? [] : itemised, reason: reason, invoiceAction: action, at: Date(),
+        // 退回錢包的：POS 的退款 id 就是送給後台的那一個（對帳對得起來）
+        var refund = Refund(id: walletRefundId ?? newID(), amount: amount, tender: tender, lines: full ? [] : itemised, reason: reason, invoiceAction: action, at: Date(),
                             by: me.id, authorizedBy: auth.authorizerId, shiftId: openShift?.id, terminal: terminalRef)
         var bodies: [EventBody] = []
         var allowance: EInvoiceAllowance? = nil
@@ -487,6 +534,7 @@ extension POSModel {
         if tender == .cash, settings.openDrawerOnCash { printers.openDrawer() }
         printers.print(Self.refundSlip(sale: sale, refund: refund, allowance: allowance, store: store, staff: me.name), role: .receipt)
         show("已退款 \(amount.formatted)" + (terminalRef != nil ? "・刷卡機已退" : "")
+             + (walletRefunded ? "・\(tender.label) \(walletNote ?? "已退回客人的錢包")" : "")
              + (action == .void ? "・發票已作廢" : action == .allowance ? "・開了折讓單" : ""))
     }
 

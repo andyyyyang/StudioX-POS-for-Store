@@ -300,9 +300,12 @@ enum ScanKind {
     static let coupon: [DataScannerViewController.RecognizedDataType] = [.barcode(symbologies: [.qr, .code128, .code39])]
     /// 一般的「掃碼」：什麼都收（App 照內容判斷）
     static let all: [DataScannerViewController.RecognizedDataType] = [.barcode(symbologies: [.qr, .code128, .code39, .ean13, .ean8, .upce])]
+    /// 電子支付的付款碼（LINE Pay、街口、全支付、悠遊付）：手機上同一個碼有一維條碼（Code 128）和 QR
+    static let walletCode: [DataScannerViewController.RecognizedDataType] = [.barcode(symbologies: [.code128, .qr])]
 }
 
-private struct ScannerRepresentable: UIViewControllerRepresentable {
+/// 相機（VisionKit 的 DataScanner）：掃碼的 sheet、掃碼付的卡共用
+struct ScannerRepresentable: UIViewControllerRepresentable {
     let symbologies: [DataScannerViewController.RecognizedDataType]
     let onCode: @MainActor (String) -> Void
 

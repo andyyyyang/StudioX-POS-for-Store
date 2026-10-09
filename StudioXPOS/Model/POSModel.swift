@@ -107,6 +107,8 @@ final class POSModel {
     var deliveryBusy: Set<String> = []
     /// 選起來的外送單（訂單看板的外送那一排、右欄的「外送」列表點的）：右欄是接單、出餐好了
     var deliveryFocusId: String?
+    /// 門市掃碼付開了哪些錢包（features.walletScan 開著才有；POSModel+WalletPay）。沒有＝電子支付照舊手動記
+    var walletScanConfig: WalletScanConfig?
     var configVersion: String?
     var isDemo = false
 
@@ -176,6 +178,8 @@ final class POSModel {
     let queue = QueueBoard()
     /// 銀行的刷卡機（收銀機連線）：設定存在這台（Services/CardTerminal.swift、POSModel+CardTerminal）
     let cardTerminal = CardTerminalHub()
+    /// 掃碼付：正在進行的那一筆、送出去還不知道結果的（Services/WalletPay.swift、POSModel+WalletPay）
+    let walletPay = WalletPayHub()
 
     // MARK: 內部
 
@@ -212,6 +216,8 @@ final class POSModel {
         }
         pairing = p
         let client = POSClient(cmsURL: p.cmsURL, token: token)
+        // 上次送出去還不知道結果的掃碼付：登入之後背景查（POSModel+WalletPay）
+        walletPay.begin(demo: false)
         if let cached = DeviceStore.loadBootstrap() { apply(cached) }
         do {
             try open(api: client, deviceId: p.deviceId)
@@ -293,6 +299,13 @@ final class POSModel {
                     try? await Task.sleep(for: .seconds(2))
                 }
             },
+            // 掃碼付：送出去還不知道結果的（App 重開、卡先關掉了），每 20 秒只查（不會再扣款）
+            Task { [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(20))
+                    await self?.walletBackgroundTick()
+                }
+            },
         ]
     }
 
@@ -309,6 +322,7 @@ final class POSModel {
         queueConfig = b.features.queue ? b.queue : nil
         if !b.features.queue { queue.reset() }
         deliveryConfig = b.features.delivery ? (b.delivery ?? DeliveryConfig()) : nil
+        walletScanConfig = b.features.walletScan ? b.walletScan : nil
         if let url = queueConfig?.ticket.backgroundUrl {
             let art = queue.art
             Task { await art.prefetch(url) }
@@ -438,6 +452,8 @@ final class POSModel {
         deliveryConfig = nil
         deliverySeen = []
         deliveryBusy = []
+        walletScanConfig = nil
+        walletPay.forget()
         pendingCarrier = nil
         memberRequest = nil
         scanRequest = nil
@@ -458,6 +474,7 @@ final class POSModel {
         }
         try DeviceStore.save(p, token: r.token)
         pairing = p
+        walletPay.begin(demo: false)
         let client = POSClient(cmsURL: cmsURL, token: r.token)
         let b = try await client.bootstrap(ifNoneMatch: nil)
         DeviceStore.save(b)
@@ -490,6 +507,7 @@ final class POSModel {
     /// 不用配對：虛構的「晨麥手作」，菜單、桌位、人員、今天的單都準備好了（資料只在這次開著的時候）
     func startDemo() {
         isDemo = true
+        walletPay.begin(demo: true)
         let demo = DemoStore()
         apply(demo.bootstrap)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pos-demo-\(UUID().uuidString)")
@@ -528,8 +546,9 @@ final class POSModel {
     func touch() { lastActivity = Date() }
 
     private func checkAutoLock() {
-        // 刷卡機正在收或退：不鎖（鎖了那張卡就看不到）
-        guard phase == .ready, settings.autoLockMinutes > 0, checkoutTicketId == nil, !keypad.isAsking, cardTerminal.session == nil else { return }
+        // 刷卡機正在收或退、掃碼付在等錢包：不鎖（鎖了那張卡就看不到）
+        guard phase == .ready, settings.autoLockMinutes > 0, checkoutTicketId == nil, !keypad.isAsking, cardTerminal.session == nil,
+              walletPay.session == nil else { return }
         if Date().timeIntervalSince(lastActivity) > Double(settings.autoLockMinutes * 60) { lock() }
     }
 

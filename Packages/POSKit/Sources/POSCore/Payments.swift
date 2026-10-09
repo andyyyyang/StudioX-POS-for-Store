@@ -136,13 +136,15 @@ public struct Payment: Codable, Sendable, Hashable, Identifiable {
     public var voidReason: String?
     /// 經刷卡機收的（端末、批次、調閱編號…）；手動輸入的沒有
     public var terminal: CardTerminalRef?
+    /// 掃客人付款碼收的（StudioX Pay 的付款 id，`pi_…`）：退款照這個退回錢包。手動記的電子支付沒有（沒有時 JSON 裡不出現，舊的事件雜湊不變）
+    public var intentId: String?
 
     public init(id: String, tender: Tender, amount: Money, tendered: Money? = nil, change: Money = .zero, reference: String? = nil,
                 cardLast4: String? = nil, status: PaymentStatus = .approved, at: Date, by: String, shiftId: String? = nil, voidReason: String? = nil,
-                terminal: CardTerminalRef? = nil) {
+                terminal: CardTerminalRef? = nil, intentId: String? = nil) {
         self.id = id; self.tender = tender; self.amount = amount; self.tendered = tendered; self.change = change
         self.reference = reference; self.cardLast4 = cardLast4; self.status = status; self.at = at; self.by = by
-        self.shiftId = shiftId; self.voidReason = voidReason; self.terminal = terminal
+        self.shiftId = shiftId; self.voidReason = voidReason; self.terminal = terminal; self.intentId = intentId
     }
 
     /// 這筆讓錢櫃多了多少現金：現金收的錢扣掉找零；其他方式只有找零（從錢櫃拿出去）

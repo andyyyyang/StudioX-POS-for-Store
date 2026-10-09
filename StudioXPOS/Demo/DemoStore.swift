@@ -184,7 +184,17 @@ struct DemoStore {
         yellowgirl = today
         past = DemoHistory(base: bootstrap, regulars: DemoHistory.regulars(members, catalog: bootstrap.catalog))
         api = DemoAPI(bootstrap: bootstrap, reservations: reservations, members: members, classes: classes, history: past,
-                      queue: today.map { DemoQueue(yellowgirl: $0, now: now) }, coupons: Self.coupons(kind: kind, now: now))
+                      queue: today.map { DemoQueue(yellowgirl: $0, now: now) }, coupons: Self.coupons(kind: kind, now: now),
+                      walletHold: Self.walletHold)
+    }
+
+    /// 截圖（-walletScan）：示範的掃碼付一直停在「等客人在手機上確認」
+    static var walletHold: Bool {
+        #if DEBUG
+        LaunchArguments.has("-walletScan")
+        #else
+        false
+        #endif
     }
 
     /// 昨天的單（照後台歷史）＋今天已經發生的事（開班、打卡、結帳的單、正在服務的、報到）
@@ -264,9 +274,9 @@ struct DemoStore {
                 defaultOrderType: .dineIn, tableTimeLimitMinutes: 90, businessDayCutoffHour: 4, discountLimitBps: 1000,
                 serviceModes: [.tableService, .counter, .cafe], defaultServiceMode: .tableService
             ),
-            // 餐飲：沒有預約表、儲值與課程卡、抽成（會員只查電話、累積消費）；有叫號（號碼牌）
+            // 餐飲：沒有預約表、儲值與課程卡、抽成（會員只查電話、累積消費）；有叫號（號碼牌）、門市掃碼付（DemoWalletPay）
             features: FeatureFlags(seating: true, kitchen: true, reservations: true, invoice: true, members: true, waitlistSMS: true,
-                                   appointments: false, accounts: false, commission: false, queue: true, delivery: true),
+                                   appointments: false, accounts: false, commission: false, queue: true, delivery: true, walletScan: true),
             catalog: Self.catalog,
             floor: Self.floor,
             staff: Self.staff,
@@ -277,7 +287,9 @@ struct DemoStore {
             // 單據樣式：麥穗店標＋店家自己的字（圖在 iPad 上畫：DemoPrintArt）
             printStyle: DemoPrintArt.cafeStyle,
             // 外送平台（假的 Uber Eats、foodpanda）：今天的外送單在 DemoDelivery.seed
-            delivery: DemoDelivery.config(now: now)
+            delivery: DemoDelivery.config(now: now),
+            // 掃碼付：LINE Pay、街口、全支付、悠遊付都開（示範的後台不連網路，兩秒後成功）
+            walletScan: WalletScanConfig(methods: ["line_pay", "jko_pay", "px_pay", "easy_wallet"], pollMs: 1000)
         )
     }
 
@@ -565,11 +577,17 @@ actor DemoAPI: POSAPI {
     /// 主管授權打錯 PIN 的時間（和後台一樣：10 分鐘錯 5 次鎖 10 分鐘）
     private var pinFailures: [Date] = []
     private var pinLockedUntil: Date?
+    /// 掃碼付（DemoWalletPay.swift）：付款 id → 那一筆；退款 id → 退款的結果（重送同一筆不會退兩次）
+    var walletIntents: [String: DemoWalletIntent] = [:]
+    var walletRefunds: [String: WalletRefundResult] = [:]
+    /// 截圖：掃碼付一直停在「等客人在手機上確認」
+    let walletHold: Bool
 
     /// queue：這家示範的叫號一打開的樣子（黃毛丫頭的號碼對著今天的單）；沒給是晨麥手作那一套
     init(bootstrap: Bootstrap, reservations: [Reservation], members: [Member] = [], classes: [ClassSession] = [], history: DemoHistory? = nil,
-         queue: DemoQueue? = nil, coupons: [String: DemoCoupon] = [:]) {
+         queue: DemoQueue? = nil, coupons: [String: DemoCoupon] = [:], walletHold: Bool = false) {
         base = bootstrap
+        self.walletHold = walletHold
         self.reservations = Dictionary(reservations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         self.members = Dictionary(members.map { ($0.phone, $0) }, uniquingKeysWith: { first, _ in first })
         timetable = classes

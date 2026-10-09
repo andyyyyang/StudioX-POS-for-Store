@@ -75,6 +75,14 @@ public protocol POSAPI: Sendable {
     func delivery() async throws -> DeliveryStateResponse
     /// 外送平台的動作：接單、拒單、出餐好了、忙碌、暫停。另一台先接了丟 `.http(409, "already_accepted", …)`
     func delivery(_ action: DeliveryAction) async throws -> DeliveryActionResult
+    /// 門市掃碼付（WalletPayAPI.swift）：掃到客人的付款碼收款。code 是 nil＝只查這個付款 id（不會扣款）
+    func walletScan(_ request: WalletScanRequest) async throws -> WalletPayResult
+    /// 掃碼付現在的結果（處理中每 3 秒問一次）
+    func walletIntent(id: String) async throws -> WalletPayResult
+    /// 取消掃碼付（錢包正在處理的取消不了：回現在的狀態、cancelable false）
+    func cancelWalletIntent(id: String) async throws -> WalletPayResult
+    /// 掃碼付收的款退回錢包。超過店家設定的金額丟 `.http(403, "manager_approval_required", …)`：帶店長 PIN 再送
+    func walletRefund(_ request: WalletRefundRequest) async throws -> WalletRefundResult
 }
 
 extension POSAPI {
@@ -253,17 +261,20 @@ public struct POSClient: POSAPI {
         try await call(path, method: method, query: query, headers: headers, body: Optional<Empty>.none)
     }
 
-    func call<T: Decodable, B: Encodable>(_ path: String, method: String = "GET", query: [String: String] = [:], headers: [String: String] = [:], body: B?) async throws -> T {
+    /// timeout：大部分 15 秒；掃碼付要等錢包（最慢 40 秒）的另外給
+    func call<T: Decodable, B: Encodable>(_ path: String, method: String = "GET", query: [String: String] = [:], headers: [String: String] = [:], body: B?,
+                                          timeout: TimeInterval = 15) async throws -> T {
         var url = baseURL.appendingPathComponent(path)
         if !query.isEmpty, var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
             c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
             url = c.url ?? url
         }
-        return try await Self.send(session: session, url: url, method: method, token: token, body: body, headers: headers)
+        return try await Self.send(session: session, url: url, method: method, token: token, body: body, headers: headers, timeout: timeout)
     }
 
-    static func send<T: Decodable, B: Encodable>(session: URLSession, url: URL, method: String, token: String?, body: B?, headers: [String: String] = [:]) async throws -> T {
-        var req = URLRequest(url: url, timeoutInterval: 15)
+    static func send<T: Decodable, B: Encodable>(session: URLSession, url: URL, method: String, token: String?, body: B?, headers: [String: String] = [:],
+                                                timeout: TimeInterval = 15) async throws -> T {
+        var req = URLRequest(url: url, timeoutInterval: timeout)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }

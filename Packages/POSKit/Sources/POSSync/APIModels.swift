@@ -116,12 +116,13 @@ public struct MeshConfig: Codable, Sendable, Hashable {
 public struct Bootstrap: Codable, Sendable, Hashable {
     public init(version: String, serverTime: Date, device: DeviceProfile, store: StoreProfile, features: FeatureFlags, catalog: Catalog,
                 floor: FloorPlan, staff: [StaffMember], invoice: InvoiceSettings, mesh: MeshConfig, queue: QueueConfig? = nil,
-                printStyle: PrintStyle? = nil, delivery: DeliveryConfig? = nil) {
+                printStyle: PrintStyle? = nil, delivery: DeliveryConfig? = nil, walletScan: WalletScanConfig? = nil) {
         self.version = version; self.serverTime = serverTime; self.device = device; self.store = store; self.features = features
         self.catalog = catalog; self.floor = floor; self.staff = staff; self.invoice = invoice; self.mesh = mesh
         self.queue = queue
         self.printStyle = printStyle
         self.delivery = delivery
+        self.walletScan = walletScan
     }
 
     public var version: String
@@ -140,6 +141,8 @@ public struct Bootstrap: Codable, Sendable, Hashable {
     public var printStyle: PrintStyle?
     /// 外送平台（docs/DELIVERY.md）；features.delivery 關著、或舊版後台沒有時是 nil
     public var delivery: DeliveryConfig?
+    /// 門市掃碼付開了哪些錢包（WalletPayAPI.swift）；features.walletScan 關著、或舊版後台沒有時是 nil
+    public var walletScan: WalletScanConfig?
 }
 
 // MARK: - 事件

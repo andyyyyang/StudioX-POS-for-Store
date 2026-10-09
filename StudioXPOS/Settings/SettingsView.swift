@@ -24,7 +24,8 @@ struct SettingsView: View {
     @Environment(POSModel.self) private var model
     @Environment(PrinterHub.self) private var printers
 
-    @State private var group: SettingsGroup = .device
+    /// 截圖：-settingsGroup cardTerminal 直接打開那一類
+    @State private var group: SettingsGroup = LaunchArguments.value("-settingsGroup").flatMap(SettingsGroup.init(rawValue:)) ?? .device
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

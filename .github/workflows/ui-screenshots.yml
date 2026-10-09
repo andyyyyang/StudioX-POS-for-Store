@@ -98,6 +98,9 @@ jobs:
             "07-cafe-reservations|-demo cafe $L -section reservations"
             "08-cafe-shift|-demo cafe $L -section shift"
             "09-cafe-settings|-demo cafe $L -section settings"
+            # 設定 → 刷卡機（銀行 EDC 的收銀機連線；示範店接模擬的）、設定 → 外送平台
+            "09a-cafe-settings-terminal|-demo cafe $L -section settings -settingsGroup cardTerminal -cardTerminal"
+            "09b-cafe-settings-delivery|-demo cafe $L -section settings -settingsGroup delivery"
             "10-counter-order|-demo cafe -serviceMode counter $L -section order"
             "11-expo|-demo cafe -workstation expo $L"
             "12-cafe-queue|-demo cafe $L -section queue"
@@ -111,6 +114,8 @@ jobs:
             # 外送平台：訂單最上面一排（待接單倒數、製作中、等外送員），選起最快到期的待接單：右欄「接單・N 分」
             "17-cafe-delivery|-demo cafe $L -section orders -deliveryFocus|10"
             "18-cafe-delivery-kitchen|-demo cafe $L -section kitchen"
+            # 掃碼付：結帳 → LINE Pay → 掃到客人的付款碼 → 卡停在「等客人在手機上確認」（取消、每 3 秒查）
+            "19-cafe-wallet-scan|-demo cafe $L -section order -walletScan|11"
             "20-apparel-order|-demo apparel $L -section order"
             "21-apparel-orders|-demo apparel $L -section orders"
             "22-apparel-dashboard|-demo apparel $L -section dashboard"

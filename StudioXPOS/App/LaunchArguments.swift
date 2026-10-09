@@ -26,6 +26,8 @@ import UIKit
 ///   -checkout                            登入、開頁之後選一張有點東西的單、打開結帳畫面（截付款的樣子）
 ///   -deliveryFocus                       登入、開頁之後選起最快到期的外送待接單（截接單的樣子）
 ///   -cardTerminal                        示範店接上模擬的刷卡機（信用卡、電子票證、電子錢包都經刷卡機；不存設定）
+///   -settingsGroup cardTerminal          設定頁直接打開那一類（device、printers、cardTerminal、delivery…）
+///   -walletScan                          登入、開頁之後打開結帳、用 LINE Pay 掃到示範的付款碼：掃碼付的卡停在「等客人在手機上確認」（截圖）
 enum LaunchArguments {
     static func value(_ key: String) -> String? {
         let args = ProcessInfo.processInfo.arguments
@@ -44,6 +46,8 @@ enum LaunchArguments {
     static var checkoutDemoDone = false
     /// -deliveryFocus 只選一次
     static var deliveryFocusDone = false
+    /// -walletScan 只開一次
+    static var walletScanDone = false
 
     /// 截圖用：頁面出現時先選起第一筆（只在 Debug）。各頁在 .onAppear／.task 裡看這個
     static var preselect: Bool {
@@ -101,9 +105,30 @@ extension POSModel {
                 deliveryFocusId = deliveryPending.first?.id
             }
         }
+        // 掃碼付的截圖：結帳 → LINE Pay → 掃到示範的付款碼 → 卡停在「等客人在手機上確認」（DemoStore.walletHold）
+        if phase == .ready, isDemo, !LaunchArguments.walletScanDone, LaunchArguments.has("-walletScan") {
+            LaunchArguments.walletScanDone = true
+            Task { await runWalletScanDemo() }
+        }
         if phase == .ready, LaunchArguments.has("-lockNow") { lock() }
         #endif
     }
+
+    #if DEBUG
+    /// -walletScan：小計最大、還沒送去結帳的那張單打開結帳，LINE Pay 收剩下的全部、掃到示範的付款碼
+    private func runWalletScanDemo() async {
+        try? await Task.sleep(for: .seconds(1.2))
+        let open = state.openTickets.filter { !$0.activeLines.isEmpty && $0.delivery == nil }
+        guard let t = open.max(by: { $0.totals.subtotal < $1.totals.subtotal }) else { return }
+        selectedTicketId = t.id
+        beginCheckout(t)
+        try? await Task.sleep(for: .seconds(0.8))
+        guard let fresh = state.tickets[t.id], fresh.isOpen, fresh.totals.balance.cents > 0 else { return }
+        Task { await payByWalletScan(fresh, tender: .linePay, amount: fresh.totals.balance) }
+        try? await Task.sleep(for: .seconds(1.2))
+        walletPay.session?.submit(WalletPaySheet.demoCode)
+    }
+    #endif
 
     #if DEBUG
     /// -scanDemo：等畫面好了掃一次。點餐頁還沒有單：先選一張有點東西、還沒送去結帳的單（小計最大的，折價券的最低消費才夠），
