@@ -272,17 +272,20 @@ struct DeliveryPlatformRow: View {
     }
 
     private var statusText: String {
+        if state.health == "waiting_platform" { return "等開通" }
         if !state.connected { return "沒連上" }
         return state.isOnline ? "接單中" : "暫停"
     }
 
     private var statusTone: Tone {
+        if state.health == "waiting_platform" { return .neutral }
         if !state.connected { return .danger }
         return state.isOnline ? .active : .warning
     }
 
     private var caption: String {
         var parts: [String] = []
+        if let note = state.healthNote { parts.append(note) }
         if let until = state.pausedUntil, !state.isOnline { parts.append("暫停到 \(TaipeiTime.clock(until))") }
         if state.pausedBy == "watchdog" { parts.append("POS 斷線時自動暫停") }
         if state.busyExtraMinutes > 0 { parts.append("忙碌 +\(state.busyExtraMinutes) 分") }

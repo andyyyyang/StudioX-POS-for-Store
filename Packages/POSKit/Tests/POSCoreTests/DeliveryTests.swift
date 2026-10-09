@@ -110,6 +110,17 @@ struct DeliveryTests {
         #expect(a.suggest(pendingItems: 500, orderItems: 0) == 45)
     }
 
+    /// 後台的連線檢查（health）：舊的後台沒有這欄照樣讀；等平台開通不是錯誤
+    @Test func platformHealthFromServer() throws {
+        let plain = Data(#"{"platform":"foodpanda","enabled":true,"connected":true,"status":"online","busyExtraMinutes":0,"autoAccept":false,"defaultPrepMinutes":15}"#.utf8)
+        let old = try JSONDecoder().decode(DeliveryPlatformState.self, from: plain)
+        #expect(old.health == nil && old.healthNote == nil)
+        let waiting = Data(#"{"platform":"foodpanda","enabled":true,"connected":false,"status":"offline","busyExtraMinutes":0,"autoAccept":false,"defaultPrepMinutes":15,"health":"waiting_platform"}"#.utf8)
+        let s = try JSONDecoder().decode(DeliveryPlatformState.self, from: waiting)
+        #expect(s.healthNote == "等 foodpanda 開通（自動重試中）")
+        #expect(DeliveryPlatformState(platform: .ubereats, health: "needs_reauth").healthNote == "請負責人在後台重新連結 Uber Eats")
+    }
+
     @Test func invoiceInfoFromPlatform() {
         #expect(DeliveryInvoiceInfo(carrier: "/ABC1234").buyer == .consumer(carrier: .mobileBarcode("/ABC1234")))
         #expect(DeliveryInvoiceInfo(carrier: "/ABC1234", taxId: "22099131").buyer == .business(taxId: "22099131", title: nil))

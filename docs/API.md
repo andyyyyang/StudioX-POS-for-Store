@@ -186,13 +186,23 @@ POS 上每一件事都是一筆不可改的事件。iPad 斷網照樣記，連�
 | `sale.refunded` | 寫 `pos_refunds`；`pos_sales.refunded` 加上金額、`status` 改 `refunded`／`partially_refunded`；有折讓單（`allowance`）就排上傳（G0401）。會員累積消費扣回。|
 | `ticket.voided` | 只存事件（報表從事件算作廢）。|
 | `shift.closed` | 寫 `pos_shifts`（含 `data.report` 交班單）；推播給負責人：「櫃台 1 交班：營業額 NT$xx、現金短少 NT$yy」。|
-| `item.availability` | 更新 `pos_items.is_available`（後台與其他 iPad 都看到賣完）。|
+| `item.availability` | 更新 `pos_items.is_available`（後台與其他 iPad 都看到賣完）；開了外送平台的，排進佇列同步到每一個平台（賣完／恢復，見 [DELIVERY.md](DELIVERY.md)）。|
 | `sale.exchanged` | 同款換規格（換尺寸、換顏色，同價）：每個 `swaps[]` 把 `fromSkuId` 的庫存加回、`toSkuId` 扣掉（有 `toProductVariantId` 的扣網路商店的規格）。不動錢、不動發票。|
 | `member.checkedIn` | 寫 `pos_checkins`；`uses > 0` 時扣那張卡的次數（見「會員帳戶」）。|
 | `member.checkInVoided` | 標取消；還回次數。|
+| `delivery.updated` | 只存（外送平台那邊的狀態：接了、做好了、外送員、取消；後台自己寫的，見下）。|
 | 其他 | 只存（新版 App 的事件也是：原樣存、原樣轉發）。|
 
 `ticket.closed`、`sale.refunded` 另外還要做「會員帳戶」與「庫存」的投影（見下）。
+
+**後台自己寫的事件**（外送平台的單，[DELIVERY.md](DELIVERY.md)）：後台有一台虛擬裝置「外送平台」（`role`＝`integration`、`code`＝`DLV`，
+沒有 token、不出現在裝置頁），它的事件和 iPad 的一模一樣（自己的 `seq` 與雜湊鏈、`lamport` 排在當時所有事件之後、沒有 `staffId`），
+照常從 `GET /events` 拉到：`ticket.opened`（帶 `delivery`）、`lines.added`、`ticket.updated`（店家優惠）、`payment.added`（`platform`）、
+`delivery.updated`、`lines.sent`（後台自動接單時，`relayPrint`＝`new`）、`ticket.voided`。
+
+| type | 內容 |
+|---|---|
+| `delivery.updated` | `{ ticketId, status?, readyAt?, prepMinutes?, courier?, reason?, commission?, payout?, estimated?, acceptedBy? }`：只送有變的。`status`：`pending`／`accepted`／`rejected`／`ready`／`pickedUp`／`cancelled`；`courier`：`{ name?, status: assigned｜arriving｜arrived｜pickedUp, eta? }` |
 
 ## 發票號碼段
 
@@ -305,6 +315,7 @@ App 在剩不到 10 張、或下一期快開始（最後 3 天）時自動要。
 **庫存**：`ticket.closed` 每一行有 `skuId` 的扣門市規格的庫存、有 `variantId`（網路商店規格）的扣網路商店的；退款反過來。
 
 **付款方式**多了 `prepaid`（儲值金）與 `exchange`（換貨抵用：退回的商品抵掉新買的；`change` > 0＝退差額，從錢櫃拿現金）。實收不算這兩種。
+還有 `platform`（外送平台代收：客人在 Uber Eats、foodpanda 上付了，`reference`＝「Uber Eats #3F2A1」）：不進錢櫃、不用輸入交易序號，報表照 `reference` 開頭分平台。
 
 **換貨**：結帳時同一批事件裡有原單的 `sale.refunded`（`tender = exchange`，照規則作廢或開折讓）與新單的 `ticket.closed`（`payments` 有一筆 `exchange`、`exchange` 欄位指向原單）。
 
@@ -441,4 +452,6 @@ iPad 在叫號頁每 2 秒 `GET /queue`；動作的回應直接拿來更新畫�
 ## 其他
 
 - `PUT /floor` `{ areas, staffId }` → `{ floor, version }`：iPad 上改桌位圖（店長 PIN 授權）
-- `POST /heartbeat` `{ appVersion, outbox, lastSeq, printers[], battery, openTickets, staffId, workstation }` → `{ serverTime, configVersion, serverSeq }`：每分鐘一次；後台「裝置」頁顯示在線、未送出的事件數、出單機狀態、目前的崗位
+- `POST /heartbeat` `{ appVersion, outbox, lastSeq, printers[], battery, openTickets, staffId, workstation }` → `{ serverTime, configVersion, serverSeq }`：每分鐘一次；後台「裝置」頁顯示在線、未送出的事件數、出單機狀態、目前的崗位。
+  開了外送平台時，3 分鐘內沒有任何一台連上後台，後台會先把平台暫停（連回來自動恢復）
+- 外送平台：`GET /delivery`、`POST /delivery/orders/{id}/accept|reject|ready|cancel`、`POST /delivery/busy|pause|resume|simulate`；開機資料的 `features.delivery`、`delivery`。見 [DELIVERY.md](DELIVERY.md)

@@ -218,16 +218,28 @@ public struct DeliveryPlatformState: Codable, Sendable, Hashable, Identifiable {
     public var defaultPrepMinutes: Int
     public var lastOrderAt: Date?
     public var lastError: DeliveryError?
+    /// 後台的自動連線檢查：ok｜waiting_platform（等平台開通，不是錯誤）｜needs_reauth（要重新連結）｜error；還沒檢查＝nil
+    public var health: String?
 
     public var id: String { platform.rawValue }
     public var isOnline: Bool { status == "online" }
 
+    /// 連線檢查要店家知道的（正常、還沒檢查＝nil）
+    public var healthNote: String? {
+        switch health {
+        case "waiting_platform": "等 \(platform.label) 開通（自動重試中）"
+        case "needs_reauth": "請負責人在後台重新連結 \(platform.label)"
+        case "error": "連不上 \(platform.label)（自動重試中）"
+        default: nil
+        }
+    }
+
     public init(platform: DeliveryPlatform, enabled: Bool = true, connected: Bool = true, storeName: String? = nil, status: String = "online",
                 pausedUntil: Date? = nil, pausedBy: String? = nil, busyExtraMinutes: Int = 0, autoAccept: Bool = false,
-                defaultPrepMinutes: Int = 15, lastOrderAt: Date? = nil, lastError: DeliveryError? = nil) {
+                defaultPrepMinutes: Int = 15, lastOrderAt: Date? = nil, lastError: DeliveryError? = nil, health: String? = nil) {
         self.platform = platform; self.enabled = enabled; self.connected = connected; self.storeName = storeName; self.status = status
         self.pausedUntil = pausedUntil; self.pausedBy = pausedBy; self.busyExtraMinutes = busyExtraMinutes; self.autoAccept = autoAccept
-        self.defaultPrepMinutes = defaultPrepMinutes; self.lastOrderAt = lastOrderAt; self.lastError = lastError
+        self.defaultPrepMinutes = defaultPrepMinutes; self.lastOrderAt = lastOrderAt; self.lastError = lastError; self.health = health
     }
 }
 
