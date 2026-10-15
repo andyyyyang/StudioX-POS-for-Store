@@ -44,7 +44,13 @@ struct PhoneShell: View {
         // 加進單子就輕震一下（點品項、價錢鍵、「加入」、掃到商品）
         .background { AddHaptic() }
         .environment(ui)
-        .onAppear { normalizeSection() }
+        .onAppear {
+            normalizeSection()
+            #if DEBUG
+            // 截圖（ui-screenshots.yml）：畫面出來了才開始算秒數，模擬器忙的時候才不會拍到主畫面
+            print("POSShell: shown")
+            #endif
+        }
         .onChange(of: model.section) { _, _ in
             normalizeSection()
             ui.printersOpen = false

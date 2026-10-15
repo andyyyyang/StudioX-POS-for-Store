@@ -316,11 +316,20 @@ jobs:
             limit 180 xcrun simctl install "$dev" "$app" || echo "   安裝逾時"
             # App 自己印的錯誤（Swift 的 Fatal error、SwiftUI 的檢查）收在 shots/logs/
             log="shots/logs/$(basename "$name").log"
-            # --console-pty：App 的 stdout／stderr 接到這裡（Swift 的 Fatal error 會印在這）；背景跑，截完圖再收
-            ( limit $(( ${wait:-7} + 8 )) xcrun simctl launch --console-pty "$dev" "$bundle" $args > "$log" 2>&1 ) &
+            # --console-pty：App 的 stdout／stderr 接到這裡（Swift 的 Fatal error 會印在這）；背景跑，截完圖再收。
+            # 時限要比截圖久：時限一到 simctl 被砍、App 跟著被關，模擬器忙的時候截圖還沒拍完就只拍到主畫面（以前 40、50 偶爾這樣）
+            ( limit $(( ${wait:-7} + 120 )) xcrun simctl launch --console-pty "$dev" "$bundle" $args > "$log" 2>&1 ) &
+            # 有 -section 的：等 App 自己印「POSShell: shown」（畫面出來了，PhoneShell）再開始算秒數；最多等 60 秒
+            if [[ "$args" == *"-section"* ]]; then
+              for i in $(seq 1 60); do grep -q "POSShell: shown" "$log" 2>/dev/null && break; sleep 1; done
+              grep -q "POSShell: shown" "$log" 2>/dev/null || echo "   60 秒還沒看到畫面"
+            fi
             sleep "${wait:-7}"
-            limit 30 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
-            # 當掉的話下一步「當機報告」會印出位置；console-pty 收的輸出在 shots/logs/
+            limit 45 xcrun simctl io "$dev" screenshot "shots/$name.png" >/dev/null 2>&1 || echo "   截圖逾時"
+            # 截完 App 還在不在（不在＝當掉或被系統關掉；當機報告在下一步）
+            limit 20 xcrun simctl spawn "$dev" launchctl list 2>/dev/null | grep -q "UIKitApplication:$bundle" || echo "   截圖時 App 已經不在了"
+            # 拍完自己關掉（console-pty 跟著結束），不用等時限
+            limit 20 xcrun simctl terminate "$dev" "$bundle" 2>/dev/null || true
             wait 2>/dev/null || true
           done
           limit 60 xcrun simctl shutdown "$dev" || true
