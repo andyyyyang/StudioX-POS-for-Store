@@ -25,17 +25,15 @@ struct PhoneOrdersList: View {
         let open = model.state.openTickets.filter { $0.billPrintedAt == nil && $0.delivery == nil }.sorted { $0.openedAt > $1.openedAt }
         let waiting = model.awaitingCheckout.sorted { ($0.billPrintedAt ?? $0.openedAt) > ($1.billPrintedAt ?? $1.openedAt) }
         let paid = Array(model.handedOffAndPaid.prefix(20))
-        VStack(alignment: .leading, spacing: 12) {
-            PageTitle(title: "Open *tickets*", subtitle: "訂單")
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-            Picker("", selection: $tab) {
-                Text("進行中 \(open.count + delivery.count)").tag(Tab.open)
-                Text("待結帳 \(waiting.count)").tag(Tab.billing)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16)
-            .accessibilityLabel("進行中或待結帳")
+        VStack(alignment: .leading, spacing: 0) {
+            PhonePageHeader(title: "Open *tickets*", subtitle: "訂單", below: {
+                Picker("", selection: $tab) {
+                    Text("進行中 \(open.count + delivery.count)").tag(Tab.open)
+                    Text("待結帳 \(waiting.count)").tag(Tab.billing)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityLabel("進行中或待結帳")
+            })
             TimelineView(.periodic(from: .now, by: 30)) { ctx in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {

@@ -34,46 +34,34 @@ struct QueueView: View {
     @State private var glow = 0.0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            header
-            if let p = model.queue.problem {
-                Banner(text: p.message, tone: p.blocksPage ? .danger : .warning)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
+        page
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .animation(reduceMotion ? nil : Motion.ease, value: model.queue.problem)
+            .dockSelection(dockItem)
+            .task { await model.queuePageLoop() }
+            .onChange(of: model.queue.state, initial: true) { _, s in
+                // 截圖：一打開就選起現在叫到的號碼
+                if LaunchArguments.preselect, !didPreselect, let c = s?.current {
+                    didPreselect = true
+                    picked = .current(c)
+                }
+                dropStalePick(s)
             }
-            // 每 15 秒重畫：等了幾分、幾分鐘前叫的
-            TimelineView(.periodic(from: .now, by: 15)) { ctx in
-                content(now: ctx.date)
+            .onChange(of: model.queue.state?.current) { old, new in
+                if old != nil, old != new { flash() }
             }
-        }
-        .padding(.horizontal, 28)
-        .padding(.top, 22)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(reduceMotion ? nil : Motion.ease, value: model.queue.problem)
-        .dockSelection(dockItem)
-        .task { await model.queuePageLoop() }
-        .onChange(of: model.queue.state, initial: true) { _, s in
-            // 截圖：一打開就選起現在叫到的號碼
-            if LaunchArguments.preselect, !didPreselect, let c = s?.current {
-                didPreselect = true
-                picked = .current(c)
+            .alert("全部歸零？", isPresented: $confirmReset) {
+                Button("歸零", role: .destructive) { Task { await model.resetQueue() } }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("等候中、過號、標記都會清掉，下一張從 1 號開始。店長以上才能歸零。")
             }
-            dropStalePick(s)
-        }
-        .onChange(of: model.queue.state?.current) { old, new in
-            if old != nil, old != new { flash() }
-        }
-        .alert("全部歸零？", isPresented: $confirmReset) {
-            Button("歸零", role: .destructive) { Task { await model.resetQueue() } }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("等候中、過號、標記都會清掉，下一張從 1 號開始。店長以上才能歸零。")
-        }
-        .alert("從過號刪掉？", isPresented: unmissBinding, presenting: confirmUnmiss) { n in
-            Button("刪掉 \(n) 號", role: .destructive) { Task { await model.unmissQueue(n) } }
-            Button("取消", role: .cancel) {}
-        } message: { n in
-            Text("\(n) 號會從過號清單拿掉，之後不能再叫一次。")
-        }
+            .alert("從過號刪掉？", isPresented: unmissBinding, presenting: confirmUnmiss) { n in
+                Button("刪掉 \(n) 號", role: .destructive) { Task { await model.unmissQueue(n) } }
+                Button("取消", role: .cancel) {}
+            } message: { n in
+                Text("\(n) 號會從過號清單拿掉，之後不能再叫一次。")
+            }
     }
 
     private var anim: Animation? { reduceMotion ? nil : Motion.spring }
@@ -84,12 +72,54 @@ struct QueueView: View {
 
     // MARK: - 上面
 
+    /// iPad：標題與連線狀態一列、下面是號碼；手機：和其他分頁同一個頁首（PhonePageHeader），左右 16
+    @ViewBuilder
+    private var page: some View {
+        if model.isPhone {
+            VStack(alignment: .leading, spacing: 0) {
+                PhonePageHeader(title: "Now *serving*", subtitle: "叫號・號碼牌", trailing: { modeChip })
+                VStack(alignment: .leading, spacing: 12) {
+                    problemBanner
+                    liveBoard
+                }
+                .padding(.horizontal, Metric.gutter)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                problemBanner
+                liveBoard
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+        }
+    }
+
+    @ViewBuilder
+    private var problemBanner: some View {
+        if let p = model.queue.problem {
+            Banner(text: p.message, tone: p.blocksPage ? .danger : .warning)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    /// 每 15 秒重畫：等了幾分、幾分鐘前叫的
+    private var liveBoard: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { ctx in
+            content(now: ctx.date)
+        }
+    }
+
+    private var modeChip: some View {
+        QueueModeChip(mode: model.queueMode, problem: model.queue.problem, syncedAt: model.queue.syncedAt)
+            .frame(height: 44)
+    }
+
     private var header: some View {
         HStack(alignment: .bottom, spacing: 12) {
             PageTitle(title: "Now *serving*", subtitle: "叫號・號碼牌")
             Spacer(minLength: 12)
-            QueueModeChip(mode: model.queueMode, problem: model.queue.problem, syncedAt: model.queue.syncedAt)
-                .frame(height: 44)
+            modeChip
         }
     }
 
@@ -137,7 +167,7 @@ struct QueueView: View {
 
     private func board(_ s: QueueState, now: Date) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
+            VStack(alignment: .leading, spacing: model.isPhone ? 20 : 26) {
                 QueueHero(
                     state: s,
                     mode: model.queueMode,
@@ -172,7 +202,7 @@ struct QueueView: View {
                     .foregroundStyle(Theme.muted)
                 Spacer(minLength: 8)
                 if !s.waiting.isEmpty {
-                    Text("點號碼選起來：標記在右邊")
+                    Text("點號碼選起來：標記在\(model.isPhone ? "下面" : "右邊")")
                         .textRole(.xs)
                         .foregroundStyle(Theme.faint)
                 }
@@ -183,7 +213,8 @@ struct QueueView: View {
                     .foregroundStyle(Theme.muted)
                     .padding(.vertical, 6)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 116, maximum: 168), spacing: 12)], alignment: .leading, spacing: 12) {
+                // 手機一排三個
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: model.isPhone ? 100 : 116, maximum: 168), spacing: model.isPhone ? 10 : 12)], alignment: .leading, spacing: model.isPhone ? 10 : 12) {
                     ForEach(Array(s.waiting.enumerated()), id: \.element) { i, n in
                         let minutes = native ? s.waitMinutes(n, now: now) : nil
                         QueueTile(

@@ -37,29 +37,35 @@ struct MembersView: View {
         let board = model.memberBoard()
         GeometryReader { geo in
             let wide = geo.size.width >= 880
-            VStack(alignment: .leading, spacing: 18) {
-                header(board, compact: !wide)
-                if wide {
-                    HStack(alignment: .top, spacing: 0) {
-                        roster(board)
-                            .frame(width: rosterWidth)
-                            .frame(maxHeight: .infinity, alignment: .top)
-                        Rule(vertical: true)
-                            .padding(.horizontal, 20)
-                        detail(board, compact: false)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    }
-                } else if focus != nil {
-                    detail(board, compact: true)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                } else {
-                    roster(board)
-                        .frame(maxWidth: 560, maxHeight: .infinity, alignment: .top)
+            if model.isPhone {
+                // 手機：和其他分頁同一個頁首（PhonePageHeader），名單與資料卡輪流佔滿
+                VStack(alignment: .leading, spacing: 0) {
+                    PhonePageHeader(title: "Your *regulars*", subtitle: subtitle(board))
+                    narrow(board)
+                        .padding(.horizontal, Metric.gutter)
                 }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            } else {
+                VStack(alignment: .leading, spacing: 18) {
+                    header(board, compact: !wide)
+                    if wide {
+                        HStack(alignment: .top, spacing: 0) {
+                            roster(board)
+                                .frame(width: rosterWidth)
+                                .frame(maxHeight: .infinity, alignment: .top)
+                            Rule(vertical: true)
+                                .padding(.horizontal, 20)
+                            detail(board, compact: false)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+                    } else {
+                        narrow(board)
+                    }
+                }
+                .padding(.horizontal, wide ? 28 : 20)
+                .padding(.top, 22)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             }
-            .padding(.horizontal, wide ? 28 : 20)
-            .padding(.top, 22)
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
         // 沒選人的時候：右欄最下面的大鍵是「查會員」（鍵盤已經在等電話時就是鍵盤的「查詢」，上面有「用相機掃會員條碼」）；
         // 鍵盤沒在等的時候（手機往下滑收起來了）：「掃會員條碼」在這一頁的動作裡
@@ -78,6 +84,18 @@ struct MembersView: View {
     private func header(_ board: MemberBoard, compact: Bool) -> some View {
         PageTitle(title: "Your *regulars*", subtitle: subtitle(board))
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 窄的時候：選了人是資料卡，沒選是名單
+    @ViewBuilder
+    private func narrow(_ board: MemberBoard) -> some View {
+        if focus != nil {
+            detail(board, compact: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            roster(board)
+                .frame(maxWidth: 560, maxHeight: .infinity, alignment: .top)
+        }
     }
 
     private func subtitle(_ board: MemberBoard) -> String {

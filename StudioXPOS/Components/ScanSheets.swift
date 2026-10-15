@@ -233,18 +233,11 @@ struct ScanButton: View {
             HStack(spacing: 6) {
                 HeroIcon("qr-code", size: 17)
                 Text("掃碼")
-                    .font(.brand(15, .semibold))
-                    .lineLimit(1)
                     .fixedSize()
             }
-            .foregroundStyle(Theme.ink)
-            .padding(.horizontal, 14)
-            .frame(height: 44)
-            .background(Theme.surface, in: .capsule)
-            .overlay { Capsule().strokeBorder(Theme.line) }
-            .contentShape(.capsule)
         }
-        .buttonStyle(PressScale(scale: 0.96))
+        // 和頁首其他工具鍵同一種（PhonePageHeader）
+        .buttonStyle(.phoneTool())
         .accessibilityLabel("掃碼")
         .accessibilityHint(hint)
     }

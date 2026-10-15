@@ -30,33 +30,34 @@ struct PhoneMoreView: View {
     private static let lockChoices = [0, 1, 3, 5, 10, 30]
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                PageTitle(title: "This *phone*", subtitle: "更多")
-                whoPanel
-                // 下面那一排放不下的頁（餐廳的訂位）、會員
-                let pages = model.phoneMoreSections.filter { $0 != .settings }
-                if !pages.isEmpty {
-                    VStack(spacing: 0) {
-                        ForEach(Array(pages.enumerated()), id: \.element) { i, s in
-                            if i > 0 { Rule().padding(.leading, 50) }
-                            sectionRow(s)
+        VStack(spacing: 0) {
+            PhonePageHeader(title: "This *phone*", subtitle: "更多")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    whoPanel
+                    // 下面那一排放不下的頁（餐廳的訂位）、會員
+                    let pages = model.phoneMoreSections.filter { $0 != .settings }
+                    if !pages.isEmpty {
+                        VStack(spacing: 0) {
+                            ForEach(Array(pages.enumerated()), id: \.element) { i, s in
+                                if i > 0 { Rule().padding(.leading, 50) }
+                                sectionRow(s)
+                            }
                         }
+                        .panel(padding: 0)
                     }
-                    .panel(padding: 0)
+                    phonePanel
+                    Text("StudioX POS \(Bundle.main.appVersion)")
+                        .textRole(.xs)
+                        .foregroundStyle(Theme.faint)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 4)
                 }
-                phonePanel
-                Text("StudioX POS \(Bundle.main.appVersion)")
-                    .textRole(.xs)
-                    .foregroundStyle(Theme.faint)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.top, 4)
+                .padding(.horizontal, Metric.gutter)
+                .padding(.bottom, 24)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 24)
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
         .dockSelection(.page("phone-more", primary: lockAction, actions: leaveActions))
         .confirmationDialog("登出這支手機？", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("登出這支手機", role: .destructive) {

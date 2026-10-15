@@ -112,34 +112,34 @@ struct PhoneOrderView: View {
 
     // MARK: 上面
 
+    /// 頁首（PhonePageHeader，和其他分頁同一個樣子）：開單前「The menu／點餐」、開了單是桌名與單號——
+    /// 兩種疊在一起只顯示一種，高度固定：點了第一個品項（開了單），下面的分類與菜單不會跳。
+    /// 右邊：叫號（全外帶的店）、掃碼、搜尋
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                // 開單前「The menu」、開了單是單號與桌名：兩種疊在一起只顯示一種，高度固定——
-                // 點了第一個品項（開了單），下面的分類與菜單不會跳
-                ZStack(alignment: .leading) {
-                    ticketTitle
-                        .opacity(model.selectedTicket == nil ? 0 : 1)
-                        .accessibilityHidden(model.selectedTicket == nil)
-                    menuTitle
-                        .opacity(model.selectedTicket == nil ? 1 : 0)
-                        .accessibilityHidden(model.selectedTicket != nil)
-                }
-                Spacer(minLength: 8)
-                PhoneQueueButton(open: $queueOpen)
-                ScanButton(hint: "用相機掃商品、會員卡、發票載具、折價券")
-                Button {
-                    withAnimation(Motion.fast) {
-                        searching.toggle()
-                        if !searching { query = "" }
-                    }
-                    searchFocused = searching
-                } label: {
-                    HeroIcon(searching ? "x-mark" : "magnifying-glass", size: 18)
-                }
-                .buttonStyle(SquareIconButtonStyle(size: 44))
-                .accessibilityLabel(searching ? "關掉搜尋" : "搜尋品項")
+        PhonePageHeader(leading: {
+            ZStack(alignment: .leading) {
+                ticketTitle
+                    .opacity(model.selectedTicket == nil ? 0 : 1)
+                    .accessibilityHidden(model.selectedTicket == nil)
+                PhoneTitle(title: "The *menu*", subtitle: "點餐")
+                    .opacity(model.selectedTicket == nil ? 1 : 0)
+                    .accessibilityHidden(model.selectedTicket != nil)
             }
+        }, trailing: {
+            PhoneQueueButton(open: $queueOpen)
+            ScanButton(hint: "用相機掃商品、會員卡、發票載具、折價券")
+            Button {
+                withAnimation(Motion.fast) {
+                    searching.toggle()
+                    if !searching { query = "" }
+                }
+                searchFocused = searching
+            } label: {
+                HeroIcon(searching ? "x-mark" : "magnifying-glass", size: 18)
+            }
+            .buttonStyle(.phoneTool(on: searching))
+            .accessibilityLabel(searching ? "關掉搜尋" : "搜尋品項")
+        }, below: {
             if searching {
                 HStack(spacing: 8) {
                     HeroIcon("magnifying-glass", size: 16)
@@ -151,37 +151,21 @@ struct PhoneOrderView: View {
                         .focused($searchFocused)
                         .submitLabel(.search)
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 44)
-                .background(Theme.surface, in: .rect(cornerRadius: Metric.radius))
-                .overlay { RoundedRectangle(cornerRadius: Metric.radius).strokeBorder(Theme.line) }
+                .padding(.horizontal, 14)
+                .frame(height: PhoneMetric.tool)
+                .background(Theme.surface, in: .capsule)
+                .overlay { Capsule().strokeBorder(Theme.line) }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 10)
+        })
     }
 
+    /// 開了單：大字是桌名（外帶、客人的名字），小字是單號（外帶叫號的店寫取餐號碼）
     private var ticketTitle: some View {
         let t = model.selectedTicket
-        return VStack(alignment: .leading, spacing: 2) {
-            // 外帶叫號的店不寫單號（客人只認取餐號碼）
-            Eyebrow(t.map { model.orderNumber($0) ?? ($0.queueNumber == nil ? model.pendingNumberText($0) : "取餐號碼") } ?? "A000")
-            Text(t.map { model.orderTitle($0) } ?? "內用")
-                .font(.brand(22, .semibold))
-                .foregroundStyle(Theme.ink)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-    }
-
-    private var menuTitle: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Eyebrow("點餐")
-            Headline("The *menu*", role: .h3)
-                .lineLimit(1)
-        }
+        // 外帶叫號的店不寫單號（客人只認取餐號碼）
+        let number = t.map { model.orderNumber($0) ?? ($0.queueNumber == nil ? model.pendingNumberText($0) : "取餐號碼") } ?? "A000"
+        return PhoneTitle(title: t.map { model.orderTitle($0) } ?? "內用", subtitle: "點餐・\(number)", verbatim: true)
     }
 
     /// 分類：一排可以左右滑的膠囊（選到的墨色實心）

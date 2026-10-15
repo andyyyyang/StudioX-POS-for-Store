@@ -39,52 +39,36 @@ struct ReservationsView: View {
     @State private var loading = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: model.isPhone ? 12 : 20) {
-            header
-            if model.isPhone { phoneSwitch }
-            // 每 30 秒重畫：快到了、晚了、等了幾分鐘
-            TimelineView(.periodic(from: .now, by: 30)) { ctx in
-                if model.isPhone {
-                    switch phoneTab {
-                    case .bookings: bookings(now: ctx.date)
-                    case .waitlist: waitlist(now: ctx.date)
-                    }
-                } else {
-                    columns(now: ctx.date)
+        layout
+            // 選起來的那一筆剛入座：事情做完了，動作列跟著收起來（點已入座的那筆不算）
+            .onChange(of: ResvSelectionKey(id: selectedId, status: selected?.status)) { old, new in
+                if old.id == new.id && old.status != .seated && new.status == .seated { select(nil) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .overlay {
+                if panelOpen {
+                    Theme.page.opacity(0.6)
+                        .contentShape(.rect)
+                        .onTapGesture { closePanels() }
+                        .transition(.opacity)
+                        .accessibilityLabel("關閉")
+                        .accessibilityAddTraits(.isButton)
                 }
             }
-        }
-        .padding(.horizontal, model.isPhone ? 16 : 28)
-        .padding(.top, model.isPhone ? 8 : 22)
-        // 選起來的那一筆剛入座：事情做完了，動作列跟著收起來（點已入座的那筆不算）
-        .onChange(of: ResvSelectionKey(id: selectedId, status: selected?.status)) { old, new in
-            if old.id == new.id && old.status != .seated && new.status == .seated { select(nil) }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .overlay {
-            if panelOpen {
-                Theme.page.opacity(0.6)
-                    .contentShape(.rect)
-                    .onTapGesture { closePanels() }
-                    .transition(.opacity)
-                    .accessibilityLabel("關閉")
-                    .accessibilityAddTraits(.isButton)
+            .overlay(alignment: .trailing) { panel }
+            .dockSelection(dockItem)
+            .dockPanel(item: $seating, title: { _ in "入座" }, subtitle: { r in seatSubtitle(r) }) { r in
+                ResvSeatChoices(reservation: r, onDone: { closePanels() })
             }
-        }
-        .overlay(alignment: .trailing) { panel }
-        .dockSelection(dockItem)
-        .dockPanel(item: $seating, title: { _ in "入座" }, subtitle: { r in seatSubtitle(r) }) { r in
-            ResvSeatChoices(reservation: r, onDone: { closePanels() })
-        }
-        .task { await refreshLoop() }
-        .alert(confirmTitle, isPresented: confirmBinding, presenting: confirming) { req in
-            Button(confirmButton(req), role: .destructive) {
-                Task { await model.setStatus(req.status, for: req.reservation) }
+            .task { await refreshLoop() }
+            .alert(confirmTitle, isPresented: confirmBinding, presenting: confirming) { req in
+                Button(confirmButton(req), role: .destructive) {
+                    Task { await model.setStatus(req.status, for: req.reservation) }
+                }
+                Button("返回", role: .cancel) {}
+            } message: { req in
+                Text(confirmMessage(req))
             }
-            Button("返回", role: .cancel) {}
-        } message: { req in
-            Text(confirmMessage(req))
-        }
     }
 
     // MARK: - 資料
@@ -307,6 +291,35 @@ struct ReservationsView: View {
         Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } })
     }
 
+    // MARK: - 版面
+
+    /// iPad：標題一列、訂位與候位兩欄；手機：和其他分頁同一個頁首（PhonePageHeader），「訂位｜候位」切換一次看一邊
+    @ViewBuilder
+    private var layout: some View {
+        if model.isPhone {
+            VStack(alignment: .leading, spacing: 0) {
+                PhonePageHeader(title: "Guest *book*", subtitle: "訂位與候位・\(Date().dayTitle)", trailing: { refreshStatus }, below: { phoneSwitch })
+                // 每 30 秒重畫：快到了、晚了、等了幾分鐘
+                TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                    switch phoneTab {
+                    case .bookings: bookings(now: ctx.date)
+                    case .waitlist: waitlist(now: ctx.date)
+                    }
+                }
+                .padding(.horizontal, Metric.gutter)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 20) {
+                header
+                TimelineView(.periodic(from: .now, by: 30)) { ctx in
+                    columns(now: ctx.date)
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+        }
+    }
+
     // MARK: - 上面
 
     private var header: some View {
@@ -314,17 +327,19 @@ struct ReservationsView: View {
             PageTitle(title: "Guest *book*", subtitle: "訂位與候位・\(Date().dayTitle)")
             Spacer(minLength: 12)
             // 頁首只放標題；新增、重新整理在右欄（沒選東西時）
-            if let loadedAt {
-                HStack(spacing: 6) {
-                    HeroIcon("arrow-path", size: 13)
-                        .rotationEffect(.degrees(loading ? 180 : 0))
-                        .animation(reduceMotion ? nil : Motion.ease, value: loading)
-                    Text("\(loadedAt.clockText) 更新")
-                        .font(.brand(12.5, .medium))
-                        .monospacedDigit()
-                }
-                .foregroundStyle(Theme.muted)
-                .frame(height: 44)
+            refreshStatus
+        }
+    }
+
+    /// 「↻ 16:58 更新」
+    @ViewBuilder
+    private var refreshStatus: some View {
+        if let loadedAt {
+            PageHeaderStatus {
+                HeroIcon("arrow-path", size: 13)
+                    .rotationEffect(.degrees(loading ? 180 : 0))
+                    .animation(reduceMotion ? nil : Motion.ease, value: loading)
+                Text("\(loadedAt.clockText) 更新")
             }
         }
     }

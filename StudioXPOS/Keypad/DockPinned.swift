@@ -244,14 +244,9 @@ struct PhoneQueueButton: View {
                         }
                     }
                 }
-                .foregroundStyle(open ? Theme.page : Theme.ink)
-                .padding(.horizontal, 12)
-                .frame(height: 44)
-                .background(open ? Theme.ink : Theme.surface, in: .capsule)
-                .overlay { Capsule().strokeBorder(open ? Color.clear : Theme.line) }
-                .contentShape(.capsule)
             }
-            .buttonStyle(PressScale(scale: 0.96))
+            // 和頁首其他工具鍵同一種；展開著是墨色實心
+            .buttonStyle(.phoneTool(on: open))
             .accessibilityLabel(queueLabel)
             .accessibilityHint(open ? "收起叫號" : "打開叫號")
             // 收起來時也要知道叫到幾號：抓號碼的迴圈跟著這顆鍵

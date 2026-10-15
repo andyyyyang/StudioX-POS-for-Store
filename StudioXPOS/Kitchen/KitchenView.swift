@@ -46,8 +46,9 @@ struct KitchenView: View {
         TimelineView(.periodic(from: .now, by: 15)) { ctx in
             content(now: ctx.date)
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 22)
+        // 手機：頁首（PhonePageHeader）自己留白，下面的單左右 16
+        .padding(.horizontal, model.isPhone ? 0 : 28)
+        .padding(.top, model.isPhone ? 0 : 22)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             applyDefaultStations()
@@ -67,8 +68,27 @@ struct KitchenView: View {
         let isExpo = model.role == .expo
         let ready = isExpo ? cards.filter { $0.allReady } : []
         let working = isExpo ? cards.filter { !$0.allReady } : cards
-        return VStack(alignment: .leading, spacing: 18) {
-            header(cards: cards, now: now)
+        return Group {
+            if model.isPhone {
+                VStack(alignment: .leading, spacing: 0) {
+                    phoneHeader(cards: cards, now: now)
+                    work(tickets: tickets, cards: cards, bumps: bumps, ready: ready, working: working, hasStations: hasStations, now: now)
+                        .padding(.horizontal, Metric.gutter)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 18) {
+                    header(cards: cards, now: now)
+                    work(tickets: tickets, cards: cards, bumps: bumps, ready: ready, working: working, hasStations: hasStations, now: now)
+                }
+            }
+        }
+        .dockSelection(dockItem(cards: cards, bumps: bumps, now: now))
+    }
+
+    /// 頁首下面：工作站、剛出餐、單子
+    private func work(tickets: [Ticket], cards: [KitchenCardModel], bumps: [KitchenBump], ready: [KitchenCardModel],
+                      working: [KitchenCardModel], hasStations: Bool, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: model.isPhone ? 12 : 18) {
             if hasStations {
                 stationBar(tickets, hasStations: hasStations)
             }
@@ -105,7 +125,6 @@ struct KitchenView: View {
                 .scrollIndicators(.hidden)
             }
         }
-        .dockSelection(dockItem(cards: cards, bumps: bumps, now: now))
     }
 
     // MARK: - 出餐口
@@ -114,7 +133,7 @@ struct KitchenView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Eyebrow("可以出餐", color: Theme.successFG)
-                Text("\(ready.count) 張・選起來，右邊叫號；客人拿走按「已出餐」")
+                Text("\(ready.count) 張・選起來，\(model.isPhone ? "下面" : "右邊")叫號；客人拿走按「已出餐」")
                     .font(.brand(13, .medium))
                     .monospacedDigit()
                     .foregroundStyle(Theme.muted)
@@ -415,13 +434,27 @@ struct KitchenView: View {
 
     // MARK: - 上面
 
-    private func header(cards: [KitchenCardModel], now: Date) -> some View {
+    /// 待做的份數、超過 20 分的張數
+    private func counts(_ cards: [KitchenCardModel], now: Date) -> (todo: Int, late: Int) {
         var todo = 0
         var late = 0
         for c in cards {
             todo += c.lines.filter { $0.kitchen != .ready }.reduce(0) { sum, line in sum + line.quantity }
             if KitchenUrgency(minutes: c.minutes(at: now)) == .hot { late += 1 }
         }
+        return (todo, late)
+    }
+
+    /// 手機：和其他分頁同一個頁首；張數、份數寫在中文小字（時間看狀態列）
+    private func phoneHeader(cards: [KitchenCardModel], now: Date) -> some View {
+        let (todo, late) = counts(cards, now: now)
+        var parts = ["廚房・出餐", "\(cards.count) 張單", "\(todo) 份待做"]
+        if late > 0 { parts.append("\(late) 張超過 20 分") }
+        return PhonePageHeader(title: "On the *pass*", subtitle: parts.joined(separator: "・"))
+    }
+
+    private func header(cards: [KitchenCardModel], now: Date) -> some View {
+        let (todo, late) = counts(cards, now: now)
         return HStack(alignment: .bottom, spacing: 26) {
             PageTitle(title: "On the *pass*", subtitle: "廚房・出餐")
             Spacer(minLength: 12)

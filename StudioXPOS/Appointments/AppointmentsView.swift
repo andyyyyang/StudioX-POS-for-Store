@@ -195,7 +195,7 @@ struct AppointmentsView: View {
                 HeroIcon("chevron-right", size: 15)
                     .rotationEffect(.degrees(180))
             }
-            .buttonStyle(SquareIconButtonStyle(size: 40))
+            .headerIconButtonStyle(phone: model.isPhone)
             .accessibilityLabel("前一天")
             Button {
                 withAnimation(anim) {
@@ -224,7 +224,7 @@ struct AppointmentsView: View {
             } label: {
                 HeroIcon("chevron-right", size: 15)
             }
-            .buttonStyle(SquareIconButtonStyle(size: 40))
+            .headerIconButtonStyle(phone: model.isPhone)
             .accessibilityLabel("後一天")
         }
     }
@@ -269,14 +269,10 @@ struct AppointmentsView: View {
     // MARK: - 手機：一欄的清單
 
     private var phoneLayout: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .bottom, spacing: 8) {
-                PageTitle(title: "Day *book*", subtitle: "預約・\(model.mode.staffTitle)")
-                Spacer(minLength: 4)
-                daySwitcher
-            }
-            .padding(.horizontal, 16)
+        VStack(alignment: .leading, spacing: 0) {
+            PhonePageHeader(title: "Day *book*", subtitle: "預約・\(model.mode.staffTitle)", trailing: { daySwitcher })
             phoneFilters
+                .padding(.bottom, 10)
             if model.bookableStaff.isEmpty && model.appointments(onDay: dayKey).isEmpty {
                 ApptNoStaff(title: model.mode.staffTitle)
                     .padding(.horizontal, 16)
@@ -284,7 +280,6 @@ struct AppointmentsView: View {
                 phoneAgenda
             }
         }
-        .padding(.top, 8)
     }
 
     /// 這一天要列的（篩了設計師）
@@ -335,7 +330,7 @@ struct AppointmentsView: View {
                     Circle().fill(Theme.swatch(swatch)).frame(width: 9, height: 9)
                 }
                 Text(label)
-                    .font(.brand(14.5, on ? .semibold : .medium))
+                    .font(.brand(15, on ? .semibold : .medium))
                     .lineLimit(1)
                 Text("\(count)")
                     .font(.brand(13, .medium))
@@ -343,13 +338,14 @@ struct AppointmentsView: View {
                     .foregroundStyle(on ? Theme.page.opacity(0.7) : Theme.muted)
             }
             .foregroundStyle(on ? Theme.page : Theme.ink)
-            .padding(.horizontal, 13)
-            .frame(height: 36)
+            // 和點餐頁的分類膠囊一樣大（手機每一頁的篩選都是這一種）
+            .padding(.horizontal, 14)
+            .frame(height: 40)
             .background(on ? Theme.ink : Theme.surface, in: .capsule)
             .overlay { Capsule().strokeBorder(on ? Color.clear : Theme.line) }
             .contentShape(.capsule)
         }
-        .buttonStyle(PressTint(radius: 18))
+        .buttonStyle(PressTint(radius: 20))
         .accessibilityLabel("\(label)，\(count) 筆預約")
         .accessibilityAddTraits(on ? .isSelected : [])
     }

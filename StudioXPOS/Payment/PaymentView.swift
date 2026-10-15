@@ -39,26 +39,32 @@ struct PaymentView: View {
         let x = t.totals
         // 手機：兩欄改成上下排
         let columns = compact ? AnyLayout(VStackLayout(alignment: .leading, spacing: 24)) : AnyLayout(HStackLayout(alignment: .top, spacing: 24))
-        return ScrollView {
-            VStack(alignment: .leading, spacing: compact ? 22 : 28) {
-                header(t, x)
-                columns {
-                    VStack(alignment: .leading, spacing: 24) {
-                        tenders(t, x)
-                        if !shares.isEmpty { sharesView }
-                        if !t.approvedPayments.isEmpty { payments(t) }
+        return VStack(spacing: 0) {
+            // 手機：和其他分頁同一個頁首（PhonePageHeader），應收／尚欠一直看得到
+            if compact { phoneHeader(t, x) }
+            ScrollView {
+                VStack(alignment: .leading, spacing: compact ? 22 : 28) {
+                    if !compact { regularHeader(t, x) }
+                    columns {
+                        VStack(alignment: .leading, spacing: 24) {
+                            tenders(t, x)
+                            if !shares.isEmpty { sharesView }
+                            if !t.approvedPayments.isEmpty { payments(t) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        VStack(alignment: .leading, spacing: 24) {
+                            if model.features.invoice && model.invoiceSettings.enabled { invoice(t) }
+                            if model.features.members { member(t) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    VStack(alignment: .leading, spacing: 24) {
-                        if model.features.invoice && model.invoiceSettings.enabled { invoice(t) }
-                        if model.features.members { member(t) }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
+                .padding(.horizontal, compact ? Metric.gutter : 24)
+                .padding(.top, compact ? 0 : 24)
+                .padding(.bottom, compact ? 16 : 24)
             }
-            .padding(compact ? 16 : 24)
+            .scrollIndicators(.hidden)
         }
-        .scrollIndicators(.hidden)
         .safeAreaInset(edge: .bottom) { footer(t, x) }
         // 左邊選付款方式、右邊打金額；完成結帳、回到點餐、平分、小費、會員、退回付款都在右欄
         .dockSelection(dock(t, x))
@@ -82,31 +88,21 @@ struct PaymentView: View {
 
     // MARK: 上面：應收
 
-    @ViewBuilder
-    private func header(_ t: Ticket, _ x: TicketTotals) -> some View {
-        if compact {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Eyebrow("結帳・\(model.orderCaption(t))")
-                        Headline(x.isPaidInFull ? "All *paid*" : "Collect *payment*", role: .h2)
-                    }
-                    Spacer(minLength: 8)
-                    // 右上角和點餐頁一樣可以掃：會員卡、發票載具、折價券掛到這一張
-                    if !x.isPaidInFull {
-                        ScanButton(hint: "用相機掃會員卡、發票載具、折價券")
-                    }
-                }
-                HStack(alignment: .bottom, spacing: 20) {
-                    stat("應收", x.amountDue, role: .number, color: Theme.ink2)
-                    if x.paid.cents > 0 { stat("已收", x.paid, role: .number, color: Theme.successFG) }
-                    Spacer(minLength: 0)
-                    stat(x.balance.isNegative ? "多收" : "尚欠", Money(cents: abs(x.balance.cents)), role: .stat, color: x.balance.isNegative ? Theme.dangerFG : Theme.ink)
-                }
+    /// 手機：標題（Collect payment／結帳・單號）＋右上角掃碼，下面是應收、已收、尚欠
+    private func phoneHeader(_ t: Ticket, _ x: TicketTotals) -> some View {
+        PhonePageHeader(title: x.isPaidInFull ? "All *paid*" : "Collect *payment*", subtitle: "結帳・\(model.orderCaption(t))", trailing: {
+            // 右上角和點餐頁一樣可以掃：會員卡、發票載具、折價券掛到這一張
+            if !x.isPaidInFull {
+                ScanButton(hint: "用相機掃會員卡、發票載具、折價券")
             }
-        } else {
-            regularHeader(t, x)
-        }
+        }, below: {
+            HStack(alignment: .bottom, spacing: 20) {
+                stat("應收", x.amountDue, role: .number, color: Theme.ink2)
+                if x.paid.cents > 0 { stat("已收", x.paid, role: .number, color: Theme.successFG) }
+                Spacer(minLength: 0)
+                stat(x.balance.isNegative ? "多收" : "尚欠", Money(cents: abs(x.balance.cents)), role: .stat, color: x.balance.isNegative ? Theme.dangerFG : Theme.ink)
+            }
+        })
     }
 
     private func regularHeader(_ t: Ticket, _ x: TicketTotals) -> some View {

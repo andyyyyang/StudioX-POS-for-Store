@@ -501,6 +501,168 @@ struct PageTitle: View {
     }
 }
 
+// MARK: - 手機的頁首
+
+/// 手機每一頁的頁首（DESIGN.md「手機」）：每個分頁同一個樣子，換分頁時標題停在同一個地方——
+///   左：英文大字（襯線強調）＋中文小字（這一頁・現在的狀態）
+///   右：這一頁的工具（PhoneToolButtonStyle：掃碼、搜尋、換日），或一個小狀態（「16:58 更新」）
+///   下面（可以沒有）：這一頁的切換（兩段切換、報到／課表）或一排數字（桌位）
+/// 頁首不跟著清單捲；左右 16、上 8、下 12。可以左右滑的分類膠囊放在頁首下面（自己到邊）
+struct PhonePageHeader<Leading: View, Trailing: View, Below: View>: View {
+    private let leading: () -> Leading
+    private let trailing: () -> Trailing
+    private let below: () -> Below
+
+    /// 左邊自己放（點餐頁：開單前後兩種標題疊在一起，高度不變）；一般的頁用 init(title:subtitle:…)
+    init(@ViewBuilder leading: @escaping () -> Leading,
+         @ViewBuilder trailing: @escaping () -> Trailing,
+         @ViewBuilder below: @escaping () -> Below) {
+        self.leading = leading
+        self.trailing = trailing
+        self.below = below
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: PhoneMetric.headerSpacing) {
+            HStack(alignment: .center, spacing: 8) {
+                leading()
+                Spacer(minLength: 8)
+                HStack(spacing: 8) { trailing() }
+            }
+            .frame(minHeight: PhoneMetric.titleHeight)
+            below()
+        }
+        .padding(.horizontal, Metric.gutter)
+        .padding(.top, PhoneMetric.headerTop)
+        .padding(.bottom, PhoneMetric.headerBottom)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+extension PhonePageHeader where Leading == PhoneTitle {
+    /// 一般的頁：標題（英文大字＋中文小字）、右邊的工具、下面的切換
+    init(title: String, subtitle: String? = nil,
+         @ViewBuilder trailing: @escaping () -> Trailing,
+         @ViewBuilder below: @escaping () -> Below) {
+        self.init(leading: { PhoneTitle(title: title, subtitle: subtitle) }, trailing: trailing, below: below)
+    }
+}
+
+extension PhonePageHeader where Leading == PhoneTitle, Below == EmptyView {
+    init(title: String, subtitle: String? = nil, @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.init(title: title, subtitle: subtitle, trailing: trailing, below: { EmptyView() })
+    }
+}
+
+extension PhonePageHeader where Leading == PhoneTitle, Trailing == EmptyView {
+    init(title: String, subtitle: String? = nil, @ViewBuilder below: @escaping () -> Below) {
+        self.init(title: title, subtitle: subtitle, trailing: { EmptyView() }, below: below)
+    }
+}
+
+extension PhonePageHeader where Leading == PhoneTitle, Trailing == EmptyView, Below == EmptyView {
+    init(title: String, subtitle: String? = nil) {
+        self.init(title: title, subtitle: subtitle, trailing: { EmptyView() }, below: { EmptyView() })
+    }
+}
+
+/// 手機頁首左邊的標題：英文大字一行（放不下縮小，不換行）＋中文小字一行
+struct PhoneTitle: View {
+    let title: String
+    var subtitle: String? = nil
+    /// 照字面（單子的桌名、客人的名字、遮起來的電話「0912-***-678」）：不把 * 當成襯線強調
+    var verbatim = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Group {
+                if verbatim {
+                    Text(verbatim: title)
+                        .textRole(.h2)
+                        .foregroundStyle(Theme.ink)
+                } else {
+                    Headline(title, role: .h2)
+                }
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            if let subtitle {
+                Text(subtitle)
+                    .textRole(.small)
+                    .foregroundStyle(Theme.muted)
+                    .lineLimit(1)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// 手機的版面尺寸：每一頁的頁首都用這幾個數字
+enum PhoneMetric {
+    /// 頁首上面（狀態列下面）
+    static let headerTop: CGFloat = 8
+    /// 頁首下面（到清單）
+    static let headerBottom: CGFloat = 12
+    /// 標題那一列到下面的切換
+    static let headerSpacing: CGFloat = 12
+    /// 標題那一列的高度（英文大字＋中文小字；右邊的工具鍵 44 放得下）
+    static let titleHeight: CGFloat = 56
+    /// 頁首右邊的工具鍵
+    static let tool: CGFloat = 44
+}
+
+/// 手機頁首右邊的工具鍵（掃碼、搜尋、叫號、換日）：一律 44 高的膠囊、卡片底、細框；只有圖示時是圓的。
+/// on＝打開著（叫號卡展開、搜尋打開）：墨色實心，和分類膠囊選到的一樣
+struct PhoneToolButtonStyle: ButtonStyle {
+    var on = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.brand(15, .semibold))
+            .lineLimit(1)
+            .foregroundStyle(on ? Theme.page : Theme.ink)
+            .padding(.horizontal, 13)
+            .frame(minWidth: PhoneMetric.tool, minHeight: PhoneMetric.tool)
+            .background(on ? Theme.ink : (configuration.isPressed ? Theme.press : Theme.surface), in: .capsule)
+            .overlay { Capsule().strokeBorder(on ? Color.clear : Theme.line) }
+            .contentShape(.capsule)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(Motion.fast, value: configuration.isPressed)
+            .animation(Motion.fast, value: on)
+    }
+}
+
+extension ButtonStyle where Self == PhoneToolButtonStyle {
+    static func phoneTool(on: Bool = false) -> PhoneToolButtonStyle { PhoneToolButtonStyle(on: on) }
+}
+
+extension View {
+    /// 頁首的圖示鈕（換日的 ‹ ›）：手機是工具鍵（圓的，和其他分頁頁首一樣），iPad 是方框
+    @ViewBuilder
+    func headerIconButtonStyle(phone: Bool, size: CGFloat = 40) -> some View {
+        if phone {
+            buttonStyle(.phoneTool())
+        } else {
+            buttonStyle(SquareIconButtonStyle(size: size))
+        }
+    }
+}
+
+/// 頁首右邊的小狀態（「16:58 更新」）：和工具鍵一樣高（44），對齊同一條線
+struct PageHeaderStatus<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 6) { content() }
+            .font(.brand(12.5, .medium))
+            .monospacedDigit()
+            .foregroundStyle(Theme.muted)
+            .lineLimit(1)
+            .frame(minHeight: PhoneMetric.tool)
+    }
+}
+
 /// 一列：左邊說明、右邊值（明細、報表）
 struct ValueRow: View {
     let label: String

@@ -7,7 +7,8 @@ import SwiftUI
 
 /// 手機的桌位：桌位圖在手機上太小，改成照區域分組的清單（桌況的顏色、幾位、坐了多久、金額）。
 ///
-///   ┌ Floor plan ───── 空桌 6・用餐中 4 ┐
+///   ┌ Floor plan（PhonePageHeader，不跟著捲）┐
+///   │ ● 空桌 6  ● 用餐中 4                │
 ///   │ ■ 1F  3/11                      │
 ///   │ ▌A2   用餐中    4 位・32 分  NT$1,280 ● │
 ///   │ ▌A3   空桌      4 人桌               │
@@ -45,11 +46,17 @@ struct PhoneFloorList: View {
 
     private func content(now: Date) -> some View {
         let soon = model.reservedSoon
-        return ScrollViewReader { proxy in
+        return VStack(spacing: 0) {
+            // 頁首不跟著捲（和其他分頁一樣）
+            header(soon: soon)
+            list(soon: soon, now: now)
+        }
+    }
+
+    private func list(soon: Set<String>, now: Date) -> some View {
+        ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8, pinnedViews: []) {
-                    header(soon: soon)
-                        .padding(.bottom, 6)
                     if let p = pick {
                         pickBanner(p)
                     }
@@ -60,15 +67,15 @@ struct PhoneFloorList: View {
                     ForEach(model.floor.areas) { area in
                         let infos = area.tables.map { FloorTableInfo.make($0, model: model, soon: soon, now: now) }
                         areaHeader(area, infos: infos)
-                            .padding(.top, 12)
+                            // 第一區緊接著頁首（頁首下面已經留了空）
+                            .padding(.top, area.id == model.floor.areas.first?.id && pick == nil ? 0 : 12)
                         ForEach(infos) { i in
                             row(i, now: now)
                                 .id(i.id)
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .padding(.horizontal, Metric.gutter)
                 .padding(.bottom, 24)
             }
             .scrollIndicators(.hidden)
@@ -85,15 +92,14 @@ struct PhoneFloorList: View {
         let dining = statuses.filter { $0 == .seated || $0 == .ordering || $0 == .billing }.count
         let billing = statuses.filter { $0 == .billing }.count
         let dirty = statuses.filter { $0 == .needsCleaning }.count
-        return VStack(alignment: .leading, spacing: 10) {
-            PageTitle(title: "Floor *plan*", subtitle: "桌位")
+        return PhonePageHeader(title: "Floor *plan*", subtitle: "桌位", below: {
             HStack(spacing: 8) {
                 count(TableStatus.available.label, free, .available)
                 count(TableStatus.ordering.label, dining, .ordering)
                 if billing > 0 { count(TableStatus.billing.label, billing, .billing) }
                 if dirty > 0 { count(TableStatus.needsCleaning.label, dirty, .needsCleaning) }
             }
-        }
+        })
     }
 
     private func count(_ label: String, _ n: Int, _ s: TableStatus) -> some View {

@@ -33,46 +33,26 @@ struct CheckInView: View {
     @State private var scanning = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: model.isPhone ? 12 : 18) {
-            header
-            switch desk.tab {
-            case .entry:
-                if model.isPhone {
-                    phoneEntry
-                } else {
-                    HStack(alignment: .top, spacing: 24) {
-                        entry
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        CheckInFeed(onVoided: { restartListening() })
-                            .frame(width: 300)
-                    }
+        layout
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .sheet(isPresented: $scanning) {
+                CodeScannerSheet(title: "掃會員條碼", subtitle: "會員卡、App 上的條碼或 QR Code（就是手機號碼）", types: ScanKind.member) { code in
+                    scanned(code)
                 }
-            case .classes:
-                CheckInClasses()
             }
-        }
-        .padding(.horizontal, model.isPhone ? 16 : 28)
-        .padding(.top, model.isPhone ? 8 : 22)
-        .padding(.bottom, model.isPhone ? 12 : 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .sheet(isPresented: $scanning) {
-            CodeScannerSheet(title: "掃會員條碼", subtitle: "會員卡、App 上的條碼或 QR Code（就是手機號碼）", types: ScanKind.member) { code in
-                scanned(code)
+            .dockSelection(desk.tab == .entry ? messageDock : nil)
+            .task(id: listenKey) { await listen() }
+            .onAppear {
+                desk.forgetIfStale()
+                if !model.mode.usesClasses { desk.tab = .entry }
+                #if DEBUG
+                // 截圖：直接看課表
+                if LaunchArguments.value("-checkInTab") == "classes", model.mode.usesClasses { desk.tab = .classes }
+                #endif
             }
-        }
-        .dockSelection(desk.tab == .entry ? messageDock : nil)
-        .task(id: listenKey) { await listen() }
-        .onAppear {
-            desk.forgetIfStale()
-            if !model.mode.usesClasses { desk.tab = .entry }
-            #if DEBUG
-            // 截圖：直接看課表
-            if LaunchArguments.value("-checkInTab") == "classes", model.mode.usesClasses { desk.tab = .classes }
-            #endif
-        }
-        // 截圖：先帶出一位能入場的會員（示範店的會員載入得比畫面晚：等一下再找）
-        .task { await preselectForScreenshot() }
-        .onDisappear { stopListening() }
+            // 截圖：先帶出一位能入場的會員（示範店的會員載入得比畫面晚：等一下再找）
+            .task { await preselectForScreenshot() }
+            .onDisappear { stopListening() }
     }
 
     private var anim: Animation? { reduceMotion ? nil : Motion.ease }
@@ -95,42 +75,92 @@ struct CheckInView: View {
         }
     }
 
-    // MARK: - 上面
+    // MARK: - 版面
 
+    /// iPad：標題一列、報到（左）＋今天報到的人（右）；手機：和其他分頁同一個頁首（PhonePageHeader），一欄
     @ViewBuilder
-    private var header: some View {
-        let title = PageTitle(title: desk.tab == .entry ? "Check *in*" : "Today's *classes*", subtitle: "報到・\(Date().dayTitle)")
+    private var layout: some View {
         if model.isPhone {
-            // 手機：報到／課表放在標題下面一整排
-            VStack(alignment: .leading, spacing: 10) {
-                title
-                if model.mode.usesClasses {
-                    HStack(spacing: 6) {
-                        tabButton("報到", icon: "qr-code", .entry)
-                        tabButton("課表", icon: "calendar-days", .classes)
-                    }
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                phoneHeader
+                tabContent
+                    .padding(.horizontal, Metric.gutter)
+                    .padding(.bottom, 12)
             }
         } else {
-            HStack(alignment: .bottom, spacing: 16) {
-                title
-                Spacer(minLength: 12)
-                if model.mode.usesClasses {
-                    HStack(spacing: 6) {
-                        tabButton("報到", icon: "qr-code", .entry)
-                        tabButton("課表", icon: "calendar-days", .classes)
-                    }
-                    .frame(width: 240)
+            VStack(alignment: .leading, spacing: 18) {
+                header
+                tabContent
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 22)
+            .padding(.bottom, 16)
+        }
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        switch desk.tab {
+        case .entry:
+            if model.isPhone {
+                phoneEntry
+            } else {
+                HStack(alignment: .top, spacing: 24) {
+                    entry
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    CheckInFeed(onVoided: { restartListening() })
+                        .frame(width: 300)
                 }
+            }
+        case .classes:
+            CheckInClasses()
+        }
+    }
+
+    // MARK: - 上面
+
+    private var title: String { desk.tab == .entry ? "Check *in*" : "Today's *classes*" }
+
+    private var header: some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            PageTitle(title: title, subtitle: "報到・\(Date().dayTitle)")
+            Spacer(minLength: 12)
+            if model.mode.usesClasses {
+                HStack(spacing: 6) {
+                    tabButton("報到", icon: "qr-code", .entry)
+                    tabButton("課表", icon: "calendar-days", .classes)
+                }
+                .frame(width: 240)
             }
         }
     }
 
+    /// 手機：報到／課表是標題下面的兩段切換（和訂單、訂位一樣）
+    @ViewBuilder
+    private var phoneHeader: some View {
+        if model.mode.usesClasses {
+            PhonePageHeader(title: title, subtitle: "報到・\(Date().dayTitle)", below: {
+                Picker("報到或課表", selection: Binding(get: { desk.tab }, set: { switchTab($0) })) {
+                    Text("報到").tag(CheckInTab.entry)
+                    Text("課表").tag(CheckInTab.classes)
+                }
+                .pickerStyle(.segmented)
+            })
+        } else {
+            PhonePageHeader(title: title, subtitle: "報到・\(Date().dayTitle)")
+        }
+    }
+
+    private func switchTab(_ tab: CheckInTab) {
+        guard desk.tab != tab else { return }
+        model.touch()
+        stopListening()
+        withAnimation(anim) { desk.tab = tab }
+    }
+
     private func tabButton(_ title: String, icon: String, _ tab: CheckInTab) -> some View {
         Button {
-            guard desk.tab != tab else { return }
-            stopListening()
-            withAnimation(anim) { desk.tab = tab }
+            switchTab(tab)
         } label: {
             Label {
                 Text(title)
